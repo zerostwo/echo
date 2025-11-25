@@ -1,56 +1,121 @@
 import { auth } from '@/auth';
-import prisma from '@/lib/prisma';
+import { supabase } from '@/lib/supabase';
 import { VocabTable, vocabColumns } from './vocab-table';
 import { AnkiExportButton } from './anki-export';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { BookOpen, Trophy, Activity, Calendar } from "lucide-react";
+import { BookOpen, Trophy, Activity, Calendar, Filter } from "lucide-react";
 import { HeaderPortal } from '@/components/header-portal';
+import { Badge } from "@/components/ui/badge";
+import Link from 'next/link';
+import { Button } from '@/components/ui/button';
+import { X } from 'lucide-react';
 
-export default async function VocabPage() {
+export default async function VocabPage({ searchParams }: { searchParams: Promise<{ materialId?: string }> }) {
   const session = await auth();
   if (!session?.user?.id) return <div>Unauthorized</div>;
 
+  const { materialId } = await searchParams;
+
   // Fetch words
-  const userWords = await prisma.userWordStatus.findMany({
-    where: { userId: session.user.id },
-    include: { 
-        word: {
-            include: {
-                occurrences: {
-                    take: 1,
-                    include: { sentence: true }
-                }
-            }
-        }
-    },
-    orderBy: { updatedAt: 'desc' }
-  });
+  const { data: userWords } = await supabase
+    .from('UserWordStatus')
+    .select(`
+        *,
+        word:Word(
+            *,
+            occurrences:WordOccurrence(
+                sentence:Sentence(
+                    *,
+                    material:Material(deletedAt, title)
+                )
+            )
+        )
+    `)
+    .eq('userId', session.user.id)
+    .order('updatedAt', { ascending: false });
 
   // Fetch practice stats
-  const practiceStats = await prisma.practiceProgress.aggregate({
-    where: { userId: session.user.id },
-    _sum: { attempts: true }
+  const { data: practices } = await supabase
+    .from('PracticeProgress')
+    .select('attempts')
+    .eq('userId', session.user.id);
+
+  // Process data
+  // Filter words to exclude those from deleted materials AND apply materialId filter if present
+  let filteredMaterialTitle = '';
+
+  const filteredUserWords = (userWords || []).map((uw: any) => {
+      const activeOccurrences = uw.word?.occurrences?.filter((occ: any) => {
+          const isNotDeleted = occ.sentence?.material?.deletedAt === null;
+          const matchesMaterial = !materialId || occ.sentence?.materialId === materialId;
+          
+          if (materialId && matchesMaterial && !filteredMaterialTitle) {
+              filteredMaterialTitle = occ.sentence?.material?.title;
+          }
+
+          return isNotDeleted && matchesMaterial;
+      });
+
+      if (!activeOccurrences || activeOccurrences.length === 0) {
+          return null;
+      }
+
+      // Return a new object with filtered occurrences
+      return {
+          ...uw,
+          word: {
+              ...uw.word,
+              occurrences: activeOccurrences
+          }
+      };
+  }).filter(Boolean);
+
+  // Transform for table
+  const data = filteredUserWords.map((uw: any) => {
+      const word = uw.word;
+      // We limit to 1 occurrence for the table display
+      const displayOccurrences = word.occurrences.length > 1 
+          ? word.occurrences.slice(0, 1) 
+          : word.occurrences;
+          
+      return { 
+          ...word, 
+          occurrences: displayOccurrences,
+          status: uw.status 
+      };
   });
 
-  const data = userWords.map(uw => ({ ...uw.word, status: uw.status }));
-
-  // Calculate stats
-  const totalWords = userWords.length;
-  const masteredWords = userWords.filter(w => w.status === "MASTERED").length;
-  const practiceSessions = practiceStats._sum.attempts || 0;
+  // Calculate stats based on filtered words
+  const totalWords = filteredUserWords.length;
+  const masteredWords = filteredUserWords.filter((w: any) => w.status === "MASTERED").length;
+  const practiceSessions = practices?.reduce((acc, p) => acc + p.attempts, 0) || 0;
   
-  // Trends (calculated based on createdAt/updatedAt)
-  const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const newWords = userWords.filter(w => w.createdAt > oneDayAgo).length;
-  const newMastered = userWords.filter(w => w.status === "MASTERED" && w.updatedAt > oneDayAgo).length;
+  // Trends
+  const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const newWords = filteredUserWords.filter((w: any) => w.createdAt > oneDayAgo).length;
+  const newMastered = filteredUserWords.filter((w: any) => w.status === "MASTERED" && w.updatedAt > oneDayAgo).length;
   
-  // Placeholder for "Scheduled for tomorrow" since we don't have a review schedule yet
   const dueTomorrow = 18; 
 
   return (
     <div className="flex-1 space-y-8 p-8 pt-6">
       <HeaderPortal>
-        <AnkiExportButton words={userWords} />
+        <div className="flex items-center gap-2">
+            {materialId && (
+                <div className="flex items-center gap-2 mr-4">
+                    <Badge variant="secondary" className="h-8 px-3 text-sm gap-2">
+                        <Filter className="h-3.5 w-3.5" />
+                        Filtered by: {filteredMaterialTitle || 'Material'}
+                    </Badge>
+                    <Link href="/vocab">
+                        <Button variant="ghost" size="icon" className="h-8 w-8">
+                            <X className="h-4 w-4" />
+                        </Button>
+                    </Link>
+                </div>
+            )}
+            <AnkiExportButton words={filteredUserWords} />
+        </div>
       </HeaderPortal>
       
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">

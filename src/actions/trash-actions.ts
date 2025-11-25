@@ -1,7 +1,7 @@
 'use server';
 
 import { auth } from '@/auth';
-import prisma from '@/lib/prisma';
+import { supabase } from '@/lib/supabase';
 import { permanentlyDeleteMaterial } from './material-actions';
 import { revalidatePath } from 'next/cache';
 
@@ -9,23 +9,21 @@ export async function getTrashItems() {
     const session = await auth();
     if (!session?.user?.id) return { materials: [], folders: [] };
 
-    const materials = await prisma.material.findMany({
-        where: { 
-            userId: session.user.id, 
-            deletedAt: { not: null } 
-        },
-        orderBy: { deletedAt: 'desc' }
-    });
+    const { data: materials } = await supabase
+        .from('Material')
+        .select('*')
+        .eq('userId', session.user.id)
+        .not('deletedAt', 'is', null)
+        .order('deletedAt', { ascending: false });
 
-    const folders = await prisma.folder.findMany({
-        where: { 
-            userId: session.user.id, 
-            deletedAt: { not: null } 
-        },
-        orderBy: { deletedAt: 'desc' }
-    });
+    const { data: folders } = await supabase
+        .from('Folder')
+        .select('*')
+        .eq('userId', session.user.id)
+        .not('deletedAt', 'is', null)
+        .order('deletedAt', { ascending: false });
 
-    return { materials, folders };
+    return { materials: materials || [], folders: folders || [] };
 }
 
 export async function emptyTrash() {
@@ -33,24 +31,25 @@ export async function emptyTrash() {
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
     try {
-        const materials = await prisma.material.findMany({
-            where: { 
-                userId: session.user.id, 
-                deletedAt: { not: null } 
-            },
-            select: { id: true }
-        });
+        const { data: materials } = await supabase
+            .from('Material')
+            .select('id')
+            .eq('userId', session.user.id)
+            .not('deletedAt', 'is', null);
 
-        for (const m of materials) {
-            await permanentlyDeleteMaterial(m.id);
+        if (materials) {
+            for (const m of materials) {
+                await permanentlyDeleteMaterial(m.id);
+            }
         }
         
-        await prisma.folder.deleteMany({
-             where: { 
-                userId: session.user.id, 
-                deletedAt: { not: null } 
-            }
-        });
+        const { error: folderError } = await supabase
+            .from('Folder')
+            .delete()
+            .eq('userId', session.user.id)
+            .not('deletedAt', 'is', null);
+
+        if (folderError) throw folderError;
 
         revalidatePath('/trash');
         return { success: true };

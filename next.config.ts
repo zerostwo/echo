@@ -4,6 +4,8 @@ const nextConfig: NextConfig = {
   experimental: {
     serverActions: {
       bodySizeLimit: '500mb',
+      allowedOrigins: ["echo.catplot.org"],
+      allowedDevOrigins: ['https://echo.catplot.org']
     },
   },
 };

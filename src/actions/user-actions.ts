@@ -1,7 +1,7 @@
 "use server"
 
 import { auth } from "@/auth"
-import prisma from "@/lib/prisma"
+import { supabase } from "@/lib/supabase"
 import { revalidatePath } from "next/cache"
 import { z } from "zod"
 import bcrypt from "bcryptjs"
@@ -62,11 +62,14 @@ export async function updateUser(prevState: any, formData: FormData) {
   const { name, email, avatar, currentPassword, newPassword } = validatedFields.data
 
   try {
-    const user = await prisma.user.findUnique({
-      where: { id: session.user.id },
-    })
+    const { data: user, error: fetchError } = await supabase
+      .from('User')
+      .select('*')
+      .eq('id', session.user.id)
+      .single()
 
-    if (!user) {
+    if (fetchError || !user) {
+      console.error("User fetch error:", fetchError);
       return { error: "User not found" }
     }
 
@@ -87,23 +90,36 @@ export async function updateUser(prevState: any, formData: FormData) {
 
     // Check if email is already taken by another user
     if (email !== user.email) {
-      const existingUser = await prisma.user.findUnique({
-        where: { email },
-      })
+      const { data: existingUser } = await supabase
+        .from('User')
+        .select('id')
+        .eq('email', email)
+        .single()
+
       if (existingUser) {
         return { error: { email: ["Email is already in use"] } }
       }
     }
 
-    await prisma.user.update({
-      where: { id: session.user.id },
-      data: {
-        name,
-        email,
-        image: avatar,
-        ...(hashedPassword && { password: hashedPassword }),
-      },
-    })
+    const updates: any = {
+      name,
+      email,
+      image: avatar,
+      updatedAt: new Date().toISOString(),
+    }
+    
+    if (hashedPassword) {
+      updates.password = hashedPassword
+    }
+
+    const { error: updateError } = await supabase
+      .from('User')
+      .update(updates)
+      .eq('id', session.user.id)
+
+    if (updateError) {
+      throw updateError
+    }
 
     revalidatePath("/account")
     return { success: "Profile updated successfully" }
@@ -123,12 +139,17 @@ export async function updateSettings(settings: any) {
       // Fetch current settings to merge? Or just overwrite?
       // The settings field is a stringified JSON
       
-      await prisma.user.update({
-          where: { id: session.user.id },
-          data: {
-              settings: JSON.stringify(settings)
-          }
-      });
+      const { error: updateError } = await supabase
+          .from('User')
+          .update({ 
+            settings: JSON.stringify(settings),
+            updatedAt: new Date().toISOString() 
+          })
+          .eq('id', session.user.id);
+
+      if (updateError) {
+        throw updateError;
+      }
 
       revalidatePath('/settings');
       return { success: true };

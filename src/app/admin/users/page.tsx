@@ -1,5 +1,5 @@
 import { auth } from '@/auth';
-import prisma from '@/lib/prisma';
+import { supabase } from '@/lib/supabase';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { UserQuotaDialog } from './quota-dialog';
 import { Badge } from "@/components/ui/badge";
@@ -12,10 +12,13 @@ export default async function AdminUsersPage() {
         redirect('/dashboard');
     }
 
-    const users = await prisma.user.findMany({
-        orderBy: { createdAt: 'desc' },
-        include: { _count: { select: { materials: true } } }
-    });
+    const { data: users } = await supabase
+        .from('User')
+        .select(`
+            *,
+            materials:Material(count)
+        `)
+        .order('createdAt', { ascending: false });
 
     return (
         <div className="p-8">
@@ -34,7 +37,7 @@ export default async function AdminUsersPage() {
                         </TableRow>
                     </TableHeader>
                     <TableBody>
-                        {users.map(u => (
+                        {(users || []).map((u: any) => (
                             <TableRow key={u.id}>
                                 <TableCell>
                                     <div className="flex flex-col">
@@ -52,7 +55,7 @@ export default async function AdminUsersPage() {
                                         {u.isActive ? 'Active' : 'Inactive'}
                                     </Badge>
                                 </TableCell>
-                                <TableCell>{u._count.materials}</TableCell>
+                                <TableCell>{u.materials?.[0]?.count || 0}</TableCell>
                                 <TableCell>{(Number(u.usedSpace) / 1024 / 1024).toFixed(2)} MB</TableCell>
                                 <TableCell>{(Number(u.quota) / 1024 / 1024 / 1024).toFixed(1)} GB</TableCell>
                                 <TableCell>

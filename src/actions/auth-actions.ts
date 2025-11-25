@@ -1,7 +1,7 @@
 'use server';
 
 import { z } from 'zod';
-import prisma from '@/lib/prisma';
+import { supabaseAdmin, supabase } from '@/lib/supabase';
 import bcrypt from 'bcryptjs';
 import { signIn } from '@/auth';
 import { AuthError } from 'next-auth';
@@ -22,9 +22,14 @@ export async function registerUser(prevState: string | undefined, formData: Form
 
     const { email, password, name } = validatedFields.data;
 
-    const existingUser = await prisma.user.findUnique({
-      where: { email },
-    });
+    // Use admin client if available to ensure we can query users
+    const client = supabaseAdmin || supabase;
+
+    const { data: existingUser } = await client
+      .from('User')
+      .select('id')
+      .eq('email', email)
+      .single();
 
     if (existingUser) {
       return 'Email already in use';
@@ -32,13 +37,23 @@ export async function registerUser(prevState: string | undefined, formData: Form
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    await prisma.user.create({
-      data: {
+    const { error: createError } = await client
+      .from('User')
+      .insert({
         name,
         email,
         password: hashedPassword,
-      },
-    });
+        updatedAt: new Date().toISOString(),
+      });
+
+    if (createError) {
+        console.error('Error creating user:', createError);
+        // If RLS blocks this, we need Service Role Key
+        if (createError.code === '42501') { // permission denied
+             return 'Server configuration error: Missing permissions to create user.';
+        }
+        throw createError;
+    }
 
     // Optionally sign in immediately or redirect to login
     // For simplicity, we'll return success and let client redirect
@@ -68,4 +83,3 @@ export async function authenticate(
     throw error;
   }
 }
-

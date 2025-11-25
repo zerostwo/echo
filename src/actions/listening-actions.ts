@@ -1,21 +1,46 @@
 'use server';
 
 import { auth } from '@/auth';
-import prisma from '@/lib/prisma';
+import { supabase, supabaseAdmin } from '@/lib/supabase';
 import * as Diff from 'diff';
 import { revalidatePath } from 'next/cache';
 import { startOfDay } from 'date-fns';
+import { randomUUID } from 'crypto';
 
 export async function evaluateDictation(sentenceId: string, userText: string, duration: number = 0) {
   const session = await auth();
   if (!session?.user?.id) return { error: 'Unauthorized' };
 
-  const sentence = await prisma.sentence.findUnique({
-    where: { id: sentenceId },
-    include: { material: true }
-  });
+  const client = supabaseAdmin || supabase;
 
-  if (!sentence) return { error: 'Sentence not found' };
+  if (!supabaseAdmin) {
+    console.warn('evaluateDictation: SUPABASE_SERVICE_ROLE_KEY is missing. Using anonymous client, which may fail RLS policies for progress tracking.');
+  }
+
+  const { data: sentence, error } = await client
+    .from('Sentence')
+    .select(`
+        *,
+        material:Material(*)
+    `)
+    .eq('id', sentenceId)
+    .single();
+
+  if (error) {
+      console.error("evaluateDictation: Database error fetching sentence:", error);
+      return { error: 'Database error' };
+  }
+
+  if (!sentence) {
+      console.error(`evaluateDictation: Sentence not found for ID: ${sentenceId}`);
+      return { error: 'Sentence not found' };
+  }
+
+  if (!sentence.material) {
+       console.error(`evaluateDictation: Material not found for sentence ID: ${sentenceId}`);
+       return { error: 'Material not found' };
+  }
+  
   if (sentence.material.userId !== session.user.id) return { error: 'Unauthorized' };
 
   // Normalize for comparison
@@ -42,53 +67,102 @@ export async function evaluateDictation(sentenceId: string, userText: string, du
 
   // Save progress
   try {
-    await prisma.$transaction(async (tx) => {
-        await tx.practiceProgress.upsert({
-            where: {
-                userId_sentenceId: {
-                    userId: session.user.id!,
-                    sentenceId: sentenceId
-                }
-            },
-            update: {
-                score: score, 
-                attempts: { increment: 1 },
-                duration: { increment: duration }
-            },
-            create: {
-                userId: session.user.id!,
+    // Upsert PracticeProgress
+    // We first check if it exists to increment attempts properly, or use upsert with default?
+    // Supabase upsert replaces unless we specify otherwise. Incrementing requires knowing previous value.
+    // Fetch existing
+    const { data: existingProgress, error: progressFetchError } = await client
+        .from('PracticeProgress')
+        .select('*')
+        .eq('userId', session.user.id)
+        .eq('sentenceId', sentenceId)
+        .maybeSingle();
+
+    if (progressFetchError) {
+        console.error("Error fetching practice progress:", progressFetchError);
+    }
+
+    if (existingProgress) {
+        const { error: updateError } = await client
+            .from('PracticeProgress')
+            .update({
+                score: score,
+                attempts: existingProgress.attempts + 1,
+                duration: existingProgress.duration + duration,
+                updatedAt: new Date().toISOString()
+            })
+            .eq('id', existingProgress.id);
+            
+        if (updateError) {
+            console.error("Error updating practice progress:", updateError);
+        }
+    } else {
+        const { error: insertError } = await client
+            .from('PracticeProgress')
+            .insert({
+                id: randomUUID(),
+                userId: session.user.id,
                 sentenceId: sentenceId,
                 score: score,
                 attempts: 1,
-                duration: duration
-            }
-        });
+                duration: duration,
+                updatedAt: new Date().toISOString()
+            });
+            
+        if (insertError) {
+            console.error("Error inserting practice progress:", insertError);
+        }
+    }
 
-        // Update daily stats
-        const today = startOfDay(new Date());
-        await tx.dailyStudyStat.upsert({
-            where: {
-                userId_date: {
-                    userId: session.user.id!,
-                    date: today
-                }
-            },
-            update: {
-                studyDuration: { increment: duration }
-            },
-            create: {
-                userId: session.user.id!,
+    // Update daily stats
+    const today = startOfDay(new Date()).toISOString();
+    const { data: existingStat, error: statFetchError } = await client
+        .from('DailyStudyStat')
+        .select('*')
+        .eq('userId', session.user.id)
+        .eq('date', today)
+        .maybeSingle();
+    
+    if (statFetchError) {
+        console.error("Error fetching daily stat:", statFetchError);
+    }
+
+    if (existingStat) {
+        const { error: updateError } = await client
+            .from('DailyStudyStat')
+            .update({ 
+                studyDuration: existingStat.studyDuration + duration,
+                updatedAt: new Date().toISOString()
+            })
+            .eq('id', existingStat.id);
+        
+        if (updateError) {
+            console.error("Error updating daily stat:", updateError);
+        }
+    } else {
+        const { error: insertError } = await client
+            .from('DailyStudyStat')
+            .insert({
+                id: randomUUID(),
+                userId: session.user.id,
                 date: today,
-                studyDuration: duration
-            }
-        });
-    });
+                studyDuration: duration,
+                updatedAt: new Date().toISOString()
+            });
+        
+        if (insertError) {
+            console.error("Error inserting daily stat:", insertError);
+        }
+    }
 
   } catch (e) {
       console.error("Failed to save progress", e);
+      // Don't fail the whole request, but log it.
+      // In a real app we might want to return a warning.
   }
   
   revalidatePath('/materials'); // Revalidate materials list to show updated practice stats
+  revalidatePath(`/listening/${sentenceId}`); // Revalidate current page just in case
 
   return {
       success: true,

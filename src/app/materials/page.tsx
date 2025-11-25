@@ -1,5 +1,5 @@
 import { auth } from '@/auth';
-import prisma from '@/lib/prisma';
+import { supabase } from '@/lib/supabase';
 import { MaterialsTableWrapper } from '@/components/materials/materials-table-wrapper';
 import { UploadMaterialDialog } from './upload-dialog';
 import { HeaderPortal } from '@/components/header-portal';
@@ -12,76 +12,55 @@ export default async function MaterialsPage({ searchParams }: { searchParams: Pr
   if (!session?.user?.id) return <div>Unauthorized</div>;
 
   // Fetch folders for the "Move to" action
-  const folders = await prisma.folder.findMany({
-    where: { 
-        userId: session.user.id,
-        deletedAt: null
-    },
-    orderBy: { name: 'asc' }
-  });
+  const { data: folders } = await supabase
+    .from('Folder')
+    .select('*')
+    .eq('userId', session.user.id)
+    .is('deletedAt', null)
+    .order('name', { ascending: true });
 
-  let materialsWhere: any = {
-      userId: session.user.id,
-      deletedAt: null
-  };
-
-  let currentFolderName = "All Materials";
+  let query = supabase
+    .from('Material')
+    .select(`
+        *,
+        sentences:Sentence(
+            *,
+            practices:PracticeProgress(*),
+            occurrences:WordOccurrence(wordId)
+        )
+    `)
+    .eq('userId', session.user.id)
+    .is('deletedAt', null)
+    .order('title', { ascending: true });
 
   if (currentFolderId === 'unfiled') {
-      // Legacy support if user bookmarked unfiled, though we removed link
-      materialsWhere.folderId = null;
-      currentFolderName = "Unfiled Materials";
+      query = query.is('folderId', null);
   } else if (currentFolderId) {
-      materialsWhere.folderId = currentFolderId;
-      const folder = folders.find(f => f.id === currentFolderId);
-      currentFolderName = folder ? folder.name : "Materials";
-  } else {
-      currentFolderName = "All Materials";
+      query = query.eq('folderId', currentFolderId);
   }
 
-  const materials = await prisma.material.findMany({
-    where: materialsWhere,
-    orderBy: { title: 'asc' },
-    include: {
-        _count: {
-            select: { 
-                sentences: true 
-            }
-        },
-        sentences: {
-            include: {
-                practices: {
-                    where: { userId: session.user.id }
-                },
-                // For approximate vocab count (word occurrences)
-                // Ideally we just count unique wordIds across all sentences in this material
-                occurrences: {
-                    select: { wordId: true }
-                }
-            }
-        }
-    }
-  });
+  const { data: materials } = await query;
 
   // Process materials to calculate stats
-  const processedMaterials = materials.map(m => {
+  const processedMaterials = (materials || []).map((m: any) => {
+      const sentences = m.sentences || [];
       // Calculate Practice Stats
-      const totalSentences = m.sentences.length;
-      const practicedSentences = m.sentences.filter(s => s.practices.length > 0).length;
+      const totalSentences = sentences.length;
+      const practicedSentences = sentences.filter((s: any) => s.practices && s.practices.length > 0).length;
       
       let totalScore = 0;
       let totalDuration = 0;
       let totalAttempts = 0;
 
-      m.sentences.forEach(s => {
-          if (s.practices.length > 0) {
-               // Assuming only 1 practice record per user per sentence due to @@unique constraint
-               // but if logic changes to many, this needs adjustment. 
-               // Current schema: PracticeProgress @@unique([userId, sentenceId])
-               const p = s.practices[0];
-               totalScore += p.score;
-               totalDuration += p.duration || 0;
-               totalAttempts += p.attempts;
+      sentences.forEach((s: any) => {
+          const practices = s.practices || [];
+          // Filter practices by current user (though likely already filtered by RLS or strict material ownership)
+          const userPractice = practices.find((p: any) => p.userId === session.user.id);
+          
+          if (userPractice) {
+               totalScore += userPractice.score;
+               totalDuration += userPractice.duration || 0;
+               totalAttempts += userPractice.attempts;
           }
       });
 
@@ -89,8 +68,9 @@ export default async function MaterialsPage({ searchParams }: { searchParams: Pr
 
       // Calculate Vocab Count
       const uniqueWordIds = new Set<string>();
-      m.sentences.forEach(s => {
-          s.occurrences.forEach(o => uniqueWordIds.add(o.wordId));
+      sentences.forEach((s: any) => {
+          const occurrences = s.occurrences || [];
+          occurrences.forEach((o: any) => uniqueWordIds.add(o.wordId));
       });
       
       return {
@@ -112,7 +92,7 @@ export default async function MaterialsPage({ searchParams }: { searchParams: Pr
           <UploadMaterialDialog folderId={currentFolderId === 'unfiled' ? null : currentFolderId || null} />
       </HeaderPortal>
       
-      <MaterialsTableWrapper materials={processedMaterials} folders={folders} />
+      <MaterialsTableWrapper materials={processedMaterials} folders={folders || []} />
     </div>
   );
 }

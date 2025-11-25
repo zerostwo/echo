@@ -1,7 +1,7 @@
 'use server';
 
 import { auth } from '@/auth';
-import prisma from '@/lib/prisma';
+import { supabase } from '@/lib/supabase';
 import { revalidatePath } from 'next/cache';
 
 export async function moveMaterial(materialId: string, targetFolderId: string | null) {
@@ -9,10 +9,13 @@ export async function moveMaterial(materialId: string, targetFolderId: string | 
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
     try {
-        await prisma.material.update({
-            where: { id: materialId, userId: session.user.id },
-            data: { folderId: targetFolderId }
-        });
+        const { error } = await supabase
+            .from('Material')
+            .update({ folderId: targetFolderId })
+            .eq('id', materialId)
+            .eq('userId', session.user.id);
+
+        if (error) throw error;
         
         revalidatePath('/materials');
         return { success: true };
@@ -20,4 +23,3 @@ export async function moveMaterial(materialId: string, targetFolderId: string | 
         return { error: 'Failed to move material' };
     }
 }
-

@@ -12,7 +12,7 @@ import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { useRouter } from 'next/navigation';
 import { useBreadcrumb } from '@/context/breadcrumb-context';
-import { createPortal } from 'react-dom';
+import { HeaderPortal } from '@/components/header-portal';
 import {
   Dialog,
   DialogContent,
@@ -39,15 +39,6 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
     const [isLooping, setIsLooping] = useState(false);
     const [showTranscript, setShowTranscript] = useState(false);
     const startTimeRef = useRef<number>(Date.now());
-    const [headerActionsContainer, setHeaderActionsContainer] = useState<HTMLElement | null>(null);
-
-    // Find header actions container
-    useEffect(() => {
-        const container = document.getElementById('header-actions');
-        if (container) {
-            setHeaderActionsContainer(container);
-        }
-    }, []);
 
     // Set breadcrumbs
     useEffect(() => {
@@ -200,28 +191,33 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
 
     return (
         <div className="w-full max-w-3xl mx-auto p-4 md:p-6 min-h-[calc(100vh-4rem)] flex flex-col">
-            {/* Header Navigation - Injected into global header via Portal */}
-            {headerActionsContainer && createPortal(
+            <HeaderPortal>
                 <div className="flex items-center gap-2">
-                    <Button 
-                        variant="outline" 
-                        size="sm" 
-                        disabled={!prevId}
-                        onClick={() => prevId && router.push(`/listening/${prevId}`)}
-                    >
-                        <ArrowLeft className="mr-2 h-4 w-4" /> Previous
-                    </Button>
-                    <Button 
-                        variant="outline" 
-                        size="sm" 
-                        disabled={!nextId}
-                        onClick={() => nextId && router.push(`/listening/${nextId}`)}
-                    >
-                        Next <ArrowRight className="ml-2 h-4 w-4" />
-                    </Button>
-                </div>,
-                headerActionsContainer
-            )}
+                    {prevId ? (
+                        <Button variant="outline" size="sm" asChild>
+                            <Link href={`/listening/${prevId}`}>
+                                <ArrowLeft className="mr-2 h-4 w-4" /> Previous
+                            </Link>
+                        </Button>
+                    ) : (
+                        <Button variant="outline" size="sm" disabled>
+                            <ArrowLeft className="mr-2 h-4 w-4" /> Previous
+                        </Button>
+                    )}
+
+                    {nextId ? (
+                        <Button variant="outline" size="sm" asChild>
+                            <Link href={`/listening/${nextId}`}>
+                                Next <ArrowRight className="ml-2 h-4 w-4" />
+                            </Link>
+                        </Button>
+                    ) : (
+                        <Button variant="outline" size="sm" disabled>
+                            Next <ArrowRight className="ml-2 h-4 w-4" />
+                        </Button>
+                    )}
+                </div>
+            </HeaderPortal>
 
             <div className="flex-1 w-full">
                 {/* Main Practice Area */}

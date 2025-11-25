@@ -1,7 +1,6 @@
 import NextAuth, { DefaultSession } from 'next-auth';
 import Credentials from 'next-auth/providers/credentials';
-import { PrismaAdapter } from '@auth/prisma-adapter';
-import prisma from '@/lib/prisma';
+import { supabase } from '@/lib/supabase';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
 import { authConfig } from './auth.config';
@@ -15,12 +14,12 @@ declare module 'next-auth' {
   }
   interface User {
     role: string;
+    id: string;
   }
 }
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   ...authConfig,
-  adapter: PrismaAdapter(prisma),
   secret: process.env.AUTH_SECRET,
   providers: [
     Credentials({
@@ -35,8 +34,14 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
         if (parsedCredentials.success) {
           const { email, password } = parsedCredentials.data;
-          const user = await prisma.user.findUnique({ where: { email } });
-          if (!user) return null;
+          
+          const { data: user, error } = await supabase
+            .from('User')
+            .select('*')
+            .eq('email', email)
+            .single();
+
+          if (error || !user) return null;
           
           // Check if user is active
           if (!user.isActive) {

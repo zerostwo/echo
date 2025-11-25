@@ -1,6 +1,6 @@
 'use server';
 import { auth } from '@/auth';
-import prisma from '@/lib/prisma';
+import { supabase } from '@/lib/supabase';
 import { revalidatePath } from 'next/cache';
 
 async function checkAdmin() {
@@ -16,10 +16,12 @@ export async function updateQuota(userId: string, newQuotaGB: number) {
         await checkAdmin();
         const quotaBytes = BigInt(newQuotaGB) * BigInt(1024 * 1024 * 1024);
         
-        await prisma.user.update({
-            where: { id: userId },
-            data: { quota: quotaBytes }
-        });
+        const { error } = await supabase
+            .from('User')
+            .update({ quota: quotaBytes.toString() }) // Send as string to ensure precision if needed, or number
+            .eq('id', userId);
+
+        if (error) throw error;
         
         revalidatePath('/admin/users');
         return { success: true };
@@ -31,10 +33,14 @@ export async function updateQuota(userId: string, newQuotaGB: number) {
 export async function toggleUserStatus(userId: string, isActive: boolean) {
     try {
         await checkAdmin();
-        await prisma.user.update({
-            where: { id: userId },
-            data: { isActive }
-        });
+        
+        const { error } = await supabase
+            .from('User')
+            .update({ isActive })
+            .eq('id', userId);
+
+        if (error) throw error;
+
         revalidatePath('/admin/users');
         return { success: true };
     } catch (error) {
@@ -45,9 +51,14 @@ export async function toggleUserStatus(userId: string, isActive: boolean) {
 export async function deleteUser(userId: string) {
     try {
         await checkAdmin();
-        await prisma.user.delete({
-            where: { id: userId }
-        });
+        
+        const { error } = await supabase
+            .from('User')
+            .delete()
+            .eq('id', userId);
+
+        if (error) throw error;
+
         revalidatePath('/admin/users');
         return { success: true };
     } catch (error) {

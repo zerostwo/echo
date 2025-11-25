@@ -1,7 +1,7 @@
 'use server';
 
 import { auth } from '@/auth';
-import prisma from '@/lib/prisma';
+import { supabase } from '@/lib/supabase';
 import { revalidatePath } from 'next/cache';
 
 export async function getFolders() {
@@ -9,14 +9,15 @@ export async function getFolders() {
     if (!session?.user?.id) return [];
 
     try {
-        const folders = await prisma.folder.findMany({
-            where: { 
-                userId: session.user.id,
-                deletedAt: null 
-            },
-            orderBy: { name: 'asc' }
-        });
-        return folders;
+        const { data: folders, error } = await supabase
+            .from('Folder')
+            .select('*')
+            .eq('userId', session.user.id)
+            .is('deletedAt', null)
+            .order('name', { ascending: true });
+
+        if (error) throw error;
+        return folders || [];
     } catch (e) {
         return [];
     }
@@ -27,13 +28,19 @@ export async function createFolder(name: string, parentId?: string) {
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
     try {
-        const folder = await prisma.folder.create({
-            data: {
+        const { data: folder, error } = await supabase
+            .from('Folder')
+            .insert({
                 name,
                 userId: session.user.id,
-                parentId: parentId || null
-            }
-        });
+                parentId: parentId || null,
+                updatedAt: new Date().toISOString()
+            })
+            .select()
+            .single();
+
+        if (error) throw error;
+
         revalidatePath('/materials');
         revalidatePath('/'); // Revalidate root to update sidebar if needed
         return { success: true, folder };
@@ -48,26 +55,33 @@ export async function deleteFolder(folderId: string, moveToUnfiled: boolean = tr
 
     try {
         // Verify ownership
-        const folder = await prisma.folder.findUnique({
-            where: { id: folderId, userId: session.user.id },
-            include: { children: true }
-        });
+        const { data: folder, error: fetchError } = await supabase
+            .from('Folder')
+            .select('*, children:Folder(*)')
+            .eq('id', folderId)
+            .eq('userId', session.user.id)
+            .single();
         
-        if (!folder) return { error: 'Folder not found' };
+        if (fetchError || !folder) return { error: 'Folder not found' };
 
         if (moveToUnfiled) {
              // Move materials to unfiled (folderId: null)
-            await prisma.material.updateMany({
-                where: { folderId: folderId, userId: session.user.id },
-                data: { folderId: null }
-            });
+            const { error: moveError } = await supabase
+                .from('Material')
+                .update({ folderId: null })
+                .eq('folderId', folderId)
+                .eq('userId', session.user.id);
+
+            if (moveError) throw moveError;
         }
 
         // Soft delete the folder
-        await prisma.folder.update({
-            where: { id: folderId },
-            data: { deletedAt: new Date() }
-        });
+        const { error: deleteError } = await supabase
+            .from('Folder')
+            .update({ deletedAt: new Date().toISOString() })
+            .eq('id', folderId);
+
+        if (deleteError) throw deleteError;
         
         revalidatePath('/materials');
         revalidatePath('/');
@@ -82,10 +96,14 @@ export async function renameFolder(folderId: string, newName: string) {
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
     try {
-        await prisma.folder.update({
-            where: { id: folderId, userId: session.user.id },
-            data: { name: newName }
-        });
+        const { error } = await supabase
+            .from('Folder')
+            .update({ name: newName })
+            .eq('id', folderId)
+            .eq('userId', session.user.id);
+
+        if (error) throw error;
+
         revalidatePath('/materials');
         revalidatePath('/');
         return { success: true };

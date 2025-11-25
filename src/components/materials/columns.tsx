@@ -99,8 +99,8 @@ export const columns = (folders: any[]): ColumnDef<Material>[] => [
         )
     },
     cell: ({ row }) => {
-        const count = row.original._count?.sentences || 0
-        return count
+        // Use the pre-calculated stats if available, otherwise fallback
+        return row.original.stats?.totalSentences || 0
     }
   },
   {
@@ -211,7 +211,7 @@ export const columns = (folders: any[]): ColumnDef<Material>[] => [
     cell: ({ row }) => {
         const count = row.original.stats.vocabCount
         return (
-            <Link href={`/materials/${row.original.id}/vocab`} className="text-sm font-medium text-blue-600 hover:underline">
+            <Link href={`/vocab?materialId=${row.original.id}`} className="text-sm font-medium text-blue-600 hover:underline">
                 {count}
             </Link>
         )
