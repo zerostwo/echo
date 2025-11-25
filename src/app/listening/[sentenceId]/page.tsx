@@ -13,25 +13,25 @@ export default async function ListeningPage({ params }: { params: Promise<{ sent
   const client = supabaseAdmin || supabase;
 
   const { data: sentence, error } = await client
-    .from('Sentence')
+    .from('sentences')
     .select(`
         *,
-        material:Material(
+        material:materials(
             *,
-            folder:Folder(*)
+            folder:folders(*)
         )
     `)
     .eq('id', sentenceId)
     .single();
   
-  if (error || !sentence || !sentence.material || sentence.material.userId !== session.user.id) notFound();
+  if (error || !sentence || !sentence.material || sentence.material.user_id !== session.user.id) notFound();
 
   // Fetch ALL sentences for this material to ensure we can navigate correctly
   // This avoids complex RLS/query issues with single item fetching
   const { data: allSentences } = await client
-    .from('Sentence')
+    .from('sentences')
     .select('id, order')
-    .eq('materialId', sentence.materialId)
+    .eq('material_id', sentence.material_id)
     .order('order', { ascending: true });
 
   let nextId = undefined;
@@ -49,10 +49,30 @@ export default async function ListeningPage({ params }: { params: Promise<{ sent
       }
   }
 
+  // Map snake_case to camelCase
+  const mappedSentence = {
+    ...sentence,
+    startTime: sentence.start_time,
+    endTime: sentence.end_time,
+    materialId: sentence.material_id,
+    createdAt: sentence.created_at,
+    updatedAt: sentence.updated_at,
+    material: sentence.material ? {
+        ...sentence.material,
+        userId: sentence.material.user_id,
+        folderId: sentence.material.folder_id,
+        filePath: sentence.material.file_path,
+        mimeType: sentence.material.mime_type,
+        isProcessed: sentence.material.is_processed,
+        createdAt: sentence.material.created_at,
+        updatedAt: sentence.material.updated_at,
+    } : null
+  };
+
   return (
     <PracticeInterface 
-        sentence={sentence} 
-        materialId={sentence.materialId}
+        sentence={mappedSentence} 
+        materialId={sentence.material_id}
         nextId={nextId}
         prevId={prevId}
     />

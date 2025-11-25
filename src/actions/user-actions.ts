@@ -63,7 +63,7 @@ export async function updateUser(prevState: any, formData: FormData) {
 
   try {
     const { data: user, error: fetchError } = await supabase
-      .from('User')
+      .from('users')
       .select('*')
       .eq('id', session.user.id)
       .single()
@@ -91,7 +91,7 @@ export async function updateUser(prevState: any, formData: FormData) {
     // Check if email is already taken by another user
     if (email !== user.email) {
       const { data: existingUser } = await supabase
-        .from('User')
+        .from('users')
         .select('id')
         .eq('email', email)
         .single()
@@ -105,7 +105,7 @@ export async function updateUser(prevState: any, formData: FormData) {
       name,
       email,
       image: avatar,
-      updatedAt: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
     }
     
     if (hashedPassword) {
@@ -113,7 +113,7 @@ export async function updateUser(prevState: any, formData: FormData) {
     }
 
     const { error: updateError } = await supabase
-      .from('User')
+      .from('users')
       .update(updates)
       .eq('id', session.user.id)
 
@@ -140,10 +140,10 @@ export async function updateSettings(settings: any) {
       // The settings field is a stringified JSON
       
       const { error: updateError } = await supabase
-          .from('User')
+          .from('users')
           .update({ 
             settings: JSON.stringify(settings),
-            updatedAt: new Date().toISOString() 
+            updated_at: new Date().toISOString() 
           })
           .eq('id', session.user.id);
 

@@ -11,11 +11,11 @@ import { Checkbox } from "@/components/ui/checkbox"
 export type Material = {
   id: string
   title: string
-  createdAt: Date
+  created_at: string
   _count: {
     sentences: number
   }
-  folderId: string | null
+  folder_id: string | null
   stats: {
       practicedCount: number
       totalSentences: number
@@ -26,14 +26,22 @@ export type Material = {
   }
 }
 
-function formatDate(date: Date) {
-  return new Intl.DateTimeFormat('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  }).format(date)
+function formatDate(date: Date | string | null | undefined) {
+  if (!date) return 'N/A';
+  try {
+    const d = typeof date === 'string' ? new Date(date) : date;
+    if (isNaN(d.getTime())) return 'Invalid Date';
+    
+    return new Intl.DateTimeFormat('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    }).format(d)
+  } catch (e) {
+    return 'Error';
+  }
 }
 
 function getDisplayName(filename: string) {
@@ -218,7 +226,7 @@ export const columns = (folders: any[]): ColumnDef<Material>[] => [
     }
   },
   {
-    accessorKey: "createdAt",
+    accessorKey: "created_at",
     header: ({ column }) => {
         return (
           <Button
@@ -231,7 +239,7 @@ export const columns = (folders: any[]): ColumnDef<Material>[] => [
         )
     },
     cell: ({ row }) => {
-        return formatDate(new Date(row.getValue("createdAt")))
+        return formatDate(row.getValue("created_at"))
     }
   }
 ]

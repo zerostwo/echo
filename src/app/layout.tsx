@@ -3,7 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 import { auth } from "@/auth";
-import { supabase } from "@/lib/supabase";
+import { supabase, supabaseAdmin } from "@/lib/supabase";
 import { AppSidebar } from "@/components/app-sidebar";
 import { getFolders } from "@/actions/folder-actions";
 import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
@@ -38,8 +38,9 @@ export default async function RootLayout({
 
   let userSettings = {};
   if (session?.user?.id) {
-    const { data: user } = await supabase
-      .from('User')
+    const client = supabaseAdmin || supabase;
+    const { data: user } = await client
+      .from('users')
       .select('settings')
       .eq('id', session.user.id)
       .single();
@@ -62,7 +63,7 @@ export default async function RootLayout({
         <BreadcrumbProvider>
         {session?.user ? (
             <SidebarProvider>
-                <AppSidebar user={session.user as any} folders={folders} settings={userSettings} />
+                <AppSidebar user={session.user as any} settings={userSettings} />
                 <SidebarInset>
                     <header className="flex h-16 shrink-0 items-center gap-2 px-4 sticky top-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
                         <SidebarTrigger className="-ml-1" />

@@ -10,10 +10,10 @@ export async function moveMaterial(materialId: string, targetFolderId: string | 
 
     try {
         const { error } = await supabase
-            .from('Material')
-            .update({ folderId: targetFolderId })
+            .from('materials')
+            .update({ folder_id: targetFolderId })
             .eq('id', materialId)
-            .eq('userId', session.user.id);
+            .eq('user_id', session.user.id);
 
         if (error) throw error;
         

@@ -1,6 +1,6 @@
 import NextAuth, { DefaultSession } from 'next-auth';
 import Credentials from 'next-auth/providers/credentials';
-import { supabase } from '@/lib/supabase';
+import { supabase, supabaseAdmin } from '@/lib/supabase';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
 import { authConfig } from './auth.config';
@@ -35,8 +35,10 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         if (parsedCredentials.success) {
           const { email, password } = parsedCredentials.data;
           
-          const { data: user, error } = await supabase
-            .from('User')
+          const client = supabaseAdmin || supabase;
+          
+          const { data: user, error } = await client
+            .from('users')
             .select('*')
             .eq('email', email)
             .single();
@@ -44,7 +46,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           if (error || !user) return null;
           
           // Check if user is active
-          if (!user.isActive) {
+          if (!user.is_active) {
             return null; // Or throw an error if you want a specific message
           }
 

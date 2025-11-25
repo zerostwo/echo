@@ -1,5 +1,5 @@
 import { auth } from '@/auth';
-import { supabase } from '@/lib/supabase';
+import { supabaseAdmin, supabase } from '@/lib/supabase';
 import { VocabTable, vocabColumns } from './vocab-table';
 import { AnkiExportButton } from './anki-export';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,31 +14,33 @@ export default async function VocabPage({ searchParams }: { searchParams: Promis
   const session = await auth();
   if (!session?.user?.id) return <div>Unauthorized</div>;
 
+  const client = supabaseAdmin || supabase;
+
   const { materialId } = await searchParams;
 
   // Fetch words
-  const { data: userWords } = await supabase
-    .from('UserWordStatus')
+  const { data: userWords } = await client
+    .from('user_word_statuses')
     .select(`
         *,
-        word:Word(
+        word:words(
             *,
-            occurrences:WordOccurrence(
-                sentence:Sentence(
+            occurrences:word_occurrences(
+                sentence:sentences(
                     *,
-                    material:Material(deletedAt, title)
+                    material:materials(deleted_at, title)
                 )
             )
         )
     `)
-    .eq('userId', session.user.id)
-    .order('updatedAt', { ascending: false });
+    .eq('user_id', session.user.id)
+    .order('updated_at', { ascending: false });
 
   // Fetch practice stats
-  const { data: practices } = await supabase
-    .from('PracticeProgress')
+  const { data: practices } = await client
+    .from('practice_progress')
     .select('attempts')
-    .eq('userId', session.user.id);
+    .eq('user_id', session.user.id);
 
   // Process data
   // Filter words to exclude those from deleted materials AND apply materialId filter if present
@@ -46,8 +48,8 @@ export default async function VocabPage({ searchParams }: { searchParams: Promis
 
   const filteredUserWords = (userWords || []).map((uw: any) => {
       const activeOccurrences = uw.word?.occurrences?.filter((occ: any) => {
-          const isNotDeleted = occ.sentence?.material?.deletedAt === null;
-          const matchesMaterial = !materialId || occ.sentence?.materialId === materialId;
+          const isNotDeleted = occ.sentence?.material?.deleted_at === null;
+          const matchesMaterial = !materialId || occ.sentence?.material_id === materialId;
           
           if (materialId && matchesMaterial && !filteredMaterialTitle) {
               filteredMaterialTitle = occ.sentence?.material?.title;
@@ -92,8 +94,8 @@ export default async function VocabPage({ searchParams }: { searchParams: Promis
   
   // Trends
   const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  const newWords = filteredUserWords.filter((w: any) => w.createdAt > oneDayAgo).length;
-  const newMastered = filteredUserWords.filter((w: any) => w.status === "MASTERED" && w.updatedAt > oneDayAgo).length;
+  const newWords = filteredUserWords.filter((w: any) => w.created_at > oneDayAgo).length;
+  const newMastered = filteredUserWords.filter((w: any) => w.status === "MASTERED" && w.updated_at > oneDayAgo).length;
   
   const dueTomorrow = 18; 
 

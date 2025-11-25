@@ -1,30 +1,32 @@
 'use server';
 
 import { auth } from '@/auth';
-import { supabase } from '@/lib/supabase';
+import { supabase, supabaseAdmin } from '@/lib/supabase';
 
 export async function getWordContext(wordId: string) {
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
+    const client = supabaseAdmin || supabase;
+
     // Fetch occurrences and related sentences
     // We also want to know which material the sentence belongs to
     // Using !inner to filter by material.userId
-    const { data: occurrences, error } = await supabase
-        .from('WordOccurrence')
+    const { data: occurrences, error } = await client
+        .from('word_occurrences')
         .select(`
             *,
-            sentence:Sentence!inner(
+            sentence:sentences!inner(
                 *,
-                material:Material!inner(
+                material:materials!inner(
                     id,
                     title,
-                    userId
+                    user_id
                 )
             )
         `)
-        .eq('wordId', wordId)
-        .eq('sentence.material.userId', session.user.id)
+        .eq('word_id', wordId)
+        .eq('sentence.material.user_id', session.user.id)
         .limit(10);
 
     if (error) {
@@ -39,15 +41,17 @@ export async function updateWordStatus(wordId: string, status: string) {
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
+    const client = supabaseAdmin || supabase;
+
     try {
-        const { error } = await supabase
-            .from('UserWordStatus')
+        const { error } = await client
+            .from('user_word_statuses')
             .upsert({
-                userId: session.user.id,
-                wordId: wordId,
+                user_id: session.user.id,
+                word_id: wordId,
                 status: status,
-                updatedAt: new Date().toISOString()
-            }, { onConflict: 'userId, wordId' });
+                updated_at: new Date().toISOString()
+            }, { onConflict: 'user_id, word_id' });
 
         if (error) throw error;
         return { success: true };
@@ -60,17 +64,19 @@ export async function updateWordsStatus(wordIds: string[], status: string) {
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
+    const client = supabaseAdmin || supabase;
+
     try {
         const updates = wordIds.map(wordId => ({
-            userId: session.user.id,
-            wordId: wordId,
+            user_id: session.user.id,
+            word_id: wordId,
             status: status,
-            updatedAt: new Date().toISOString()
+            updated_at: new Date().toISOString()
         }));
 
-        const { error } = await supabase
-            .from('UserWordStatus')
-            .upsert(updates, { onConflict: 'userId, wordId' });
+        const { error } = await client
+            .from('user_word_statuses')
+            .upsert(updates, { onConflict: 'user_id, word_id' });
 
         if (error) throw error;
         return { success: true };

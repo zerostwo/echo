@@ -1,5 +1,5 @@
 import { auth } from '@/auth';
-import { supabase } from '@/lib/supabase';
+import { supabaseAdmin, supabase } from '@/lib/supabase';
 import { MaterialsTableWrapper } from '@/components/materials/materials-table-wrapper';
 import { UploadMaterialDialog } from './upload-dialog';
 import { HeaderPortal } from '@/components/header-portal';
@@ -11,32 +11,34 @@ export default async function MaterialsPage({ searchParams }: { searchParams: Pr
 
   if (!session?.user?.id) return <div>Unauthorized</div>;
 
+  const client = supabaseAdmin || supabase;
+
   // Fetch folders for the "Move to" action
-  const { data: folders } = await supabase
-    .from('Folder')
+  const { data: folders } = await client
+    .from('folders')
     .select('*')
-    .eq('userId', session.user.id)
-    .is('deletedAt', null)
+    .eq('user_id', session.user.id)
+    .is('deleted_at', null)
     .order('name', { ascending: true });
 
-  let query = supabase
-    .from('Material')
+  let query = client
+    .from('materials')
     .select(`
         *,
-        sentences:Sentence(
+        sentences:sentences(
             *,
-            practices:PracticeProgress(*),
-            occurrences:WordOccurrence(wordId)
+            practices:practice_progress(*),
+            occurrences:word_occurrences(word_id)
         )
     `)
-    .eq('userId', session.user.id)
-    .is('deletedAt', null)
+    .eq('user_id', session.user.id)
+    .is('deleted_at', null)
     .order('title', { ascending: true });
 
   if (currentFolderId === 'unfiled') {
-      query = query.is('folderId', null);
+      query = query.is('folder_id', null);
   } else if (currentFolderId) {
-      query = query.eq('folderId', currentFolderId);
+      query = query.eq('folder_id', currentFolderId);
   }
 
   const { data: materials } = await query;
@@ -55,7 +57,7 @@ export default async function MaterialsPage({ searchParams }: { searchParams: Pr
       sentences.forEach((s: any) => {
           const practices = s.practices || [];
           // Filter practices by current user (though likely already filtered by RLS or strict material ownership)
-          const userPractice = practices.find((p: any) => p.userId === session.user.id);
+          const userPractice = practices.find((p: any) => p.user_id === session.user.id);
           
           if (userPractice) {
                totalScore += userPractice.score;
@@ -70,7 +72,7 @@ export default async function MaterialsPage({ searchParams }: { searchParams: Pr
       const uniqueWordIds = new Set<string>();
       sentences.forEach((s: any) => {
           const occurrences = s.occurrences || [];
-          occurrences.forEach((o: any) => uniqueWordIds.add(o.wordId));
+          occurrences.forEach((o: any) => uniqueWordIds.add(o.word_id));
       });
       
       return {

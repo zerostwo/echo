@@ -10,18 +10,18 @@ export async function getTrashItems() {
     if (!session?.user?.id) return { materials: [], folders: [] };
 
     const { data: materials } = await supabase
-        .from('Material')
+        .from('materials')
         .select('*')
-        .eq('userId', session.user.id)
-        .not('deletedAt', 'is', null)
-        .order('deletedAt', { ascending: false });
+        .eq('user_id', session.user.id)
+        .not('deleted_at', 'is', null)
+        .order('deleted_at', { ascending: false });
 
     const { data: folders } = await supabase
-        .from('Folder')
+        .from('folders')
         .select('*')
-        .eq('userId', session.user.id)
-        .not('deletedAt', 'is', null)
-        .order('deletedAt', { ascending: false });
+        .eq('user_id', session.user.id)
+        .not('deleted_at', 'is', null)
+        .order('deleted_at', { ascending: false });
 
     return { materials: materials || [], folders: folders || [] };
 }
@@ -32,10 +32,10 @@ export async function emptyTrash() {
 
     try {
         const { data: materials } = await supabase
-            .from('Material')
+            .from('materials')
             .select('id')
-            .eq('userId', session.user.id)
-            .not('deletedAt', 'is', null);
+            .eq('user_id', session.user.id)
+            .not('deleted_at', 'is', null);
 
         if (materials) {
             for (const m of materials) {
@@ -44,10 +44,10 @@ export async function emptyTrash() {
         }
         
         const { error: folderError } = await supabase
-            .from('Folder')
+            .from('folders')
             .delete()
-            .eq('userId', session.user.id)
-            .not('deletedAt', 'is', null);
+            .eq('user_id', session.user.id)
+            .not('deleted_at', 'is', null);
 
         if (folderError) throw folderError;
 

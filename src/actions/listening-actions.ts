@@ -18,10 +18,10 @@ export async function evaluateDictation(sentenceId: string, userText: string, du
   }
 
   const { data: sentence, error } = await client
-    .from('Sentence')
+    .from('sentences')
     .select(`
         *,
-        material:Material(*)
+        material:materials(*)
     `)
     .eq('id', sentenceId)
     .single();
@@ -41,7 +41,7 @@ export async function evaluateDictation(sentenceId: string, userText: string, du
        return { error: 'Material not found' };
   }
   
-  if (sentence.material.userId !== session.user.id) return { error: 'Unauthorized' };
+  if (sentence.material.user_id !== session.user.id) return { error: 'Unauthorized' };
 
   // Normalize for comparison
   const normalize = (s: string) => s.trim().toLowerCase().replace(/[.,/#!$%^&*;:{}=\-_`~()]/g,"");
@@ -72,10 +72,10 @@ export async function evaluateDictation(sentenceId: string, userText: string, du
     // Supabase upsert replaces unless we specify otherwise. Incrementing requires knowing previous value.
     // Fetch existing
     const { data: existingProgress, error: progressFetchError } = await client
-        .from('PracticeProgress')
+        .from('practice_progress')
         .select('*')
-        .eq('userId', session.user.id)
-        .eq('sentenceId', sentenceId)
+        .eq('user_id', session.user.id)
+        .eq('sentence_id', sentenceId)
         .maybeSingle();
 
     if (progressFetchError) {
@@ -84,12 +84,12 @@ export async function evaluateDictation(sentenceId: string, userText: string, du
 
     if (existingProgress) {
         const { error: updateError } = await client
-            .from('PracticeProgress')
+            .from('practice_progress')
             .update({
                 score: score,
                 attempts: existingProgress.attempts + 1,
                 duration: existingProgress.duration + duration,
-                updatedAt: new Date().toISOString()
+                updated_at: new Date().toISOString()
             })
             .eq('id', existingProgress.id);
             
@@ -98,15 +98,15 @@ export async function evaluateDictation(sentenceId: string, userText: string, du
         }
     } else {
         const { error: insertError } = await client
-            .from('PracticeProgress')
+            .from('practice_progress')
             .insert({
                 id: randomUUID(),
-                userId: session.user.id,
-                sentenceId: sentenceId,
+                user_id: session.user.id,
+                sentence_id: sentenceId,
                 score: score,
                 attempts: 1,
                 duration: duration,
-                updatedAt: new Date().toISOString()
+                updated_at: new Date().toISOString()
             });
             
         if (insertError) {
@@ -117,9 +117,9 @@ export async function evaluateDictation(sentenceId: string, userText: string, du
     // Update daily stats
     const today = startOfDay(new Date()).toISOString();
     const { data: existingStat, error: statFetchError } = await client
-        .from('DailyStudyStat')
+        .from('daily_study_stats')
         .select('*')
-        .eq('userId', session.user.id)
+        .eq('user_id', session.user.id)
         .eq('date', today)
         .maybeSingle();
     
@@ -129,10 +129,10 @@ export async function evaluateDictation(sentenceId: string, userText: string, du
 
     if (existingStat) {
         const { error: updateError } = await client
-            .from('DailyStudyStat')
+            .from('daily_study_stats')
             .update({ 
-                studyDuration: existingStat.studyDuration + duration,
-                updatedAt: new Date().toISOString()
+                study_duration: existingStat.study_duration + duration,
+                updated_at: new Date().toISOString()
             })
             .eq('id', existingStat.id);
         
@@ -141,13 +141,13 @@ export async function evaluateDictation(sentenceId: string, userText: string, du
         }
     } else {
         const { error: insertError } = await client
-            .from('DailyStudyStat')
+            .from('daily_study_stats')
             .insert({
                 id: randomUUID(),
-                userId: session.user.id,
+                user_id: session.user.id,
                 date: today,
-                studyDuration: duration,
-                updatedAt: new Date().toISOString()
+                study_duration: duration,
+                updated_at: new Date().toISOString()
             });
         
         if (insertError) {

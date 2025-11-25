@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { ChevronRight, File, Folder, LayoutDashboard, Library, Mic2, Settings, Trash2 } from "lucide-react"
+import { ChevronRight, LayoutDashboard, Library, Mic2, Settings, Trash2 } from "lucide-react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 
@@ -32,11 +32,10 @@ interface AppSidebarProps extends React.ComponentProps<typeof Sidebar> {
     image?: string | null
     role?: string
   }
-  folders: any[]
   settings?: any
 }
 
-export function AppSidebar({ user, folders, settings, ...props }: AppSidebarProps) {
+export function AppSidebar({ user, settings, ...props }: AppSidebarProps) {
   const pathname = usePathname()
 
   const navItems = [
@@ -47,19 +46,8 @@ export function AppSidebar({ user, folders, settings, ...props }: AppSidebarProp
     },
     {
       title: "Materials",
+      url: "/materials",
       icon: Library,
-      items: [
-        {
-          title: "All Materials",
-          url: "/materials",
-          icon: Library,
-        },
-        ...(folders?.map(f => ({
-          title: f.name,
-          url: `/materials?folderId=${f.id}`,
-          icon: Folder
-        })) || [])
-      ]
     },
     {
       title: "Vocabulary",

@@ -33,6 +33,19 @@ def transcribe(file_path, model_name="turbo"):
                 start = s["words"][0]["start"]
                 end = s["words"][-1]["end"]
             
+            # Sanitize timestamps to prevent NaN/Infinity
+            try:
+                start = float(start)
+                if start != start: start = 0.0 # NaN check
+                if start == float('inf') or start == float('-inf'): start = 0.0
+                
+                end = float(end)
+                if end != end: end = 0.0 # NaN check
+                if end == float('inf') or end == float('-inf'): end = 0.0
+            except:
+                start = 0.0
+                end = 0.0
+            
             segments.append({
                 "start": start,
                 "end": end,

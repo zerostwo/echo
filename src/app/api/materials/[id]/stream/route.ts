@@ -10,16 +10,27 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     const session = await auth();
     if (!session?.user?.id) return new NextResponse('Unauthorized', { status: 401 });
     
-    const { data: material } = await supabase
-        .from('Material')
-        .select('filePath, mimeType')
+    // Use admin client for DB access to ensure we can find the material
+    // The anon 'supabase' client doesn't have the user's auth context
+    const client = supabaseAdmin || supabase;
+
+    if (!supabaseAdmin) {
+        console.warn("[Stream] Warning: supabaseAdmin is not available. Using anon client. DB queries may fail due to RLS.");
+    }
+
+    const { data: material } = await client
+        .from('materials')
+        .select('file_path, mime_type')
         .eq('id', id)
-        .eq('userId', session.user.id)
+        .eq('user_id', session.user.id)
         .single();
 
-    if (!material) return new NextResponse('Not Found', { status: 404 });
+    if (!material) {
+        console.error(`[Stream] Material not found or access denied. ID: ${id}, User: ${session.user.id}`);
+        return new NextResponse('Not Found', { status: 404 });
+    }
 
-    const filePath = material.filePath;
+    const filePath = material.file_path;
 
     // Check if it is a local file (legacy support)
     const isLocalFile = path.isAbsolute(filePath) && existsSync(filePath);
@@ -44,7 +55,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
                     'Content-Range': `bytes ${start}-${end}/${fileSize}`,
                     'Accept-Ranges': 'bytes',
                     'Content-Length': chunksize.toString(),
-                    'Content-Type': material.mimeType || 'audio/mpeg',
+                    'Content-Type': material.mime_type || 'audio/mpeg',
                 },
             });
         } else {
@@ -54,14 +65,14 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
                 status: 200,
                 headers: {
                     'Content-Length': fileSize.toString(),
-                    'Content-Type': material.mimeType || 'audio/mpeg',
+                    'Content-Type': material.mime_type || 'audio/mpeg',
                 },
             });
         }
     }
 
     // Handle Supabase Storage file
-    const client = supabaseAdmin || supabase;
+    // client is already defined above
     
     console.log(`[Stream] Serving file: ${filePath} for material: ${id}`);
 
@@ -77,8 +88,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
 
     if (error || !data?.signedUrl) {
         console.error("Failed to create signed URL:", error);
+        console.error("FilePath:", filePath);
         return new NextResponse('File not found in storage', { status: 404 });
     }
+
 
     try {
         // Proxy the request to Supabase Storage to avoid CORS/Redirect issues
@@ -97,12 +110,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
 
         if (!upstreamResponse.ok) {
             console.error(`Upstream fetch failed: ${upstreamResponse.status} ${upstreamResponse.statusText}`);
+            console.error(`URL was: ${data.signedUrl}`);
             return new NextResponse('Failed to fetch file from storage', { status: upstreamResponse.status });
         }
 
         // Forward relevant headers
         const responseHeaders = new Headers();
-        responseHeaders.set('Content-Type', upstreamResponse.headers.get('Content-Type') || material.mimeType || 'audio/mpeg');
+        responseHeaders.set('Content-Type', upstreamResponse.headers.get('Content-Type') || material.mime_type || 'audio/mpeg');
         responseHeaders.set('Content-Length', upstreamResponse.headers.get('Content-Length') || '');
         responseHeaders.set('Accept-Ranges', 'bytes');
         

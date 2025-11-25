@@ -28,7 +28,7 @@ export function MaterialHeaderActions({ materialId }: { materialId: string }) {
             if (res.error) {
                 toast.error(res.error, { id: toastId });
             } else {
-                toast.success("Regeneration complete", { id: toastId });
+                toast.success("Regeneration started. It will take a few moments.", { id: toastId });
             }
         } catch (e) {
             toast.error("Failed to regenerate", { id: toastId });

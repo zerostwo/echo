@@ -1,22 +1,24 @@
 import { auth } from "@/auth"
 import { DailyActivityChart } from "@/components/dashboard/daily-activity-chart"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { supabase } from "@/lib/supabase"
+import { supabase, supabaseAdmin } from "@/lib/supabase"
 
 export default async function DashboardPage() {
   const session = await auth()
   if (!session?.user?.id) return null
+
+  const client = supabaseAdmin || supabase;
 
   // Fetch materials count
   // In Supabase, getting counts usually requires { count: 'exact', head: true } if we don't want data
   // But here we need to aggregate sentence counts too.
   
   // 1. Fetch Materials with sentence count
-  const { data: materials } = await supabase
-    .from('Material')
-    .select('id, sentences:Sentence(count)')
-    .eq('userId', session.user.id)
-    .is('deletedAt', null);
+  const { data: materials } = await client
+    .from('materials')
+    .select('id, sentences:sentences(count)')
+    .eq('user_id', session.user.id)
+    .is('deleted_at', null);
 
   const totalMaterials = materials?.length || 0;
   const totalSentences = materials?.reduce((acc, m: any) => acc + (m.sentences?.[0]?.count || 0), 0) || 0;
@@ -24,10 +26,10 @@ export default async function DashboardPage() {
   // 2. Fetch Practices (for average score)
   // Practices are linked to Sentences, which are linked to Materials.
   // Or we can fetch PracticeProgress directly by userId
-  const { data: practices } = await supabase
-    .from('PracticeProgress')
+  const { data: practices } = await client
+    .from('practice_progress')
     .select('score')
-    .eq('userId', session.user.id);
+    .eq('user_id', session.user.id);
 
   const totalPractices = practices?.length || 0;
   const avgScore = totalPractices > 0
@@ -35,10 +37,10 @@ export default async function DashboardPage() {
     : 0;
 
   // 3. Fetch Daily Stats
-  const { data: dailyStats } = await supabase
-    .from('DailyStudyStat')
-    .select('date, studyDuration, wordsAdded, sentencesAdded')
-    .eq('userId', session.user.id)
+  const { data: dailyStats } = await client
+    .from('daily_study_stats')
+    .select('date, study_duration, words_added, sentences_added')
+    .eq('user_id', session.user.id)
     .order('date', { ascending: false })
     .limit(7);
 

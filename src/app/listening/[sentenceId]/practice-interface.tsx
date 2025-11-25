@@ -63,9 +63,12 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
                 audioRef.current.pause();
                 setIsPlaying(false);
             } else {
+                const start = Number.isFinite(sentence.startTime) ? sentence.startTime : 0;
+                const end = Number.isFinite(sentence.endTime) ? sentence.endTime : 0;
+                
                 // Always start from beginning of sentence if stopped
-                if (audioRef.current.currentTime < sentence.startTime || audioRef.current.currentTime >= sentence.endTime) {
-                    audioRef.current.currentTime = sentence.startTime;
+                if (audioRef.current.currentTime < start || (end > 0 && audioRef.current.currentTime >= end)) {
+                    audioRef.current.currentTime = start;
                 }
                 audioRef.current.play();
                 setIsPlaying(true);
@@ -75,7 +78,8 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
 
     const handleReplay = () => {
         if (audioRef.current) {
-            audioRef.current.currentTime = sentence.startTime;
+            const start = Number.isFinite(sentence.startTime) ? sentence.startTime : 0;
+            audioRef.current.currentTime = start;
             audioRef.current.play();
             setIsPlaying(true);
         }
@@ -113,14 +117,18 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
 
         const handleTimeUpdate = () => {
             // Add a small buffer to end time to prevent cutting off too early
-            if (audio.currentTime >= sentence.endTime) {
+            // Ensure we have valid start/end times before enforcing loop/stop
+            const startTime = Number.isFinite(sentence.startTime) ? sentence.startTime : 0;
+            const endTime = Number.isFinite(sentence.endTime) ? sentence.endTime : 0;
+
+            if (endTime > 0 && audio.currentTime >= endTime) {
                 if (isLooping) {
-                    audio.currentTime = sentence.startTime;
+                    audio.currentTime = startTime;
                     audio.play();
                 } else {
                     audio.pause();
                     setIsPlaying(false);
-                    audio.currentTime = sentence.startTime; // Reset to start
+                    audio.currentTime = startTime; // Reset to start
                 }
             }
         };
@@ -176,7 +184,11 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
         setShowTranscript(false);
         
         if (audioRef.current) {
-            audioRef.current.currentTime = sentence.startTime;
+            const start = Number.isFinite(sentence.startTime) ? sentence.startTime : 0;
+            if (Number.isFinite(start)) {
+                audioRef.current.currentTime = start;
+            }
+            
             const playPromise = audioRef.current.play();
             if (playPromise !== undefined) {
                 playPromise
@@ -461,6 +473,7 @@ function renderDiff(diff: any[]) {
 }
 
 function formatTime(seconds: number) {
+    if (!Number.isFinite(seconds)) return "0:00";
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
     return `${mins}:${secs.toString().padStart(2, '0')}`;

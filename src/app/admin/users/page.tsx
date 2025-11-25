@@ -1,5 +1,5 @@
 import { auth } from '@/auth';
-import { supabase } from '@/lib/supabase';
+import { supabase, supabaseAdmin } from '@/lib/supabase';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { UserQuotaDialog } from './quota-dialog';
 import { Badge } from "@/components/ui/badge";
@@ -12,13 +12,15 @@ export default async function AdminUsersPage() {
         redirect('/dashboard');
     }
 
-    const { data: users } = await supabase
-        .from('User')
+    const client = supabaseAdmin || supabase;
+
+    const { data: users } = await client
+        .from('users')
         .select(`
             *,
-            materials:Material(count)
+            materials:materials(count)
         `)
-        .order('createdAt', { ascending: false });
+        .order('created_at', { ascending: false });
 
     return (
         <div className="p-8">
@@ -51,17 +53,17 @@ export default async function AdminUsersPage() {
                                     </Badge>
                                 </TableCell>
                                 <TableCell>
-                                    <Badge variant={u.isActive ? 'outline' : 'destructive'}>
-                                        {u.isActive ? 'Active' : 'Inactive'}
+                                    <Badge variant={u.is_active ? 'outline' : 'destructive'}>
+                                        {u.is_active ? 'Active' : 'Inactive'}
                                     </Badge>
                                 </TableCell>
                                 <TableCell>{u.materials?.[0]?.count || 0}</TableCell>
-                                <TableCell>{(Number(u.usedSpace) / 1024 / 1024).toFixed(2)} MB</TableCell>
+                                <TableCell>{(Number(u.used_space) / 1024 / 1024).toFixed(2)} MB</TableCell>
                                 <TableCell>{(Number(u.quota) / 1024 / 1024 / 1024).toFixed(1)} GB</TableCell>
                                 <TableCell>
                                     <div className="flex items-center gap-2">
                                         <UserQuotaDialog userId={u.id} currentQuotaGB={Number(u.quota) / 1024 / 1024 / 1024} />
-                                        <UserActions userId={u.id} isActive={u.isActive} />
+                                        <UserActions userId={u.id} isActive={u.is_active} />
                                     </div>
                                 </TableCell>
                             </TableRow>

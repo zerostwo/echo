@@ -1,5 +1,5 @@
 import { auth } from '@/auth';
-import { supabase } from '@/lib/supabase';
+import { supabaseAdmin, supabase } from '@/lib/supabase';
 import { notFound } from 'next/navigation';
 import { SetBreadcrumbs } from '@/components/set-breadcrumbs';
 import { MaterialStatsCard } from './material-stats-card';
@@ -10,15 +10,17 @@ export default async function MaterialDetailPage({ params }: { params: Promise<{
   const session = await auth();
   if (!session?.user?.id) return <div>Unauthorized</div>;
 
-  const { data: material, error } = await supabase
-    .from('Material')
+  const client = supabaseAdmin || supabase;
+
+  const { data: material, error } = await client
+    .from('materials')
     .select(`
         *,
-        sentences:Sentence(*),
-        folder:Folder(*)
+        sentences:sentences(*),
+        folder:folders(*)
     `)
     .eq('id', id)
-    .eq('userId', session.user.id)
+    .eq('user_id', session.user.id)
     .single();
 
   if (error || !material) notFound();
@@ -32,13 +34,13 @@ export default async function MaterialDetailPage({ params }: { params: Promise<{
   
   if (sentenceIds.length > 0) {
       // 2. Fetch occurrences for these sentences
-      const { data: occurrences } = await supabase
-          .from('WordOccurrence')
-          .select('wordId')
-          .in('sentenceId', sentenceIds);
+      const { data: occurrences } = await client
+          .from('word_occurrences')
+          .select('word_id')
+          .in('sentence_id', sentenceIds);
           
       if (occurrences) {
-          vocabCount = new Set(occurrences.map((o: any) => o.wordId)).size;
+          vocabCount = new Set(occurrences.map((o: any) => o.word_id)).size;
       }
   }
 
@@ -63,7 +65,17 @@ export default async function MaterialDetailPage({ params }: { params: Promise<{
   // Sort sentences by order
   // Supabase might return them unsorted unless we specify order in the nested select
   // We can sort here in JS safely
-  const sortedSentences = [...sentences].sort((a: any, b: any) => a.order - b.order);
+  // Also map snake_case to camelCase for the UI components
+  const sortedSentences = [...sentences]
+    .sort((a: any, b: any) => a.order - b.order)
+    .map((s: any) => ({
+      ...s,
+      startTime: s.start_time,
+      endTime: s.end_time,
+      materialId: s.material_id,
+      createdAt: s.created_at,
+      updatedAt: s.updated_at
+    }));
 
   const materialWithSortedSentences = {
     ...material,

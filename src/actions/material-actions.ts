@@ -27,16 +27,16 @@ export async function registerUploadedMaterial(
         const client = supabaseAdmin || supabase;
         
         const { data: material, error } = await client
-            .from('Material')
+            .from('materials')
             .insert({
                 title: path.parse(filename).name,
                 filename: filename,
-                filePath: fileUrl, // Storing URL in filePath
+                file_path: fileUrl, // Storing URL in filePath
                 size: size,
-                userId: session.user.id,
-                mimeType: fileType,
-                folderId: folderId || null,
-                updatedAt: new Date().toISOString()
+                user_id: session.user.id,
+                mime_type: fileType,
+                folder_id: folderId || null,
+                updated_at: new Date().toISOString()
             })
             .select()
             .single();
@@ -50,15 +50,15 @@ export async function registerUploadedMaterial(
         // For now: read-modify-write (optimistic locking via version/etag if critical, but here simple is fine)
         
         const { data: user } = await client
-            .from('User')
-            .select('usedSpace')
+            .from('users')
+            .select('used_space')
             .eq('id', session.user.id)
             .single();
             
         if (user) {
              await client
-                .from('User')
-                .update({ usedSpace: (user.usedSpace || 0) + size })
+                .from('users')
+                .update({ used_space: (user.used_space || 0) + size })
                 .eq('id', session.user.id);
         }
 
@@ -94,14 +94,14 @@ export async function uploadMaterial(formData: FormData) {
 
     // Check quota
     const { data: user, error: userError } = await client
-        .from('User')
-        .select('quota, usedSpace')
+        .from('users')
+        .select('quota, used_space')
         .eq('id', session.user.id)
         .single();
     
     if (userError || !user) return { error: 'User not found' };
     
-    const currentUsed = user.usedSpace || 0;
+    const currentUsed = user.used_space || 0;
     const quota = user.quota || 0;
 
     if (currentUsed + size > quota) {
@@ -150,17 +150,17 @@ export async function uploadMaterial(formData: FormData) {
 
     // Create DB record
     const { data: material, error: materialError } = await client
-        .from('Material')
+        .from('materials')
         .insert({
           id: randomUUID(),
           title: path.parse(file.name).name,
           filename: uniqueFilename,
-          filePath: storagePath, // Store storage path
+          file_path: storagePath, // Store storage path
           size: size,
-          userId: session.user.id,
-          mimeType: file.type,
-          folderId: folderId || null,
-          updatedAt: new Date().toISOString()
+          user_id: session.user.id,
+          mime_type: file.type,
+          folder_id: folderId || null,
+          updated_at: new Date().toISOString()
         })
         .select()
         .single();
@@ -169,8 +169,8 @@ export async function uploadMaterial(formData: FormData) {
 
     // Update usage
     await client
-        .from('User')
-        .update({ usedSpace: currentUsed + size })
+        .from('users')
+        .update({ used_space: currentUsed + size })
         .eq('id', session.user.id);
 
     revalidatePath('/materials');
@@ -190,18 +190,18 @@ export async function deleteMaterial(materialId: string) {
         const client = supabaseAdmin || supabase;
         
         const { data: material, error } = await client
-            .from('Material')
+            .from('materials')
             .select('*')
             .eq('id', materialId)
-            .eq('userId', session.user.id)
+            .eq('user_id', session.user.id)
             .single();
 
         if (error || !material) return { error: 'Material not found' };
 
         // Soft delete
         const { error: updateError } = await client
-            .from('Material')
-            .update({ deletedAt: new Date().toISOString() })
+            .from('materials')
+            .update({ deleted_at: new Date().toISOString() })
             .eq('id', materialId);
             
         if (updateError) throw updateError;
@@ -222,10 +222,10 @@ export async function restoreMaterial(materialId: string) {
         const client = supabaseAdmin || supabase;
 
         const { error } = await client
-            .from('Material')
-            .update({ deletedAt: null })
+            .from('materials')
+            .update({ deleted_at: null })
             .eq('id', materialId)
-            .eq('userId', session.user.id);
+            .eq('user_id', session.user.id);
             
         if (error) throw error;
         
@@ -245,26 +245,26 @@ export async function permanentlyDeleteMaterial(materialId: string) {
         const client = supabaseAdmin || supabase;
 
         const { data: material, error } = await client
-            .from('Material')
+            .from('materials')
             .select('*')
             .eq('id', materialId)
-            .eq('userId', session.user.id)
+            .eq('user_id', session.user.id)
             .single();
 
         if (error || !material) return { error: 'Material not found' };
 
         // Delete file from disk or storage
         try {
-            if (material.filePath.startsWith('http')) {
+            if (material.file_path.startsWith('http')) {
                 // External URL - do nothing (or maybe handle if we support deleting external resources?)
-            } else if (path.isAbsolute(material.filePath)) {
+            } else if (path.isAbsolute(material.file_path)) {
                 // Local file (legacy)
-                await unlink(material.filePath);
+                await unlink(material.file_path);
             } else {
                 // Supabase Storage
                 const { error: removeError } = await client.storage
                     .from('echo')
-                    .remove([material.filePath]);
+                    .remove([material.file_path]);
                 
                 if (removeError) {
                     console.error("Failed to delete from storage:", removeError);
@@ -282,7 +282,7 @@ export async function permanentlyDeleteMaterial(materialId: string) {
         // So just deleting material is enough IF the DB migration was applied with Cascade.
         
         const { error: deleteError } = await client
-            .from('Material')
+            .from('materials')
             .delete()
             .eq('id', materialId);
 
@@ -301,15 +301,15 @@ export async function permanentlyDeleteMaterial(materialId: string) {
 
         // Update usage
         const { data: user } = await client
-            .from('User')
-            .select('usedSpace')
+            .from('users')
+            .select('used_space')
             .eq('id', session.user.id)
             .single();
             
         if (user) {
              await client
-                .from('User')
-                .update({ usedSpace: Math.max(0, (user.usedSpace || 0) - material.size) })
+                .from('users')
+                .update({ used_space: Math.max(0, (user.used_space || 0) - material.size) })
                 .eq('id', session.user.id);
         }
 
@@ -330,10 +330,10 @@ export async function moveMaterial(materialId: string, newFolderId: string | nul
         const client = supabaseAdmin || supabase;
         
         const { error } = await client
-            .from('Material')
-            .update({ folderId: newFolderId })
+            .from('materials')
+            .update({ folder_id: newFolderId })
             .eq('id', materialId)
-            .eq('userId', session.user.id);
+            .eq('user_id', session.user.id);
             
         if (error) throw error;
         
@@ -352,10 +352,10 @@ export async function renameMaterial(materialId: string, newTitle: string) {
         const client = supabaseAdmin || supabase;
         
         const { error } = await client
-            .from('Material')
+            .from('materials')
             .update({ title: newTitle })
             .eq('id', materialId)
-            .eq('userId', session.user.id);
+            .eq('user_id', session.user.id);
 
         if (error) throw error;
 
@@ -371,16 +371,16 @@ async function performTranscription(materialId: string, userId: string) {
 
     // Fetch user settings
     const { data: user } = await client
-        .from('User')
+        .from('users')
         .select('settings')
         .eq('id', userId)
         .single();
 
     const { data: material } = await client
-        .from('Material')
+        .from('materials')
         .select('*')
         .eq('id', materialId)
-        .eq('userId', userId)
+        .eq('user_id', userId)
         .single();
 
     if (!material) return;
@@ -395,19 +395,19 @@ async function performTranscription(materialId: string, userId: string) {
         } catch(e) { /* ignore */ }
     }
 
-    let filePathToTranscribe = material.filePath;
+    let filePathToTranscribe = material.file_path;
     let tempFilePath: string | null = null;
 
     try {
         // Handle remote files (HTTP or Supabase Storage)
-        if (material.filePath.startsWith('http') || !path.isAbsolute(material.filePath)) {
+        if (material.file_path.startsWith('http') || !path.isAbsolute(material.file_path)) {
             const tempDir = os.tmpdir();
             const tempName = `transcribe-${Date.now()}-${path.basename(material.filename)}`;
             tempFilePath = path.join(tempDir, tempName);
 
-            if (material.filePath.startsWith('http')) {
+            if (material.file_path.startsWith('http')) {
                 // Download from URL
-                const response = await fetch(material.filePath);
+                const response = await fetch(material.file_path);
                 if (!response.ok) throw new Error(`Failed to download file: ${response.statusText}`);
                 
                 const fileStream = createWriteStream(tempFilePath);
@@ -417,7 +417,7 @@ async function performTranscription(materialId: string, userId: string) {
                 // Download from Supabase Storage
                 const { data, error } = await client.storage
                     .from('echo')
-                    .download(material.filePath);
+                    .download(material.file_path);
                 
                 if (error || !data) throw error || new Error('Download failed');
                 
@@ -433,31 +433,35 @@ async function performTranscription(materialId: string, userId: string) {
         // Save sentences
         // Transaction replacement: Sequential operations (less safe but okay for now)
         // Delete existing sentences
-        await client.from('Sentence').delete().eq('materialId', materialId);
+        await client.from('sentences').delete().eq('material_id', materialId);
 
         // Insert new sentences
         // Batch insert
-        const sentences = result.segments.map((seg: any, i: number) => ({
-            id: randomUUID(), // Generate ID manually
-            materialId,
-            startTime: seg.start,
-            endTime: seg.end,
-            content: seg.text,
-            order: i
-        }));
+        const sentences = result.segments.map((seg: any, i: number) => {
+            const startTime = Number.isFinite(seg.start) ? seg.start : 0;
+            const endTime = Number.isFinite(seg.end) ? seg.end : 0;
+            return {
+                id: randomUUID(), // Generate ID manually
+                material_id: materialId,
+                start_time: startTime,
+                end_time: endTime,
+                content: seg.text,
+                order: i
+            };
+        });
         
         if (sentences.length > 0) {
-            const { error: insertError } = await client.from('Sentence').insert(sentences);
+            const { error: insertError } = await client.from('sentences').insert(sentences);
             if (insertError) console.error("Error inserting sentences:", insertError);
         }
         
         // Update material status
         await client
-            .from('Material')
+            .from('materials')
             .update({ 
-                isProcessed: true,
-                transcriptionModel: model,
-                transcriptionTime: result.duration,
+                is_processed: true,
+                transcription_model: model,
+                transcription_time: result.duration,
                 duration: result.duration
             })
             .eq('id', materialId);
@@ -469,25 +473,25 @@ async function performTranscription(materialId: string, userId: string) {
             
             // Upsert logic manual implementation
             const { data: existingStat } = await client
-                .from('DailyStudyStat')
-                .select('id, sentencesAdded')
-                .eq('userId', userId)
+                .from('daily_study_stats')
+                .select('id, sentences_added')
+                .eq('user_id', userId)
                 .eq('date', today)
                 .single();
 
             if (existingStat) {
                 await client
-                    .from('DailyStudyStat')
-                    .update({ sentencesAdded: existingStat.sentencesAdded + sentencesCount })
+                    .from('daily_study_stats')
+                    .update({ sentences_added: existingStat.sentences_added + sentencesCount })
                     .eq('id', existingStat.id);
             } else {
                 await client
-                    .from('DailyStudyStat')
+                    .from('daily_study_stats')
                     .insert({
                         id: randomUUID(),
-                        userId: userId,
+                        user_id: userId,
                         date: today,
-                        sentencesAdded: sentencesCount
+                        sentences_added: sentencesCount
                     });
             }
         }
@@ -512,6 +516,14 @@ export async function transcribeMaterial(materialId: string) {
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
+    const client = supabaseAdmin || supabase;
+    
+    // Mark as processing
+    await client.from('materials')
+        .update({ is_processed: false })
+        .eq('id', materialId)
+        .eq('user_id', session.user.id);
+
     // Run transcription in "background" without awaiting
     performTranscription(materialId, session.user.id).catch(err => {
         console.error("Background transcription failed:", err);
@@ -529,8 +541,8 @@ export async function computeUserStorage() {
     const client = supabaseAdmin || supabase;
 
     const { data: user, error } = await client
-        .from('User')
-        .select('quota, usedSpace')
+        .from('users')
+        .select('quota, used_space')
         .eq('id', session.user.id)
         .single();
 
@@ -540,6 +552,6 @@ export async function computeUserStorage() {
 
     return {
         quota: Number(user.quota),
-        usedSpace: Number(user.usedSpace)
+        usedSpace: Number(user.used_space)
     };
 }

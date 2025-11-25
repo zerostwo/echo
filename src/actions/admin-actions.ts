@@ -17,7 +17,7 @@ export async function updateQuota(userId: string, newQuotaGB: number) {
         const quotaBytes = BigInt(newQuotaGB) * BigInt(1024 * 1024 * 1024);
         
         const { error } = await supabase
-            .from('User')
+            .from('users')
             .update({ quota: quotaBytes.toString() }) // Send as string to ensure precision if needed, or number
             .eq('id', userId);
 
@@ -35,8 +35,8 @@ export async function toggleUserStatus(userId: string, isActive: boolean) {
         await checkAdmin();
         
         const { error } = await supabase
-            .from('User')
-            .update({ isActive })
+            .from('users')
+            .update({ is_active: isActive })
             .eq('id', userId);
 
         if (error) throw error;
@@ -53,7 +53,7 @@ export async function deleteUser(userId: string) {
         await checkAdmin();
         
         const { error } = await supabase
-            .from('User')
+            .from('users')
             .delete()
             .eq('id', userId);
 

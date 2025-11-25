@@ -1,6 +1,7 @@
 'use server';
 
 import { z } from 'zod';
+import crypto from 'crypto';
 import { supabaseAdmin, supabase } from '@/lib/supabase';
 import bcrypt from 'bcryptjs';
 import { signIn } from '@/auth';
@@ -26,7 +27,7 @@ export async function registerUser(prevState: string | undefined, formData: Form
     const client = supabaseAdmin || supabase;
 
     const { data: existingUser } = await client
-      .from('User')
+      .from('users')
       .select('id')
       .eq('email', email)
       .single();
@@ -38,12 +39,13 @@ export async function registerUser(prevState: string | undefined, formData: Form
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const { error: createError } = await client
-      .from('User')
+      .from('users')
       .insert({
+        id: crypto.randomUUID(),
         name,
         email,
         password: hashedPassword,
-        updatedAt: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       });
 
     if (createError) {

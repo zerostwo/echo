@@ -1,7 +1,7 @@
 'use server';
 
 import { auth } from '@/auth';
-import { supabase } from '@/lib/supabase';
+import { supabaseAdmin, supabase } from '@/lib/supabase';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
@@ -47,10 +47,12 @@ export async function extractVocabulary(materialId: string) {
   const session = await auth();
   if (!session?.user?.id) return { error: 'Unauthorized' };
   
+  const client = supabaseAdmin || supabase;
+
     // 1. Get sentences
-    const { data: material, error: materialError } = await supabase
-        .from('Material')
-        .select('*, sentences:Sentence(*)')
+    const { data: material, error: materialError } = await client
+        .from('materials')
+        .select('*, sentences:sentences(*)')
         .eq('id', materialId)
         .single();
 
@@ -99,9 +101,9 @@ export async function extractVocabulary(materialId: string) {
     }
 
     // Update Material with extraction time
-    await supabase
-        .from('Material')
-        .update({ vocabExtractionTime: totalDuration })
+    await client
+        .from('materials')
+        .update({ vocab_extraction_time: totalDuration })
         .eq('id', materialId);
 
     const processedWords = new Set<string>();
@@ -142,8 +144,8 @@ export async function extractVocabulary(materialId: string) {
         };
 
         // Upsert word
-        const { data: word, error: upsertError } = await supabase
-            .from('Word')
+        const { data: word, error: upsertError } = await client
+            .from('words')
             .upsert(wordData, { onConflict: 'text' })
             .select('id')
             .single();
@@ -162,26 +164,26 @@ export async function extractVocabulary(materialId: string) {
         // So simple upsert won't work unless we read first, or use ON CONFLICT DO NOTHING
         // Supabase upsert with `ignoreDuplicates: true` does exactly "ON CONFLICT DO NOTHING"
         
-        const { error: statusError } = await supabase
-            .from('UserWordStatus')
+        const { error: statusError } = await client
+            .from('user_word_statuses')
             .upsert({
                 id: randomUUID(),
-                userId: session.user.id,
-                wordId: word.id,
+                user_id: session.user.id,
+                word_id: word.id,
                 status: "NEW",
-                updatedAt: new Date().toISOString()
-            }, { onConflict: 'userId, wordId', ignoreDuplicates: true });
+                updated_at: new Date().toISOString()
+            }, { onConflict: 'user_id, word_id', ignoreDuplicates: true });
             
         if (!statusError) {
             // If we successfully inserted (or ignored), we count it as processed
             // But how do we know if it was NEWly created for counting?
             // We can query to check. For stat accuracy:
             
-            const { data: existingStatus } = await supabase
-                .from('UserWordStatus')
+            const { data: existingStatus } = await client
+                .from('user_word_statuses')
                 .select('id')
-                .eq('userId', session.user.id)
-                .eq('wordId', word.id)
+                .eq('user_id', session.user.id)
+                .eq('word_id', word.id)
                 .single();
                 
             // This logic is flawed because upsert happened before.
@@ -192,18 +194,18 @@ export async function extractVocabulary(materialId: string) {
             // Reverting to check-then-create pattern for accurate counting:
             
             // Actually, simpler:
-            const { data: currentStatus } = await supabase
-                 .from('UserWordStatus')
+            const { data: currentStatus } = await client
+                 .from('user_word_statuses')
                  .select('id')
-                 .eq('userId', session.user.id)
-                 .eq('wordId', word.id)
+                 .eq('user_id', session.user.id)
+                 .eq('word_id', word.id)
                  .maybeSingle();
                  
             if (!currentStatus) {
-                 await supabase.from('UserWordStatus').insert({
+                 await client.from('user_word_statuses').insert({
                      id: randomUUID(),
-                     userId: session.user.id,
-                     wordId: word.id,
+                     user_id: session.user.id,
+                     word_id: word.id,
                      status: "NEW"
                  });
                  newWordsCount++;
@@ -220,8 +222,8 @@ export async function extractVocabulary(materialId: string) {
         if (lemma && lemmaToId.has(lemma)) {
             occurrencesData.push({
                 id: randomUUID(),
-                wordId: lemmaToId.get(lemma)!,
-                sentenceId: sentenceId
+                word_id: lemmaToId.get(lemma)!,
+                sentence_id: sentenceId
             });
         }
     }
@@ -230,14 +232,14 @@ export async function extractVocabulary(materialId: string) {
         const sentenceIds = sentences.map((s: any) => s.id);
         
         // Delete existing occurrences for these sentences
-        await supabase
-            .from('WordOccurrence')
+        await client
+            .from('word_occurrences')
             .delete()
-            .in('sentenceId', sentenceIds);
+            .in('sentence_id', sentenceIds);
 
         // Batch insert new occurrences
-        const { error: occError } = await supabase
-            .from('WordOccurrence')
+        const { error: occError } = await client
+            .from('word_occurrences')
             .insert(occurrencesData);
             
         if (occError) console.error("Error inserting occurrences:", occError);
@@ -247,26 +249,26 @@ export async function extractVocabulary(materialId: string) {
     if (newWordsCount > 0) {
         const today = startOfDay(new Date()).toISOString();
         
-        const { data: existingStat } = await supabase
-            .from('DailyStudyStat')
-            .select('id, wordsAdded')
-            .eq('userId', session.user.id)
+        const { data: existingStat } = await client
+            .from('daily_study_stats')
+            .select('id, words_added')
+            .eq('user_id', session.user.id)
             .eq('date', today)
             .maybeSingle();
 
         if (existingStat) {
-            await supabase
-                .from('DailyStudyStat')
-                .update({ wordsAdded: existingStat.wordsAdded + newWordsCount })
+            await client
+                .from('daily_study_stats')
+                .update({ words_added: existingStat.words_added + newWordsCount })
                 .eq('id', existingStat.id);
         } else {
-            await supabase
-                .from('DailyStudyStat')
+            await client
+                .from('daily_study_stats')
                 .insert({
                     id: randomUUID(),
-                    userId: session.user.id,
+                    user_id: session.user.id,
                     date: today,
-                    wordsAdded: newWordsCount
+                    words_added: newWordsCount
                 });
         }
     }
@@ -285,9 +287,9 @@ export async function getMaterialVocab(materialId: string) {
     // 3. Get Words with Statuses
 
     const { data: sentences } = await supabase
-        .from('Sentence')
+        .from('sentences')
         .select('id')
-        .eq('materialId', materialId);
+        .eq('material_id', materialId);
         
     if (!sentences || sentences.length === 0) return { words: [] };
     
@@ -299,20 +301,20 @@ export async function getMaterialVocab(materialId: string) {
     // Or use .select('wordId')
     
     const { data: occurrences } = await supabase
-        .from('WordOccurrence')
-        .select('wordId')
-        .in('sentenceId', sentenceIds);
+        .from('word_occurrences')
+        .select('word_id')
+        .in('sentence_id', sentenceIds);
         
     if (!occurrences || occurrences.length === 0) return { words: [] };
     
-    const wordIds = Array.from(new Set(occurrences.map(o => o.wordId)));
+    const wordIds = Array.from(new Set(occurrences.map(o => o.word_id)));
     
     // Step 3: Get Words and Status
     const { data: words, error } = await supabase
-        .from('Word')
+        .from('words')
         .select(`
             *,
-            statuses:UserWordStatus(*)
+            statuses:user_word_statuses(*)
         `)
         .in('id', wordIds)
         .order('text', { ascending: true });
@@ -325,7 +327,7 @@ export async function getMaterialVocab(materialId: string) {
     // Post-processing is safer here.
     
     const wordsWithUserStatus = words?.map((word: any) => {
-        const userStatus = word.statuses?.find((s: any) => s.userId === session.user.id);
+        const userStatus = word.statuses?.find((s: any) => s.user_id === session.user.id);
         return {
             ...word,
             statuses: userStatus ? [userStatus] : []

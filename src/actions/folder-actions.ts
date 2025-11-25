@@ -1,19 +1,21 @@
 'use server';
 
 import { auth } from '@/auth';
-import { supabase } from '@/lib/supabase';
+import { supabaseAdmin, supabase } from '@/lib/supabase';
 import { revalidatePath } from 'next/cache';
 
 export async function getFolders() {
     const session = await auth();
     if (!session?.user?.id) return [];
 
+    const client = supabaseAdmin || supabase;
+
     try {
-        const { data: folders, error } = await supabase
-            .from('Folder')
+        const { data: folders, error } = await client
+            .from('folders')
             .select('*')
-            .eq('userId', session.user.id)
-            .is('deletedAt', null)
+            .eq('user_id', session.user.id)
+            .is('deleted_at', null)
             .order('name', { ascending: true });
 
         if (error) throw error;
@@ -27,14 +29,16 @@ export async function createFolder(name: string, parentId?: string) {
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
+    const client = supabaseAdmin || supabase;
+
     try {
-        const { data: folder, error } = await supabase
-            .from('Folder')
+        const { data: folder, error } = await client
+            .from('folders')
             .insert({
                 name,
-                userId: session.user.id,
-                parentId: parentId || null,
-                updatedAt: new Date().toISOString()
+                user_id: session.user.id,
+                parent_id: parentId || null,
+                updated_at: new Date().toISOString()
             })
             .select()
             .single();
@@ -53,32 +57,34 @@ export async function deleteFolder(folderId: string, moveToUnfiled: boolean = tr
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
+    const client = supabaseAdmin || supabase;
+
     try {
         // Verify ownership
-        const { data: folder, error: fetchError } = await supabase
-            .from('Folder')
-            .select('*, children:Folder(*)')
+        const { data: folder, error: fetchError } = await client
+            .from('folders')
+            .select('*, children:folders(*)')
             .eq('id', folderId)
-            .eq('userId', session.user.id)
+            .eq('user_id', session.user.id)
             .single();
         
         if (fetchError || !folder) return { error: 'Folder not found' };
 
         if (moveToUnfiled) {
              // Move materials to unfiled (folderId: null)
-            const { error: moveError } = await supabase
-                .from('Material')
-                .update({ folderId: null })
-                .eq('folderId', folderId)
-                .eq('userId', session.user.id);
+            const { error: moveError } = await client
+                .from('materials')
+                .update({ folder_id: null })
+                .eq('folder_id', folderId)
+                .eq('user_id', session.user.id);
 
             if (moveError) throw moveError;
         }
 
         // Soft delete the folder
-        const { error: deleteError } = await supabase
-            .from('Folder')
-            .update({ deletedAt: new Date().toISOString() })
+        const { error: deleteError } = await client
+            .from('folders')
+            .update({ deleted_at: new Date().toISOString() })
             .eq('id', folderId);
 
         if (deleteError) throw deleteError;
@@ -95,12 +101,14 @@ export async function renameFolder(folderId: string, newName: string) {
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
+    const client = supabaseAdmin || supabase;
+
     try {
-        const { error } = await supabase
-            .from('Folder')
+        const { error } = await client
+            .from('folders')
             .update({ name: newName })
             .eq('id', folderId)
-            .eq('userId', session.user.id);
+            .eq('user_id', session.user.id);
 
         if (error) throw error;
 
