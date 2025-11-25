@@ -1,0 +1,164 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  password      String
+  image         String?
+  role          String    @default("USER") // "ADMIN" or "USER"
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  // Quota management
+  quota         BigInt    @default(10737418240) // 10GB in bytes
+  usedSpace     BigInt    @default(0)
+
+  settings      String    @default("{}") // JSON string for user settings
+
+  materials     Material[]
+  folders       Folder[]
+  wordStatuses  UserWordStatus[]
+  practices     PracticeProgress[]
+  dailyStats    DailyStudyStat[]
+}
+
+model Folder {
+  id        String     @id @default(cuid())
+  name      String
+  userId    String
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parentId  String?
+  parent    Folder?    @relation("FolderHierarchy", fields: [parentId], references: [id])
+  children  Folder[]   @relation("FolderHierarchy")
+  materials Material[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  deletedAt DateTime?
+}
+
+model Material {
+  id          String     @id @default(cuid())
+  title       String
+  filename    String     // Original filename
+  filePath    String     // Path on disk or S3 key
+  mimeType    String?
+  size        Int        // File size in bytes
+  duration    Float?     // Duration in seconds
+  
+  folderId    String?
+  folder      Folder?    @relation(fields: [folderId], references: [id])
+  userId      String
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  sentences   Sentence[]
+  isProcessed Boolean    @default(false) // True if Whisper has finished
+  transcriptionModel String?
+  transcriptionTime Float? // Duration in seconds
+  vocabExtractionTime Float? // Duration in seconds for vocabulary extraction
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  deletedAt   DateTime?
+}
+
+model Sentence {
+  id          String   @id @default(cuid())
+  materialId  String
+  material    Material @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  
+  startTime   Float
+  endTime     Float
+  content     String
+  
+  occurrences WordOccurrence[]
+  practices   PracticeProgress[]
+  
+  order       Int      // To keep sentences in order
+}
+
+model Word {
+  id          String           @id @default(cuid())
+  text        String           @unique // Normalized text (lowercase, stemmed maybe)
+  language    String           @default("en")
+  phonetic    String?
+  pos         String?
+  translation String?
+  definition  String?
+  collins     Int?
+  oxford      Int?
+  tag         String?
+  bnc         Int?
+  frq         Int?
+  exchange    String?
+  audio       String?
+  detail      String?          // JSON string or plain text detail
+
+  occurrences WordOccurrence[]
+  statuses    UserWordStatus[]
+}
+
+model WordOccurrence {
+  id          String   @id @default(cuid())
+  wordId      String
+  word        Word     @relation(fields: [wordId], references: [id])
+  sentenceId  String
+  sentence    Sentence @relation(fields: [sentenceId], references: [id], onDelete: Cascade)
+  
+  // Position in the sentence string (optional, for highlighting)
+  startIndex  Int?
+  endIndex    Int?
+}
+
+model UserWordStatus {
+  id        String     @id @default(cuid())
+  userId    String
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wordId    String
+  word      Word       @relation(fields: [wordId], references: [id], onDelete: Cascade)
+  
+  status    String     @default("UNKNOWN")
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@unique([userId, wordId])
+}
+
+model PracticeProgress {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sentenceId  String
+  sentence    Sentence @relation(fields: [sentenceId], references: [id], onDelete: Cascade)
+  
+  score       Int      // 0-100
+  attempts    Int      @default(1)
+  duration    Int      @default(0) // Duration in seconds
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, sentenceId])
+}
+
+model DailyStudyStat {
+  id             String   @id @default(cuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date           DateTime @default(now()) // We will typically store just the date part or normalize to midnight
+  
+  studyDuration  Int      @default(0) // Seconds spent practicing
+  wordsAdded     Int      @default(0)
+  sentencesAdded Int      @default(0)
+  
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([userId, date]) // One entry per user per day
+}
