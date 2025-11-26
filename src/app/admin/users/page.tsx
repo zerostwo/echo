@@ -43,7 +43,7 @@ export default async function AdminUsersPage() {
                             <TableRow key={u.id}>
                                 <TableCell>
                                     <div className="flex flex-col">
-                                        <span className="font-medium">{u.name}</span>
+                                        <span className="font-medium">{u.display_name || u.username || 'User'}</span>
                                         <span className="text-xs text-muted-foreground">{u.email}</span>
                                     </div>
                                 </TableCell>

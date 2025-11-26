@@ -2,10 +2,11 @@ import { auth } from "@/auth"
 import { DailyActivityChart } from "@/components/dashboard/daily-activity-chart"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { supabase, supabaseAdmin } from "@/lib/supabase"
+import { redirect } from "next/navigation"
 
 export default async function DashboardPage() {
   const session = await auth()
-  if (!session?.user?.id) return null
+  if (!session?.user?.id) redirect("/login")
 
   const client = supabaseAdmin || supabase;
 
@@ -43,6 +44,13 @@ export default async function DashboardPage() {
     .eq('user_id', session.user.id)
     .order('date', { ascending: false })
     .limit(7);
+
+  const formattedDailyStats = dailyStats?.map(stat => ({
+    date: stat.date,
+    studyDuration: stat.study_duration,
+    wordsAdded: stat.words_added,
+    sentencesAdded: stat.sentences_added
+  })) || [];
 
   return (
     <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
@@ -86,7 +94,7 @@ export default async function DashboardPage() {
             <CardTitle>Overview</CardTitle>
           </CardHeader>
           <CardContent className="pl-2">
-            <DailyActivityChart data={dailyStats || []} />
+            <DailyActivityChart data={formattedDailyStats} />
           </CardContent>
         </Card>
       </div>

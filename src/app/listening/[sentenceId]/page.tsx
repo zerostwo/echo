@@ -1,13 +1,13 @@
 import { auth } from '@/auth';
 import { supabaseAdmin, supabase } from '@/lib/supabase';
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import PracticeInterface from './practice-interface';
 
 export default async function ListeningPage({ params }: { params: Promise<{ sentenceId: string }> }) {
   const { sentenceId } = await params;
   const session = await auth();
   
-  if (!session?.user?.id) return <div>Unauthorized</div>;
+  if (!session?.user?.id) redirect('/login');
 
   // Use admin client to bypass RLS, we verify ownership manually
   const client = supabaseAdmin || supabase;

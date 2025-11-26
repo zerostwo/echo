@@ -7,18 +7,21 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 model User {
   id            String    @id @default(cuid())
-  name          String?
+  username      String?   @unique // Unique username for each user
+  displayName   String?   @map("display_name") // Optional display name shown in UI
   email         String    @unique
   password      String
   image         String?
   role          String    @default("USER") // "ADMIN" or "USER"
   isActive      Boolean   @default(true) @map("is_active")
-  createdAt     DateTime  @default(now()) @map("created_at")
-  updatedAt     DateTime  @updatedAt @map("updated_at")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz
   
   // Quota management
   quota         BigInt    @default(10737418240) // 10GB in bytes
@@ -26,11 +29,21 @@ model User {
 
   settings      String    @default("{}") // JSON string for user settings
 
+  emailVerified      DateTime? @map("email_verified") @db.Timestamptz
+  verificationToken  String?   @map("verification_token")
+  twoFactorEnabled   Boolean   @default(false) @map("two_factor_enabled")
+  twoFactorSecret    String?   @map("two_factor_secret")
+  
+  // Password reset
+  resetToken         String?   @map("reset_token")
+  resetTokenExpiry   DateTime? @map("reset_token_expiry") @db.Timestamptz
+
   materials     Material[]
   folders       Folder[]
   wordStatuses  UserWordStatus[]
   practices     PracticeProgress[]
   dailyStats    DailyStudyStat[]
+  notifications Notification[]
 
   @@map("users")
 }
@@ -44,9 +57,9 @@ model Folder {
   parent    Folder?    @relation("FolderHierarchy", fields: [parentId], references: [id])
   children  Folder[]   @relation("FolderHierarchy")
   materials Material[]
-  createdAt DateTime   @default(now()) @map("created_at")
-  updatedAt DateTime   @updatedAt @map("updated_at")
-  deletedAt DateTime?  @map("deleted_at")
+  createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime   @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt DateTime?  @map("deleted_at") @db.Timestamptz
 
   @@map("folders")
 }
@@ -70,9 +83,9 @@ model Material {
   transcriptionModel String? @map("transcription_model")
   transcriptionTime Float? @map("transcription_time") // Duration in seconds
   vocabExtractionTime Float? @map("vocab_extraction_time") // Duration in seconds for vocabulary extraction
-  createdAt   DateTime   @default(now()) @map("created_at")
-  updatedAt   DateTime   @updatedAt @map("updated_at")
-  deletedAt   DateTime?  @map("deleted_at")
+  createdAt   DateTime   @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime   @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt   DateTime?  @map("deleted_at") @db.Timestamptz
 
   @@map("materials")
 }
@@ -139,8 +152,8 @@ model UserWordStatus {
   word      Word       @relation(fields: [wordId], references: [id], onDelete: Cascade)
   
   status    String     @default("UNKNOWN")
-  createdAt DateTime   @default(now()) @map("created_at")
-  updatedAt DateTime   @updatedAt @map("updated_at")
+  createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime   @updatedAt @map("updated_at") @db.Timestamptz
 
   @@unique([userId, wordId])
   @@map("user_word_statuses")
@@ -156,8 +169,8 @@ model PracticeProgress {
   score       Int      // 0-100
   attempts    Int      @default(1)
   duration    Int      @default(0) // Duration in seconds
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
   @@unique([userId, sentenceId])
   @@map("practice_progress")
@@ -167,15 +180,36 @@ model DailyStudyStat {
   id             String   @id @default(cuid())
   userId         String   @map("user_id")
   user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  date           DateTime @default(now()) // We will typically store just the date part or normalize to midnight
+  date           DateTime @default(now()) @db.Timestamptz // We will typically store just the date part or normalize to midnight
   
   studyDuration  Int      @default(0) @map("study_duration") // Seconds spent practicing
   wordsAdded     Int      @default(0) @map("words_added")
   sentencesAdded Int      @default(0) @map("sentences_added")
   
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
   @@unique([userId, date]) // One entry per user per day
   @@map("daily_study_stats")
+}
+
+model Notification {
+  id          String   @id @default(cuid())
+  userId      String   @map("user_id")
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  type        String   // MATERIAL_UPLOADED, MATERIAL_PROCESSED, VOCAB_EXTRACTED, PRACTICE_MILESTONE, SYSTEM
+  title       String
+  message     String
+  isRead      Boolean  @default(false) @map("is_read")
+  
+  // Optional reference to related entity
+  relatedId   String?  @map("related_id") // Could be materialId, etc.
+  relatedType String?  @map("related_type") // "material", "word", etc.
+  
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
+  @@map("notifications")
 }

@@ -9,14 +9,31 @@ import { Badge } from "@/components/ui/badge";
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { X } from 'lucide-react';
+import { redirect } from 'next/navigation';
 
 export default async function VocabPage({ searchParams }: { searchParams: Promise<{ materialId?: string }> }) {
   const session = await auth();
-  if (!session?.user?.id) return <div>Unauthorized</div>;
+  if (!session?.user?.id) redirect('/login');
 
   const client = supabaseAdmin || supabase;
 
   const { materialId } = await searchParams;
+
+  // Fetch user settings
+  const { data: userData } = await client
+    .from('users')
+    .select('settings')
+    .eq('id', session.user.id)
+    .single();
+
+  let userSettings: any = {};
+  if (userData?.settings) {
+    try {
+      userSettings = JSON.parse(userData.settings);
+    } catch (e) {
+      console.error("Failed to parse user settings", e);
+    }
+  }
 
   // Fetch words
   const { data: userWords } = await client
@@ -192,7 +209,7 @@ export default async function VocabPage({ searchParams }: { searchParams: Promis
         </Card>
       </div>
 
-      <VocabTable columns={vocabColumns} data={data} />
+      <VocabTable columns={vocabColumns} data={data} settings={userSettings} />
     </div>
   );
 }

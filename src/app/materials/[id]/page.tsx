@@ -60,7 +60,7 @@ export default async function MaterialDetailPage({ params }: { params: Promise<{
        });
   }
   
-  breadcrumbs.push({ title: material.title });
+  breadcrumbs.push({ title: material.title, href: `/materials/${material.id}` });
 
   // Sort sentences by order
   // Supabase might return them unsorted unless we specify order in the nested select
@@ -77,8 +77,11 @@ export default async function MaterialDetailPage({ params }: { params: Promise<{
       updatedAt: s.updated_at
     }));
 
+  // Map snake_case to camelCase for material fields
   const materialWithSortedSentences = {
     ...material,
+    isProcessed: material.is_processed,
+    mimeType: material.mime_type,
     sentences: sortedSentences
   };
 

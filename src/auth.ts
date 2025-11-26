@@ -4,6 +4,7 @@ import { supabase, supabaseAdmin } from '@/lib/supabase';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
 import { authConfig } from './auth.config';
+import { authenticator } from 'otplib';
 
 declare module 'next-auth' {
   interface Session {
@@ -20,6 +21,7 @@ declare module 'next-auth' {
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   ...authConfig,
+  trustHost: true,
   secret: process.env.AUTH_SECRET,
   providers: [
     Credentials({
@@ -47,12 +49,29 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           
           // Check if user is active
           if (!user.is_active) {
-            return null; // Or throw an error if you want a specific message
+            return null;
+          }
+          
+          // Check if email is verified
+          if (!user.email_verified) {
+            throw new Error('EMAIL_NOT_VERIFIED');
           }
 
           const passwordsMatch = await bcrypt.compare(password, user.password);
           
-          if (passwordsMatch) return user;
+          if (passwordsMatch) {
+             if (user.two_factor_enabled) {
+                 const code = (credentials as any).code as string | undefined;
+                 if (!code) {
+                     throw new Error('2FA_REQUIRED');
+                 }
+                 const isValid = authenticator.check(code, user.two_factor_secret);
+                 if (!isValid) {
+                     throw new Error('Invalid 2FA code');
+                 }
+             }
+             return user;
+          }
         }
         return null;
       },

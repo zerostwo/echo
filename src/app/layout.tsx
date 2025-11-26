@@ -10,6 +10,7 @@ import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/s
 import { Separator } from "@/components/ui/separator";
 import { DynamicBreadcrumb } from "@/components/dynamic-breadcrumb";
 import { BreadcrumbProvider } from "@/context/breadcrumb-context";
+import { headers } from "next/headers";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -35,24 +36,48 @@ export default async function RootLayout({
 }>) {
   const session = await auth();
   const folders = await getFolders();
+  
+  // Get pathname from middleware header
+  const headersList = await headers();
+  const pathname = headersList.get('x-pathname') || '';
+  
+  // Auth pages should not show sidebar even if user is logged in
+  const authPaths = ['/login', '/register', '/verify-email', '/forgot-password', '/reset-password'];
+  const isAuthPage = authPaths.some(path => pathname.startsWith(path));
 
   let userSettings = {};
+  let twoFactorEnabled = false;
+  let displayName: string | null = null;
+  let username: string | null = null;
+  let quota: number = 10737418240; // 10GB default
+  let usedSpace: number = 0;
+  
   if (session?.user?.id) {
     const client = supabaseAdmin || supabase;
     const { data: user } = await client
       .from('users')
-      .select('settings')
+      .select('settings, two_factor_enabled, display_name, username, quota, used_space')
       .eq('id', session.user.id)
       .single();
 
-    if (user?.settings) {
-      try {
-        userSettings = JSON.parse(user.settings);
-      } catch (e) {
-        console.error("Failed to parse user settings", e);
+    if (user) {
+      twoFactorEnabled = user.two_factor_enabled || false;
+      displayName = user.display_name;
+      username = user.username;
+      quota = Number(user.quota) || 10737418240;
+      usedSpace = Number(user.used_space) || 0;
+      if (user.settings) {
+        try {
+          userSettings = JSON.parse(user.settings);
+        } catch (e) {
+          console.error("Failed to parse user settings", e);
+        }
       }
     }
   }
+  
+  // Show sidebar only for logged in users on non-auth pages
+  const showSidebar = session?.user && !isAuthPage;
 
   return (
     <html lang="en">
@@ -61,9 +86,12 @@ export default async function RootLayout({
         suppressHydrationWarning
       >
         <BreadcrumbProvider>
-        {session?.user ? (
+        {showSidebar ? (
             <SidebarProvider>
-                <AppSidebar user={session.user as any} settings={userSettings} />
+                <AppSidebar 
+                  user={{ ...session.user, twoFactorEnabled, displayName, username, quota, usedSpace } as any} 
+                  settings={userSettings} 
+                />
                 <SidebarInset>
                     <header className="flex h-16 shrink-0 items-center gap-2 px-4 sticky top-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
                         <SidebarTrigger className="-ml-1" />

@@ -63,11 +63,16 @@ export function WordDetailSheet({ word, open, onOpenChange }: WordDetailSheetPro
             return;
         }
 
-        const src = `/api/materials/${sentence.materialId}/stream`;
+        // Supabase returns snake_case column names from the database
+        const materialId = sentence.material_id || sentence.materialId;
+        const startTime = sentence.start_time ?? sentence.startTime ?? 0;
+        const endTime = sentence.end_time ?? sentence.endTime ?? 0;
+
+        const src = `/api/materials/${materialId}/stream`;
         const fullSrc = window.location.origin + src;
         
         const playAudio = () => {
-            audio.currentTime = sentence.startTime;
+            audio.currentTime = startTime;
             audio.play().catch(console.error);
             setPlayingSentenceId(sentence.id);
         };
@@ -83,7 +88,7 @@ export function WordDetailSheet({ word, open, onOpenChange }: WordDetailSheetPro
         }
         
         const handleTimeUpdate = () => {
-            if (audio.currentTime >= sentence.endTime) {
+            if (audio.currentTime >= endTime) {
                 audio.pause();
                 setPlayingSentenceId(null);
                 audio.removeEventListener('timeupdate', handleTimeUpdate);
@@ -95,7 +100,7 @@ export function WordDetailSheet({ word, open, onOpenChange }: WordDetailSheetPro
         
         audio.onpause = () => {
              // Only clear if we are actually paused/stopped, not just buffering
-             if (!audio.seeking && (audio.currentTime >= sentence.endTime || audio.ended || audio.paused)) {
+             if (!audio.seeking && (audio.currentTime >= endTime || audio.ended || audio.paused)) {
                  setPlayingSentenceId(null);
                  audio.removeEventListener('timeupdate', handleTimeUpdate);
                  audio.onloadedmetadata = null;

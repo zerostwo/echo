@@ -3,13 +3,14 @@ import { supabaseAdmin, supabase } from '@/lib/supabase';
 import { MaterialsTableWrapper } from '@/components/materials/materials-table-wrapper';
 import { UploadMaterialDialog } from './upload-dialog';
 import { HeaderPortal } from '@/components/header-portal';
+import { redirect } from 'next/navigation';
 
 export default async function MaterialsPage({ searchParams }: { searchParams: Promise<{ folderId?: string }> }) {
   const session = await auth();
   const resolvedSearchParams = await searchParams;
   const currentFolderId = resolvedSearchParams.folderId;
 
-  if (!session?.user?.id) return <div>Unauthorized</div>;
+  if (!session?.user?.id) redirect('/login');
 
   const client = supabaseAdmin || supabase;
 

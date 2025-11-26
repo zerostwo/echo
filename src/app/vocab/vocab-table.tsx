@@ -11,6 +11,7 @@ import {
   getFilteredRowModel,
   getPaginationRowModel,
   RowSelectionState,
+  VisibilityState,
 } from "@tanstack/react-table"
 
 import {
@@ -21,9 +22,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { useState } from "react"
+import { useState, useMemo } from "react"
 import { Button } from "@/components/ui/button"
-import { ArrowUpDown, Check, MoreHorizontal, SlidersHorizontal, Plus } from "lucide-react"
+import { ArrowUpDown, Check, MoreHorizontal, SlidersHorizontal, Plus, Filter } from "lucide-react"
 import { WordDetailSheet } from "./word-detail-sheet"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Badge } from "@/components/ui/badge"
@@ -40,31 +41,95 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
 
 interface DataTableProps<TData, TValue> {
   columns: ColumnDef<TData, TValue>[]
   data: TData[]
+  settings?: {
+    vocabColumns?: string[]
+    vocabSortBy?: string
+    vocabShowMastered?: boolean
+  }
 }
 
 export function VocabTable<TData, TValue>({
   columns,
   data,
+  settings,
 }: DataTableProps<TData, TValue>) {
-  const [sorting, setSorting] = useState<SortingState>([])
+  const uniquePos = useMemo(() => {
+    const posSet = new Set<string>()
+    data.forEach((item: any) => {
+      if (item.pos) posSet.add(item.pos)
+    })
+    return Array.from(posSet).sort()
+  }, [data])
+
+  // Apply settings - filter out mastered words if setting is off
+  const filteredData = useMemo(() => {
+    if (settings?.vocabShowMastered === false) {
+      return (data as any[]).filter((item: any) => item.status !== "MASTERED") as TData[]
+    }
+    return data
+  }, [data, settings?.vocabShowMastered])
+
+  // Determine initial sorting based on settings
+  const getInitialSorting = (): SortingState => {
+    const sortBy = settings?.vocabSortBy || "date_added"
+    switch (sortBy) {
+      case "date_added":
+        return [] // Default ordering from server (newest first)
+      case "date_added_asc":
+        return [] // Would need a date column to sort, keeping default for now
+      case "alphabetical":
+        return [{ id: "text", desc: false }]
+      case "alphabetical_desc":
+        return [{ id: "text", desc: true }]
+      default:
+        return []
+    }
+  }
+
+  const [sorting, setSorting] = useState<SortingState>(getInitialSorting())
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
   const [selectedWord, setSelectedWord] = useState<any>(null)
   const router = useRouter()
 
+  // Get initial column visibility based on settings
+  const getInitialColumnVisibility = () => {
+    const visibleCols = settings?.vocabColumns || ["word", "translation", "pronunciation"]
+    const visibility: Record<string, boolean> = {}
+    // Map setting column names to actual column ids
+    const columnMapping: Record<string, string> = {
+      word: "text",
+      translation: "tag", // Using tag as a proxy since we don't have translation column
+      definition: "pos",
+      pronunciation: "phonetic",
+      example: "collins"
+    }
+    // By default, show all columns, but hide specific ones based on settings
+    columns.forEach((col: any) => {
+      if (col.id === "select" || col.id === "actions") {
+        visibility[col.id || col.accessorKey] = true // Always show select and actions
+      } else {
+        // Check if this column should be visible based on settings
+        const colId = col.id || col.accessorKey
+        const settingKey = Object.entries(columnMapping).find(([, v]) => v === colId)?.[0]
+        if (settingKey) {
+          visibility[colId] = visibleCols.includes(settingKey)
+        } else {
+          visibility[colId] = true // Show columns not in mapping
+        }
+      }
+    })
+    return visibility
+  }
+
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(getInitialColumnVisibility())
+
   const table = useReactTable({
-    data,
+    data: filteredData,
     columns,
     getCoreRowModel: getCoreRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
@@ -73,10 +138,12 @@ export function VocabTable<TData, TValue>({
     onColumnFiltersChange: setColumnFilters,
     getFilteredRowModel: getFilteredRowModel(),
     onRowSelectionChange: setRowSelection,
+    onColumnVisibilityChange: setColumnVisibility,
     state: {
       sorting,
       columnFilters,
       rowSelection,
+      columnVisibility,
     },
   })
 
@@ -95,30 +162,81 @@ export function VocabTable<TData, TValue>({
   }
 
     return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Vocabulary List</CardTitle>
-        <CardDescription>
-          Manage your vocabulary words and track your progress.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <div className="flex items-center justify-between py-4">
-          <Input
-            placeholder="Filter words..."
-            value={(table.getColumn("text")?.getFilterValue() as string) ?? ""}
-            onChange={(event) =>
-              table.getColumn("text")?.setFilterValue(event.target.value)
-            }
-            className="max-w-sm"
-          />
-          <div className="flex gap-2">
+    <div className="space-y-4">
+      <div className="flex items-center justify-between py-4">
+        <Input
+          placeholder="Filter words..."
+          value={(table.getColumn("text")?.getFilterValue() as string) ?? ""}
+          onChange={(event) =>
+            table.getColumn("text")?.setFilterValue(event.target.value)
+          }
+          className="max-w-sm"
+        />
+        <div className="flex gap-2">
             {Object.keys(rowSelection).length > 0 && (
               <Button size="sm" onClick={handleMarkMastered}>
                   <Check className="mr-2 h-4 w-4" />
                   Mark as Mastered
               </Button>
             )}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="border-dashed">
+                  <Filter className="mr-2 h-4 w-4" />
+                  Status
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuLabel>Filter by Status</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {["NEW", "LEARNING", "MASTERED"].map((status) => {
+                  const filterValue = (table.getColumn("status")?.getFilterValue() as string[]) || [];
+                  return (
+                    <DropdownMenuCheckboxItem
+                      key={status}
+                      checked={filterValue.includes(status)}
+                      onCheckedChange={(checked) => {
+                        const newFilterValue = checked
+                          ? [...filterValue, status]
+                          : filterValue.filter((val) => val !== status);
+                        table.getColumn("status")?.setFilterValue(newFilterValue.length ? newFilterValue : undefined);
+                      }}
+                    >
+                      {status}
+                    </DropdownMenuCheckboxItem>
+                  );
+                })}
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="border-dashed">
+                  <Filter className="mr-2 h-4 w-4" />
+                  POS
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuLabel>Filter by POS</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {uniquePos.map((pos) => {
+                  const filterValue = (table.getColumn("pos")?.getFilterValue() as string[]) || [];
+                  return (
+                    <DropdownMenuCheckboxItem
+                      key={pos}
+                      checked={filterValue.includes(pos)}
+                      onCheckedChange={(checked) => {
+                        const newFilterValue = checked
+                          ? [...filterValue, pos]
+                          : filterValue.filter((val) => val !== pos);
+                        table.getColumn("pos")?.setFilterValue(newFilterValue.length ? newFilterValue : undefined);
+                      }}
+                    >
+                      {pos}
+                    </DropdownMenuCheckboxItem>
+                  );
+                })}
+              </DropdownMenuContent>
+            </DropdownMenu>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" className="ml-auto">
@@ -226,15 +344,14 @@ export function VocabTable<TData, TValue>({
           </div>
         </div>
         
-        {selectedWord && (
-            <WordDetailSheet 
-                word={selectedWord} 
-                open={!!selectedWord} 
-                onOpenChange={(open) => !open && setSelectedWord(null)} 
-            />
-        )}
-      </CardContent>
-    </Card>
+      {selectedWord && (
+          <WordDetailSheet 
+              word={selectedWord} 
+              open={!!selectedWord} 
+              onOpenChange={(open) => !open && setSelectedWord(null)} 
+          />
+      )}
+    </div>
   )
 }
 
@@ -285,6 +402,9 @@ export const vocabColumns: ColumnDef<any>[] = [
   {
     accessorKey: "pos",
     header: "POS",
+    filterFn: (row, id, value) => {
+      return value.includes(row.getValue(id))
+    },
     cell: ({ row }) => {
         const pos = row.getValue("pos") as string;
         if (!pos) return "-";
@@ -308,6 +428,9 @@ export const vocabColumns: ColumnDef<any>[] = [
   {
     accessorKey: "status",
     header: "Status",
+    filterFn: (row, id, value) => {
+      return value.includes(row.getValue(id))
+    },
     cell: ({ row }) => {
         const status = row.getValue("status") as string;
         let variant: "default" | "secondary" | "destructive" | "outline" = "outline";

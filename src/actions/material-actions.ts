@@ -9,6 +9,7 @@ import path from 'path';
 import { revalidatePath } from 'next/cache';
 import { transcribeFile } from '@/services/transcription';
 import { extractVocabulary } from './vocab-actions';
+import { createNotification } from './notification-actions';
 import { startOfDay } from 'date-fns';
 import os from 'os';
 import { randomUUID } from 'crypto';
@@ -172,6 +173,16 @@ export async function uploadMaterial(formData: FormData) {
         .from('users')
         .update({ used_space: currentUsed + size })
         .eq('id', session.user.id);
+
+    // Create notification for upload
+    await createNotification(
+      session.user.id,
+      'MATERIAL_UPLOADED',
+      'Material Uploaded',
+      `"${path.parse(file.name).name}" has been successfully uploaded and is ready for transcription.`,
+      material.id,
+      'material'
+    );
 
     revalidatePath('/materials');
     revalidatePath('/dashboard');
@@ -455,6 +466,11 @@ async function performTranscription(materialId: string, userId: string) {
             if (insertError) console.error("Error inserting sentences:", insertError);
         }
         
+        // Calculate actual media duration from the last segment's end time
+        const mediaDuration = result.segments.length > 0 
+            ? Math.max(...result.segments.map((seg: any) => seg.end || 0))
+            : 0;
+        
         // Update material status
         await client
             .from('materials')
@@ -462,7 +478,7 @@ async function performTranscription(materialId: string, userId: string) {
                 is_processed: true,
                 transcription_model: model,
                 transcription_time: result.duration,
-                duration: result.duration
+                duration: mediaDuration
             })
             .eq('id', materialId);
 
@@ -498,6 +514,16 @@ async function performTranscription(materialId: string, userId: string) {
         
         // Trigger vocabulary extraction
         await extractVocabulary(materialId);
+
+        // Create notification for successful processing
+        await createNotification(
+          userId,
+          'MATERIAL_PROCESSED',
+          'Transcription Complete',
+          `"${material.title}" has been transcribed with ${result.segments.length} sentences and vocabulary extracted.`,
+          materialId,
+          'material'
+        );
 
     } catch (error) {
         console.error("Transcription error:", error);

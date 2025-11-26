@@ -31,6 +31,10 @@ interface AppSidebarProps extends React.ComponentProps<typeof Sidebar> {
     email?: string | null
     image?: string | null
     role?: string
+    displayName?: string | null
+    username?: string | null
+    quota?: number
+    usedSpace?: number
   }
   settings?: any
 }
@@ -70,9 +74,14 @@ export function AppSidebar({ user, settings, ...props }: AppSidebarProps) {
   }
 
   const userData = {
-    name: user?.name || "User",
+    // Username for account form
+    username: user?.username || "",
+    // Display name for account form (can be empty)
+    displayName: user?.displayName || "",
     email: user?.email || "",
     avatar: user?.image || "",
+    quota: user?.quota || 10737418240,
+    usedSpace: user?.usedSpace || 0,
   }
 
   return (

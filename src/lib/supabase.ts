@@ -14,9 +14,18 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 // Client for server-side admin usage (bypasses RLS)
 // Use this in Server Actions when you need full access
 export const supabaseAdmin = supabaseServiceKey 
-  ? createClient(supabaseUrl, supabaseServiceKey)
+  ? createClient(supabaseUrl, supabaseServiceKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
+      }
+    })
   : null;
 
-if (!supabaseAdmin && typeof window === 'undefined') {
-  console.warn('SUPABASE_SERVICE_ROLE_KEY is missing. Server-side operations may fail if RLS is enabled.');
+if (typeof window === 'undefined') {
+  if (!supabaseAdmin) {
+    console.warn('SUPABASE_SERVICE_ROLE_KEY is missing. Server-side operations may fail if RLS is enabled.');
+  } else {
+    console.log('[Supabase] Admin client initialized with service role key');
+  }
 }

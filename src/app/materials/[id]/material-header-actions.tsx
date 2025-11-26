@@ -42,7 +42,6 @@ export function MaterialHeaderActions({ materialId }: { materialId: string }) {
             <AlertDialogTrigger asChild>
                 <Button 
                     variant="outline" 
-                    size="sm" 
                     disabled={isRegenerating}
                     className="gap-2"
                 >

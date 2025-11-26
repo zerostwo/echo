@@ -1,25 +1,27 @@
 "use server"
 
 import { auth } from "@/auth"
-import { supabase } from "@/lib/supabase"
+import { supabase, supabaseAdmin } from "@/lib/supabase"
 import { revalidatePath } from "next/cache"
 import { z } from "zod"
 import bcrypt from "bcryptjs"
+import { randomUUID } from "crypto"
+import { sendEmailChangeVerification } from "@/lib/email"
 
 const updateUserSchema = z.object({
-  name: z.string().min(1, "Name is required"),
+  displayName: z.string().optional(),
   email: z.string().email("Invalid email address"),
   avatar: z.string().optional(),
   currentPassword: z.string().optional(),
   newPassword: z.string().optional(),
   confirmPassword: z.string().optional(),
 }).refine((data) => {
-  if (data.newPassword && data.newPassword.length > 0 && data.newPassword.length < 6) {
+  if (data.newPassword && data.newPassword.length > 0 && data.newPassword.length < 8) {
       return false
   }
   return true
 }, {
-    message: "Password must be at least 6 characters",
+    message: "Password must be at least 8 characters",
     path: ["newPassword"]
 }).refine((data) => {
   if (data.newPassword && data.newPassword !== data.confirmPassword) {
@@ -38,7 +40,7 @@ export async function updateUser(prevState: any, formData: FormData) {
   }
 
   const rawData = {
-    name: formData.get("name"),
+    displayName: formData.get("displayName") || undefined,
     email: formData.get("email"),
     avatar: formData.get("avatar"),
     currentPassword: formData.get("currentPassword"),
@@ -59,7 +61,7 @@ export async function updateUser(prevState: any, formData: FormData) {
     return { error: errors } // Return structured errors
   }
 
-  const { name, email, avatar, currentPassword, newPassword } = validatedFields.data
+  const { displayName, email, avatar, currentPassword, newPassword } = validatedFields.data
 
   try {
     const { data: user, error: fetchError } = await supabase
@@ -88,8 +90,10 @@ export async function updateUser(prevState: any, formData: FormData) {
       hashedPassword = await bcrypt.hash(newPassword, 10)
     }
 
-    // Check if email is already taken by another user
+    // Handle email change with verification
+    let emailChangeMessage = ""
     if (email !== user.email) {
+      // Check if email is already taken by another user
       const { data: existingUser } = await supabase
         .from('users')
         .select('id')
@@ -99,11 +103,36 @@ export async function updateUser(prevState: any, formData: FormData) {
       if (existingUser) {
         return { error: { email: ["Email is already in use"] } }
       }
+
+      // Generate verification token for email change
+      const verificationToken = randomUUID()
+      
+      // Store pending email and token
+      const { error: tokenError } = await supabase
+        .from('users')
+        .update({ 
+          verification_token: verificationToken,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', session.user.id)
+
+      if (tokenError) {
+        throw tokenError
+      }
+
+      // Send verification email to new address
+      await sendEmailChangeVerification(
+        email, 
+        user.display_name || user.username || "User",
+        verificationToken,
+        email // Store the new email in the link
+      )
+
+      emailChangeMessage = " A verification email has been sent to your new email address."
     }
 
     const updates: any = {
-      name,
-      email,
+      display_name: displayName || null,
       image: avatar,
       updated_at: new Date().toISOString(),
     }
@@ -122,10 +151,98 @@ export async function updateUser(prevState: any, formData: FormData) {
     }
 
     revalidatePath("/account")
-    return { success: "Profile updated successfully" }
+    revalidatePath("/")
+    return { success: "Profile updated successfully." + emailChangeMessage }
   } catch (error) {
     console.error("Failed to update user:", error)
     return { error: "Failed to update profile" }
+  }
+}
+
+export async function uploadAvatar(formData: FormData) {
+  const session = await auth()
+  if (!session?.user?.id) {
+    return { error: "Unauthorized" }
+  }
+
+  const file = formData.get("avatar") as File
+  if (!file || file.size === 0) {
+    return { error: "No file provided" }
+  }
+
+  // Validate file type
+  if (!file.type.startsWith("image/")) {
+    return { error: "File must be an image" }
+  }
+
+  // Limit file size (2MB)
+  if (file.size > 2 * 1024 * 1024) {
+    return { error: "File size must be less than 2MB" }
+  }
+
+  try {
+    const client = supabaseAdmin || supabase
+    const buffer = Buffer.from(await file.arrayBuffer())
+    const ext = file.name.split(".").pop() || "png"
+    const filename = `${session.user.id}/avatar-${Date.now()}.${ext}`
+    
+    // Upload to avatars bucket
+    const BUCKET_NAME = "avatars"
+    
+    let { error: uploadError } = await client.storage
+      .from(BUCKET_NAME)
+      .upload(filename, buffer, {
+        contentType: file.type,
+        upsert: true
+      })
+
+    // If bucket doesn't exist, create it
+    if (uploadError && (uploadError.message.includes("Bucket not found") || (uploadError as any).statusCode === "404")) {
+      const { error: createError } = await client.storage.createBucket(BUCKET_NAME, {
+        public: true,
+        allowedMimeTypes: ["image/*"],
+        fileSizeLimit: 2097152 // 2MB
+      })
+
+      if (!createError) {
+        const retryResult = await client.storage
+          .from(BUCKET_NAME)
+          .upload(filename, buffer, {
+            contentType: file.type,
+            upsert: true
+          })
+        uploadError = retryResult.error
+      }
+    }
+
+    if (uploadError) {
+      console.error("Avatar upload error:", uploadError)
+      return { error: "Failed to upload avatar" }
+    }
+
+    // Get public URL
+    const { data: { publicUrl } } = client.storage
+      .from(BUCKET_NAME)
+      .getPublicUrl(filename)
+
+    // Update user record
+    const { error: updateError } = await client
+      .from("users")
+      .update({ 
+        image: publicUrl,
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", session.user.id)
+
+    if (updateError) {
+      throw updateError
+    }
+
+    revalidatePath("/")
+    return { success: true, url: publicUrl }
+  } catch (error) {
+    console.error("Avatar upload error:", error)
+    return { error: "Failed to upload avatar" }
   }
 }
 

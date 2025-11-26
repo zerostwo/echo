@@ -24,7 +24,7 @@ export function UploadMaterialDialog({ folderId }: UploadMaterialDialogProps) {
   const [isUploading, setIsUploading] = useState(false);
   const router = useRouter();
 
-  async function handleUpload(files: File[]) {
+  async function handleUpload(files: File[] | FileList) {
     if (files.length === 0) return;
     
     setIsUploading(true);

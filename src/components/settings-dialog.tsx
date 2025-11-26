@@ -31,9 +31,10 @@ import {
 import { Checkbox } from "@/components/ui/checkbox"
 import { Separator } from "@/components/ui/separator"
 import { AccountForm } from "@/components/account-form"
+import { SecuritySettings } from "@/components/settings/security-settings"
 import { updateSettings } from "@/actions/user-actions"
 import { toast } from "sonner"
-import { Loader2, Settings, User, Book, Bell } from "lucide-react"
+import { Loader2, Settings, User, Book, Bell, Shield } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 interface SettingsDialogProps {
@@ -59,6 +60,32 @@ const VOCAB_COLUMNS = [
   { id: "definition", label: "Definition" },
   { id: "example", label: "Example" },
   { id: "pronunciation", label: "Pronunciation" },
+]
+
+// Common timezones list
+const TIMEZONES = [
+  { value: "UTC", label: "UTC (Coordinated Universal Time)" },
+  { value: "America/New_York", label: "Eastern Time (US & Canada)" },
+  { value: "America/Chicago", label: "Central Time (US & Canada)" },
+  { value: "America/Denver", label: "Mountain Time (US & Canada)" },
+  { value: "America/Los_Angeles", label: "Pacific Time (US & Canada)" },
+  { value: "America/Anchorage", label: "Alaska" },
+  { value: "Pacific/Honolulu", label: "Hawaii" },
+  { value: "Europe/London", label: "London" },
+  { value: "Europe/Paris", label: "Paris" },
+  { value: "Europe/Berlin", label: "Berlin" },
+  { value: "Europe/Moscow", label: "Moscow" },
+  { value: "Asia/Dubai", label: "Dubai" },
+  { value: "Asia/Kolkata", label: "Mumbai, New Delhi" },
+  { value: "Asia/Bangkok", label: "Bangkok" },
+  { value: "Asia/Singapore", label: "Singapore" },
+  { value: "Asia/Hong_Kong", label: "Hong Kong" },
+  { value: "Asia/Shanghai", label: "Beijing, Shanghai" },
+  { value: "Asia/Tokyo", label: "Tokyo" },
+  { value: "Asia/Seoul", label: "Seoul" },
+  { value: "Australia/Sydney", label: "Sydney" },
+  { value: "Australia/Melbourne", label: "Melbourne" },
+  { value: "Pacific/Auckland", label: "Auckland" },
 ]
 
 export function SettingsDialog({
@@ -117,17 +144,22 @@ export function SettingsDialog({
       icon: Book,
       id: "vocabulary",
     },
+    {
+      title: "Security",
+      icon: Shield,
+      id: "security",
+    },
   ]
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="overflow-hidden p-0 md:max-h-[500px] md:max-w-[700px] lg:max-w-[800px]">
+      <DialogContent className="overflow-hidden p-0 md:h-[500px] md:max-h-[500px] md:max-w-[700px] lg:max-w-[800px]" showCloseButton={false}>
         <DialogTitle className="sr-only">Settings</DialogTitle>
         <DialogDescription className="sr-only">
           Customize your settings
         </DialogDescription>
         
-        <SidebarProvider className="items-start">
+        <SidebarProvider className="items-stretch min-h-0 h-full" style={{ minHeight: 0 }}>
           <Sidebar collapsible="none" className="hidden w-48 border-r md:flex">
             <SidebarContent>
               <SidebarGroup>
@@ -150,14 +182,21 @@ export function SettingsDialog({
             </SidebarContent>
           </Sidebar>
           
-          <main className="flex h-full flex-1 flex-col overflow-hidden">
+          <main className="flex h-full flex-1 flex-col overflow-hidden min-h-0">
             <header className="flex h-16 shrink-0 items-center gap-2 border-b px-4">
               <div className="flex flex-1 items-center gap-2">
                 <h1 className="text-lg font-semibold">
                   {items.find((i) => i.id === activeTab)?.title}
                 </h1>
               </div>
-              {activeTab !== "account" && (
+              {activeTab === "account" && (
+                <div className="flex items-center gap-2">
+                  <Button size="sm" type="submit" form="account-form">
+                    Save
+                  </Button>
+                </div>
+              )}
+              {activeTab !== "account" && activeTab !== "security" && (
                 <div className="flex items-center gap-2">
                   <Button size="sm" onClick={handleSave} disabled={isLoading}>
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
@@ -167,9 +206,35 @@ export function SettingsDialog({
               )}
             </header>
             
-            <div className="flex-1 overflow-y-auto p-4">
+            <div className="flex-1 overflow-y-auto p-4 min-h-0">
               {activeTab === "general" && (
                 <div className="space-y-6">
+                  <div className="space-y-2">
+                    <Label htmlFor="timezone">Timezone</Label>
+                    <Select
+                      value={settings.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone}
+                      onValueChange={(value) =>
+                        setSettings({ ...settings, timezone: value })
+                      }
+                    >
+                      <SelectTrigger id="timezone">
+                        <SelectValue placeholder="Select your timezone" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {TIMEZONES.map((tz) => (
+                          <SelectItem key={tz.value} value={tz.value}>
+                            {tz.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-sm text-muted-foreground">
+                      Used for displaying notification times and daily activity.
+                    </p>
+                  </div>
+
+                  <Separator />
+
                   <div className="space-y-2">
                     <Label htmlFor="model">Whisper Model</Label>
                     <Select
@@ -265,6 +330,12 @@ export function SettingsDialog({
                  <div className="space-y-6">
                     <AccountForm user={user} />
                  </div>
+              )}
+
+              {activeTab === "security" && (
+                <div className="space-y-6">
+                  <SecuritySettings twoFactorEnabled={user.twoFactorEnabled} />
+                </div>
               )}
             </div>
           </main>
