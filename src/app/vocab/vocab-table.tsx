@@ -10,7 +10,6 @@ import {
   ColumnFiltersState,
   getFilteredRowModel,
   getPaginationRowModel,
-  RowSelectionState,
   VisibilityState,
 } from "@tanstack/react-table"
 
@@ -24,13 +23,9 @@ import {
 } from "@/components/ui/table"
 import { useState, useMemo } from "react"
 import { Button } from "@/components/ui/button"
-import { ArrowUpDown, Check, MoreHorizontal, SlidersHorizontal, Plus, Filter } from "lucide-react"
+import { ArrowUpDown, SlidersHorizontal, Filter } from "lucide-react"
 import { WordDetailSheet } from "./word-detail-sheet"
-import { Checkbox } from "@/components/ui/checkbox"
 import { Badge } from "@/components/ui/badge"
-import { updateWordsStatus } from "@/actions/word-actions"
-import { toast } from "sonner"
-import { useRouter } from "next/navigation"
 import { Input } from "@/components/ui/input"
 import {
   DropdownMenu,
@@ -94,9 +89,7 @@ export function VocabTable<TData, TValue>({
 
   const [sorting, setSorting] = useState<SortingState>(getInitialSorting())
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
-  const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
   const [selectedWord, setSelectedWord] = useState<any>(null)
-  const router = useRouter()
 
   // Get initial column visibility based on settings
   const getInitialColumnVisibility = () => {
@@ -110,19 +103,14 @@ export function VocabTable<TData, TValue>({
       pronunciation: "phonetic",
       example: "collins"
     }
-    // By default, show all columns, but hide specific ones based on settings
+    // By default, show all columns
     columns.forEach((col: any) => {
-      if (col.id === "select" || col.id === "actions") {
-        visibility[col.id || col.accessorKey] = true // Always show select and actions
+      const colId = col.id || col.accessorKey
+      const settingKey = Object.entries(columnMapping).find(([, v]) => v === colId)?.[0]
+      if (settingKey) {
+        visibility[colId] = visibleCols.includes(settingKey)
       } else {
-        // Check if this column should be visible based on settings
-        const colId = col.id || col.accessorKey
-        const settingKey = Object.entries(columnMapping).find(([, v]) => v === colId)?.[0]
-        if (settingKey) {
-          visibility[colId] = visibleCols.includes(settingKey)
-        } else {
-          visibility[colId] = true // Show columns not in mapping
-        }
+        visibility[colId] = true // Show columns not in mapping
       }
     })
     return visibility
@@ -139,29 +127,13 @@ export function VocabTable<TData, TValue>({
     getSortedRowModel: getSortedRowModel(),
     onColumnFiltersChange: setColumnFilters,
     getFilteredRowModel: getFilteredRowModel(),
-    onRowSelectionChange: setRowSelection,
     onColumnVisibilityChange: setColumnVisibility,
     state: {
       sorting,
       columnFilters,
-      rowSelection,
       columnVisibility,
     },
   })
-
-  const handleMarkMastered = async () => {
-      const selectedIds = table.getFilteredSelectedRowModel().rows.map((row: any) => row.original.id);
-      if (selectedIds.length === 0) return;
-      
-      const res = await updateWordsStatus(selectedIds, "MASTERED");
-      if (res.success) {
-          toast.success(`Marked ${selectedIds.length} words as mastered`);
-          setRowSelection({});
-          router.refresh();
-      } else {
-          toast.error("Failed to update words");
-      }
-  }
 
     return (
     <div className="space-y-4">
@@ -175,12 +147,6 @@ export function VocabTable<TData, TValue>({
           className="max-w-sm"
         />
         <div className="flex gap-2">
-            {Object.keys(rowSelection).length > 0 && (
-              <Button size="sm" onClick={handleMarkMastered}>
-                  <Check className="mr-2 h-4 w-4" />
-                  Mark as Mastered
-              </Button>
-            )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" className="border-dashed">
@@ -334,13 +300,8 @@ export function VocabTable<TData, TValue>({
                 table.getRowModel().rows.map((row) => (
                   <TableRow
                     key={row.id}
-                    data-state={row.getIsSelected() && "selected"}
                     className="cursor-pointer hover:bg-muted/50"
-                    onClick={(e) => {
-                      // Prevent row click when clicking checkbox
-                      if ((e.target as HTMLElement).closest('[role="checkbox"]')) return;
-                      setSelectedWord(row.original)
-                    }}
+                    onClick={() => setSelectedWord(row.original)}
                   >
                     {row.getVisibleCells().map((cell) => (
                       <TableCell key={cell.id}>
@@ -361,8 +322,7 @@ export function VocabTable<TData, TValue>({
         </div>
         <div className="flex items-center justify-end space-x-2 py-4">
           <div className="flex-1 text-sm text-muted-foreground">
-            {table.getFilteredSelectedRowModel().rows.length} of{" "}
-            {table.getFilteredRowModel().rows.length} row(s) selected.
+            {table.getFilteredRowModel().rows.length} word(s)
           </div>
           <div className="space-x-2">
             <Button
@@ -397,29 +357,6 @@ export function VocabTable<TData, TValue>({
 
 export const vocabColumns: ColumnDef<any>[] = [
   {
-    id: "select",
-    header: ({ table }) => (
-      <Checkbox
-        checked={
-          table.getIsAllPageRowsSelected() ||
-          (table.getIsSomePageRowsSelected() && "indeterminate")
-        }
-        onCheckedChange={(value) => table.toggleAllPageRowsSelected(!!value)}
-        aria-label="Select all"
-      />
-    ),
-    cell: ({ row }) => (
-      <Checkbox
-        checked={row.getIsSelected()}
-        onCheckedChange={(value) => row.toggleSelected(!!value)}
-        aria-label="Select row"
-        onClick={(e) => e.stopPropagation()}
-      />
-    ),
-    enableSorting: false,
-    enableHiding: false,
-  },
-  {
     accessorKey: "text",
     header: ({ column }) => {
         return (
@@ -437,11 +374,35 @@ export const vocabColumns: ColumnDef<any>[] = [
   {
     accessorKey: "phonetic",
     header: "Phonetic",
-    cell: ({ row }) => <span className="font-mono text-muted-foreground text-sm">{row.getValue("phonetic") || "-"}</span>
+    cell: ({ row }) => {
+      const phonetic = row.getValue("phonetic") as string | null;
+      if (!phonetic) return <span className="text-muted-foreground">-</span>;
+      return (
+        <span className="inline-flex items-center rounded-full bg-muted px-2 py-1 font-serif text-sm tracking-tight text-foreground/80">
+          /{phonetic}/
+        </span>
+      );
+    }
   },
   {
-    id: "frequency",
-    accessorFn: (row: any) => row.occurrences?.length || 0,
+    accessorKey: "status",
+    header: "Status",
+    filterFn: (row, id, value) => {
+      return value.includes(row.getValue(id))
+    },
+    cell: ({ row }) => {
+        const status = row.getValue("status") as string;
+        let variant: "default" | "secondary" | "destructive" | "outline" = "outline";
+        
+        if (status === "MASTERED") variant = "default";
+        if (status === "NEW") variant = "secondary";
+        if (status === "LEARNING") variant = "outline";
+        
+        return <Badge variant={variant} className="text-xs">{status}</Badge>
+    }
+  },
+  {
+    accessorKey: "frequency",
     header: ({ column }) => {
       return (
         <Button
@@ -454,16 +415,16 @@ export const vocabColumns: ColumnDef<any>[] = [
       )
     },
     cell: ({ row }) => {
-      const freq = row.original.occurrences?.length || 0;
+      const freq = (row.getValue("frequency") as number) ?? 0;
       return (
-        <span className="font-medium text-center pl-4">
+        <span className="font-medium text-center">
           {freq}
         </span>
       );
     },
     sortingFn: (rowA, rowB) => {
-      const freqA = rowA.original.occurrences?.length || 0;
-      const freqB = rowB.original.occurrences?.length || 0;
+      const freqA = (rowA.getValue("frequency") as number) ?? 0;
+      const freqB = (rowB.getValue("frequency") as number) ?? 0;
       return freqA - freqB;
     }
   },
@@ -502,69 +463,5 @@ export const vocabColumns: ColumnDef<any>[] = [
       }
       return null;
     }
-  },
-  {
-    accessorKey: "status",
-    header: "Status",
-    filterFn: (row, id, value) => {
-      return value.includes(row.getValue(id))
-    },
-    cell: ({ row }) => {
-        const status = row.getValue("status") as string;
-        let variant: "default" | "secondary" | "destructive" | "outline" = "outline";
-        
-        if (status === "MASTERED") variant = "default";
-        if (status === "NEW") variant = "secondary";
-        if (status === "LEARNING") variant = "outline";
-        
-        return <Badge variant={variant} className="text-xs">{status}</Badge>
-    }
-  },
-  {
-    id: "nextReview",
-    header: "Next Review",
-    cell: ({ row }) => {
-      // Placeholder logic for next review
-      // Randomly assign "Tomorrow", "In 2 days", "Due today" based on id hash or similar if no real data
-      // Since we don't have real schedule data, we'll fake it for UI demo
-      const status = row.getValue("status") as string;
-      if (status === "MASTERED") return <span className="text-muted-foreground text-xs">In 3 days</span>;
-      if (status === "NEW") return <span className="text-orange-500 text-xs font-medium">Due today</span>;
-      return <span className="text-muted-foreground text-xs">Tomorrow</span>;
-    }
-  },
-  {
-    accessorKey: "tag",
-    header: "Tags",
-    cell: ({ row }) => {
-        const tag = row.getValue("tag") as string;
-        if (!tag) return null;
-        return <Badge variant="secondary" className="text-xs">{tag}</Badge>
-    }
-  },
-  {
-    id: "actions",
-    cell: ({ row }) => {
-      return (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" className="h-8 w-8 p-0">
-              <span className="sr-only">Open menu</span>
-              <MoreHorizontal className="h-4 w-4" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuLabel>Actions</DropdownMenuLabel>
-            <DropdownMenuItem
-              onClick={() => navigator.clipboard.writeText(row.original.text)}
-            >
-              Copy word
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem>View details</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      )
-    },
   },
 ]

@@ -33,7 +33,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 
 import {
@@ -197,8 +196,8 @@ export function SidebarFolderTree({ folders, materials = [] }: SidebarFolderTree
   };
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
-      <Collapsible open={isOrganizeOpen} onOpenChange={setIsOrganizeOpen}>
+    <div className="flex flex-col h-full min-h-0 overflow-hidden">
+      <Collapsible open={isOrganizeOpen} onOpenChange={setIsOrganizeOpen} className="flex flex-col min-h-0">
         {/* Organize Header - matches SidebarGroupLabel styling exactly */}
         <div className="flex h-8 shrink-0 items-center justify-between rounded-md px-2">
           <CollapsibleTrigger asChild>
@@ -232,9 +231,9 @@ export function SidebarFolderTree({ folders, materials = [] }: SidebarFolderTree
           </Tooltip>
         </div>
 
-        <CollapsibleContent className="flex-1 overflow-hidden">
-          <ScrollArea className="h-[calc(100vh-400px)]">
-            <div className="space-y-0.5 py-1">
+        <CollapsibleContent className="flex-1 min-h-0 overflow-hidden">
+          <div className="h-full overflow-y-auto">
+              <div className="space-y-0.5 py-1">
               {sortedFolders.length === 0 && !isCreatingFolder && (
                 <div className="px-2 py-6 text-center">
                   <FolderGlyph className="h-10 w-10 mx-auto mb-3 text-muted-foreground/40" />
@@ -292,7 +291,7 @@ export function SidebarFolderTree({ folders, materials = [] }: SidebarFolderTree
                   <div
                     key={folder.id}
                     className={cn(
-                      "group flex items-center justify-between rounded-md text-sm h-8 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                      "group/folder flex items-center justify-between rounded-md text-sm h-8 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground pr-1.5",
                       selected && "bg-sidebar-accent text-sidebar-accent-foreground"
                     )}
                   >
@@ -346,7 +345,7 @@ export function SidebarFolderTree({ folders, materials = [] }: SidebarFolderTree
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-6 w-6 mr-1 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-sidebar-accent-foreground"
+                            className="h-6 w-6 opacity-0 group-hover/folder:opacity-100 text-muted-foreground hover:text-sidebar-accent-foreground"
                           >
                             <MoreHorizontal className="size-4" />
                           </Button>
@@ -370,8 +369,8 @@ export function SidebarFolderTree({ folders, materials = [] }: SidebarFolderTree
                   </div>
                 );
               })}
+              </div>
             </div>
-          </ScrollArea>
         </CollapsibleContent>
       </Collapsible>
 

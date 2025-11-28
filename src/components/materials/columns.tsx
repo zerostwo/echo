@@ -3,8 +3,6 @@
 import { ColumnDef } from "@tanstack/react-table"
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
-import { ArrowUpDown } from "lucide-react"
-import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { formatInTimeZone } from "@/lib/time"
 
@@ -58,17 +56,8 @@ export const columns = (folders: any[], timezone: string): ColumnDef<Material>[]
   },
   {
     accessorKey: "title",
-    header: ({ column }) => {
-        return (
-          <Button
-            variant="ghost"
-            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-          >
-            Title
-            <ArrowUpDown className="ml-2 h-4 w-4" />
-          </Button>
-        )
-    },
+    header: "Title",
+    enableSorting: false,
     cell: ({ row }) => {
         const displayName = getDisplayName(row.getValue("title"))
         return (
@@ -80,36 +69,32 @@ export const columns = (folders: any[], timezone: string): ColumnDef<Material>[]
   },
   {
     accessorKey: "_count.sentences",
-    header: ({ column }) => {
-        return (
-          <Button
-            variant="ghost"
-            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-          >
-            Sentences
-            <ArrowUpDown className="ml-2 h-4 w-4" />
-          </Button>
-        )
-    },
+    header: "Sentences",
+    enableSorting: false,
     cell: ({ row }) => {
         // Use the pre-calculated stats if available, otherwise fallback
         return row.original.stats?.totalSentences || 0
     }
   },
   {
+    id: "vocab",
+    accessorFn: (row) => row.stats.vocabCount,
+    header: "Vocabulary",
+    enableSorting: false,
+    cell: ({ row }) => {
+        const count = row.original.stats.vocabCount
+        return (
+            <Link href={`/vocab?materialId=${row.original.id}`} className="text-sm font-medium text-blue-600 hover:underline">
+                {count}
+            </Link>
+        )
+    }
+  },
+  {
     id: "progress",
     accessorFn: (row) => row.stats.practicedCount,
-    header: ({ column }) => {
-        return (
-          <Button
-            variant="ghost"
-            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-          >
-            Progress
-            <ArrowUpDown className="ml-2 h-4 w-4" />
-          </Button>
-        )
-    },
+    header: "Progress",
+    enableSorting: false,
     cell: ({ row }) => {
         const stats = row.original.stats
         const isComplete = stats.practicedCount === stats.totalSentences && stats.totalSentences > 0
@@ -125,17 +110,8 @@ export const columns = (folders: any[], timezone: string): ColumnDef<Material>[]
   {
     id: "score",
     accessorFn: (row) => row.stats.avgScore,
-    header: ({ column }) => {
-        return (
-          <Button
-            variant="ghost"
-            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-          >
-            Score
-            <ArrowUpDown className="ml-2 h-4 w-4" />
-          </Button>
-        )
-    },
+    header: "Score",
+    enableSorting: false,
     cell: ({ row }) => {
         const stats = row.original.stats
         if (stats.practicedCount === 0) return <span className="text-muted-foreground">-</span>
@@ -147,19 +123,21 @@ export const columns = (folders: any[], timezone: string): ColumnDef<Material>[]
     }
   },
   {
+    id: "attempts",
+    accessorFn: (row) => row.stats.attempts,
+    header: "Attempts",
+    enableSorting: false,
+    cell: ({ row }) => {
+        const stats = row.original.stats
+        if (stats.practicedCount === 0) return <span className="text-muted-foreground">-</span>
+        return <span>{stats.attempts}</span>
+    }
+  },
+  {
     id: "time",
     accessorFn: (row) => row.stats.duration,
-    header: ({ column }) => {
-        return (
-          <Button
-            variant="ghost"
-            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-          >
-            Time
-            <ArrowUpDown className="ml-2 h-4 w-4" />
-          </Button>
-        )
-    },
+    header: "Time",
+    enableSorting: false,
     cell: ({ row }) => {
         const stats = row.original.stats
         if (stats.practicedCount === 0) return <span className="text-muted-foreground">-</span>
@@ -168,61 +146,9 @@ export const columns = (folders: any[], timezone: string): ColumnDef<Material>[]
     }
   },
   {
-    id: "attempts",
-    accessorFn: (row) => row.stats.attempts,
-    header: ({ column }) => {
-        return (
-          <Button
-            variant="ghost"
-            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-          >
-            Attempts
-            <ArrowUpDown className="ml-2 h-4 w-4" />
-          </Button>
-        )
-    },
-    cell: ({ row }) => {
-        const stats = row.original.stats
-        if (stats.practicedCount === 0) return <span className="text-muted-foreground">-</span>
-        return <span>{stats.attempts}</span>
-    }
-  },
-  {
-    id: "vocab",
-    accessorFn: (row) => row.stats.vocabCount,
-    header: ({ column }) => {
-        return (
-          <Button
-            variant="ghost"
-            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-          >
-            Vocabulary
-            <ArrowUpDown className="ml-2 h-4 w-4" />
-          </Button>
-        )
-    },
-    cell: ({ row }) => {
-        const count = row.original.stats.vocabCount
-        return (
-            <Link href={`/vocab?materialId=${row.original.id}`} className="text-sm font-medium text-blue-600 hover:underline">
-                {count}
-            </Link>
-        )
-    }
-  },
-  {
     accessorKey: "created_at",
-    header: ({ column }) => {
-        return (
-          <Button
-            variant="ghost"
-            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-          >
-            Uploaded
-            <ArrowUpDown className="ml-2 h-4 w-4" />
-          </Button>
-        )
-    },
+    header: "Uploaded",
+    enableSorting: false,
     cell: ({ row }) => {
         return formatInTimeZone(row.getValue("created_at"), tz)
     }

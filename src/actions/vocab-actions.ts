@@ -254,34 +254,12 @@ export async function extractVocabulary(materialId: string) {
     let newWordsCount = 0;
     const wordIdsToCheck = Array.from(lemmaToId.values());
     
-    // Verify these word IDs actually exist in the database before proceeding
-    const verifiedWordIds = new Set<string>();
+    // Batch check existing statuses
+    const existingStatuses = new Set<string>(); // word_ids that already have status for this user
+    
     if (wordIdsToCheck.length > 0) {
         for (let i = 0; i < wordIdsToCheck.length; i += 500) {
             const batch = wordIdsToCheck.slice(i, i + 500);
-            const { data: verifiedBatch } = await client
-                .from('words')
-                .select('id')
-                .in('id', batch)
-                .is('deleted_at', null);
-            
-            if (verifiedBatch) {
-                for (const w of verifiedBatch) {
-                    verifiedWordIds.add(w.id);
-                }
-            }
-        }
-    }
-    
-    console.log(`[extractVocabulary] Verified ${verifiedWordIds.size} word IDs exist in database.`);
-    
-    // Batch check existing statuses
-    const existingStatuses = new Set<string>(); // word_ids that already have status for this user
-    const verifiedWordIdArray = Array.from(verifiedWordIds);
-    
-    if (verifiedWordIdArray.length > 0) {
-        for (let i = 0; i < verifiedWordIdArray.length; i += 500) {
-            const batch = verifiedWordIdArray.slice(i, i + 500);
             const { data: statusBatch } = await client
                 .from('user_word_statuses')
                 .select('word_id')
@@ -296,9 +274,9 @@ export async function extractVocabulary(materialId: string) {
         }
     }
     
-    // Create statuses for words that don't have one (only for verified word IDs)
+    // Create statuses for words that don't have one
     const statusesToInsert = [];
-    for (const wordId of verifiedWordIds) {
+    for (const wordId of wordIdsToCheck) {
         if (!existingStatuses.has(wordId)) {
             statusesToInsert.push({
                 id: randomUUID(),
@@ -337,14 +315,11 @@ export async function extractVocabulary(materialId: string) {
         const lemma = rawToLemma.get(rawWord);
         if (lemma && lemmaToId.has(lemma)) {
             const wordId = lemmaToId.get(lemma)!;
-            // Only add if the word ID was verified to exist
-            if (verifiedWordIds.has(wordId)) {
-                occurrencesData.push({
-                    id: randomUUID(),
-                    word_id: wordId,
-                    sentence_id: sentenceId
-                });
-            }
+            occurrencesData.push({
+                id: randomUUID(),
+                word_id: wordId,
+                sentence_id: sentenceId
+            });
         }
     }
     

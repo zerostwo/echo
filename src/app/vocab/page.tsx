@@ -35,23 +35,157 @@ export default async function VocabPage({ searchParams }: { searchParams: Promis
     }
   }
 
-  // Fetch words
+  // Fetch sentences (optionally filtered by material) to scope vocabulary to user's materials
+  let sentenceQuery = client
+    .from('sentences')
+    .select(`
+      id,
+      content,
+      deleted_at,
+      material:materials!inner(id, title, user_id, deleted_at)
+    `)
+    .eq('material.user_id', session.user.id)
+    .is('deleted_at', null)
+    .is('material.deleted_at', null);
+
+  if (materialId) {
+    sentenceQuery = sentenceQuery.eq('material.id', materialId);
+  }
+
+  const { data: sentences } = await sentenceQuery;
+  const sentenceMap = new Map<string, any>();
+  const sentenceIds: string[] = [];
+  (sentences || []).forEach((s: any) => {
+    sentenceMap.set(s.id, s);
+    sentenceIds.push(s.id);
+  });
+
+  let filteredMaterialTitle = '';
+  if (materialId && sentences?.length) {
+    const firstMaterial = sentences[0].material as any;
+    const material = Array.isArray(firstMaterial) ? firstMaterial[0] : firstMaterial;
+    filteredMaterialTitle = material?.title ?? '';
+  }
+
+  // Pull occurrences for these sentences and group them by word (with word metadata)
+  const wordMap = new Map<string, { word: any; occurrences: any[] }>();
+  const frequencyMap = new Map<string, number>();
+
+  let occurrencesQuery = client
+    .from('word_occurrences')
+    .select(`
+      word_id,
+      sentence_id,
+      word:words(*),
+      sentence:sentences!inner(
+        id,
+        content,
+        deleted_at,
+        material_id,
+        material:materials!inner(id, title, user_id, deleted_at)
+      )
+    `)
+    .eq('sentence.material.user_id', session.user.id)
+    .is('sentence.deleted_at', null)
+    .is('sentence.material.deleted_at', null);
+
+  if (materialId) {
+    occurrencesQuery = occurrencesQuery.eq('sentence.material_id', materialId);
+  }
+
+  const { data: occurrences } = await occurrencesQuery;
+
+  (occurrences || []).forEach((occ: any) => {
+    if (!occ.word || occ.word.deleted_at) return;
+
+    if (!wordMap.has(occ.word_id)) {
+      wordMap.set(occ.word_id, { word: occ.word, occurrences: [] });
+    }
+
+    const sentence = occ.sentence || sentenceMap.get(occ.sentence_id);
+
+    wordMap.get(occ.word_id)!.occurrences.push({
+      word_id: occ.word_id,
+      sentence_id: occ.sentence_id,
+      sentence,
+    });
+
+    frequencyMap.set(occ.word_id, (frequencyMap.get(occ.word_id) || 0) + 1);
+  });
+
+  const wordIds = Array.from(wordMap.keys());
+
+  // Fetch statuses for the words we found; default to NEW if missing so vocabulary still shows up
+  const { data: statuses } = wordIds.length > 0
+    ? await client
+        .from('user_word_statuses')
+        .select('*')
+        .eq('user_id', session.user.id)
+        .in('word_id', wordIds)
+    : { data: [] as any[] };
+
+  const statusMap = new Map<string, any>();
+  (statuses || []).forEach((s: any) => statusMap.set(s.word_id, s));
+
+  // Also pull user word statuses so we can fall back when occurrences aren't loaded
   const { data: userWords } = await client
     .from('user_word_statuses')
     .select(`
         *,
-        word:words(
-            *,
-            occurrences:word_occurrences(
-                sentence:sentences(
-                    *,
-                    material:materials(deleted_at, title)
-                )
-            )
-        )
+        word:words(*)
     `)
     .eq('user_id', session.user.id)
     .order('updated_at', { ascending: false });
+
+  // Merge occurrences + statuses so vocab shows up even if occurrences query fails/empties
+  const mergedWords = new Map<string, any>();
+
+  (userWords || []).forEach((uw: any) => {
+      if (!uw.word || uw.word.deleted_at) return;
+      mergedWords.set(uw.word_id, {
+          ...uw,
+          word: {
+              ...uw.word,
+              occurrences: []
+          }
+      });
+  });
+
+  wordMap.forEach(({ word, occurrences }, wordId) => {
+      const existing = mergedWords.get(wordId);
+      if (existing) {
+          mergedWords.set(wordId, {
+              ...existing,
+              word: {
+                  ...existing.word,
+                  ...word,
+                  occurrences
+              }
+          });
+      } else {
+          const status = statusMap.get(wordId);
+          mergedWords.set(wordId, {
+              ...status,
+              word_id: wordId,
+              status: status?.status ?? "NEW",
+              created_at: status?.created_at ?? word.created_at ?? null,
+              updated_at: status?.updated_at ?? word.updated_at ?? null,
+              word: {
+                  ...word,
+                  occurrences
+              }
+          });
+      }
+  });
+
+  // Only keep words that have valid occurrences (exist in non-deleted materials/sentences)
+  const filteredUserWords = Array.from(mergedWords.values())
+      .filter((w: any) => (w.word.occurrences?.length ?? 0) > 0)
+      .sort((a: any, b: any) => {
+          const timeA = a.updated_at ? new Date(a.updated_at).getTime() : 0;
+          const timeB = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+          return timeB - timeA;
+      });
 
   // Fetch practice stats
   const { data: practices } = await client
@@ -59,45 +193,16 @@ export default async function VocabPage({ searchParams }: { searchParams: Promis
     .select('attempts')
     .eq('user_id', session.user.id);
 
-  // Process data
-  // Filter words to exclude those from deleted materials AND apply materialId filter if present
-  let filteredMaterialTitle = '';
-
-  const filteredUserWords = (userWords || []).map((uw: any) => {
-      if (uw.word?.deleted_at) {
-          return null;
-      }
-      const activeOccurrences = uw.word?.occurrences?.filter((occ: any) => {
-          const isNotDeleted = occ.sentence?.material?.deleted_at === null && occ.sentence?.deleted_at === null;
-          const matchesMaterial = !materialId || occ.sentence?.material_id === materialId;
-          
-          if (materialId && matchesMaterial && !filteredMaterialTitle) {
-              filteredMaterialTitle = occ.sentence?.material?.title;
-          }
-
-          return isNotDeleted && matchesMaterial;
-      });
-
-      if (!activeOccurrences || activeOccurrences.length === 0) {
-          return null;
-      }
-
-      // Return a new object with filtered occurrences
-      return {
-          ...uw,
-          word: {
-              ...uw.word,
-              occurrences: activeOccurrences
-          }
-      };
-  }).filter(Boolean);
-
   // Transform for table - keep all occurrences for frequency calculation
   const data = filteredUserWords.map((uw: any) => {
       const word = uw.word;
+      const wordId = uw.word_id || word.id;
+      const frequency = frequencyMap.get(wordId) ?? word.occurrences?.length ?? 0;
       return { 
-          ...word, 
-          occurrences: word.occurrences, // Keep all occurrences for frequency count
+          ...word,
+          id: word.id || wordId,
+          frequency,
+          occurrences: word.occurrences || [],
           status: uw.status 
       };
   });

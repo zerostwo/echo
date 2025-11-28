@@ -12,6 +12,7 @@ import { DynamicBreadcrumb } from "@/components/dynamic-breadcrumb";
 import { BreadcrumbProvider } from "@/context/breadcrumb-context";
 import { UserSettingsProvider } from "@/components/user-settings-provider";
 import { headers } from "next/headers";
+import Script from "next/script";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -37,6 +38,8 @@ export default async function RootLayout({
 }>) {
   const session = await auth();
   const folders = await getFolders();
+  const umamiWebsiteId = process.env.NEXT_PUBLIC_UMAMI_WEBSITE_ID;
+  const umamiScriptUrl = process.env.NEXT_PUBLIC_UMAMI_SCRIPT_URL || "https://cloud.umami.is/script.js";
   
   // Get pathname from middleware header
   const headersList = await headers();
@@ -104,6 +107,14 @@ export default async function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased h-full`}
         suppressHydrationWarning
       >
+        {umamiWebsiteId && (
+          <Script
+            async
+            defer
+            src={umamiScriptUrl}
+            data-website-id={umamiWebsiteId}
+          />
+        )}
         <UserSettingsProvider initialSettings={userSettings}>
           <BreadcrumbProvider>
           {showSidebar ? (

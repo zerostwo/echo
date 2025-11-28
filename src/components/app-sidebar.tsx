@@ -110,7 +110,7 @@ export function AppSidebar({ user, settings, folders = [], materials = [], ...pr
         </SidebarGroup>
         
         {/* Folder tree section - Always show for folder organization */}
-        <SidebarGroup className="flex-1 overflow-hidden">
+        <SidebarGroup className="flex-1 min-h-0 overflow-hidden">
           <SidebarFolderTree folders={folders} materials={materials} />
         </SidebarGroup>
       </SidebarContent>
