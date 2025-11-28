@@ -7,6 +7,7 @@ import {
   SheetContent,
   SheetHeader,
   SheetTitle,
+  SheetFooter,
 } from "@/components/ui/sheet"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Button } from "@/components/ui/button"
@@ -22,8 +23,7 @@ import {
   Loader2,
   ExternalLink,
   BookMarked,
-  FileText,
-  X
+  FileText
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { 
@@ -35,39 +35,18 @@ import {
   type NotificationType
 } from "@/actions/notification-actions"
 import { toast } from "sonner"
-import { formatDistanceToNow } from "date-fns"
-
-// Format notification time - ensure UTC timestamps are handled correctly
-function formatNotificationTime(dateString: string): string {
-  try {
-    // The dateString from database might not include timezone info
-    // Ensure we treat it as UTC if no timezone is specified
-    let date: Date
-    
-    if (dateString.endsWith('Z') || dateString.includes('+') || dateString.includes('-')) {
-      // Already has timezone info
-      date = new Date(dateString)
-    } else {
-      // No timezone info - treat as UTC by appending 'Z'
-      date = new Date(dateString + 'Z')
-    }
-    
-    // Validate the date
-    if (isNaN(date.getTime())) {
-      return "Just now"
-    }
-    
-    return formatDistanceToNow(date, { addSuffix: true })
-  } catch (e) {
-    console.error("Failed to format notification time:", e)
-    return "Just now"
-  }
-}
+import { formatInTimeZone } from "@/lib/time"
+import { useUserSettings } from "./user-settings-provider"
 
 interface NotificationsDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   timezone?: string
+}
+
+function formatNotificationTime(dateString: string, timezone: string): string {
+  const formatted = formatInTimeZone(dateString, timezone, { dateStyle: 'medium', timeStyle: 'short', fallback: 'Just now' })
+  return formatted
 }
 
 // Icon configuration with consistent styling
@@ -157,6 +136,8 @@ function getInlineActions(notification: Notification): Array<{
 
 export function NotificationsDialog({ open, onOpenChange, timezone }: NotificationsDialogProps) {
   const router = useRouter()
+  const { timezone: ctxTimezone } = useUserSettings()
+  const activeTimezone = timezone || ctxTimezone
   const [notifications, setNotifications] = React.useState<Notification[]>([])
   const [isLoading, setIsLoading] = React.useState(false)
   const [isClearing, setIsClearing] = React.useState(false)
@@ -245,89 +226,45 @@ export function NotificationsDialog({ open, onOpenChange, timezone }: Notificati
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full sm:max-w-md p-0 flex flex-col gap-0">
-        {/* Header */}
-        <SheetHeader className="px-5 py-4 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-          <div className="flex items-center justify-between">
-            {/* Left: Icon + Title + Badge */}
-            <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
-                <Bell className="h-4.5 w-4.5 text-primary" />
+      <SheetContent side="right" className="w-full sm:max-w-md p-0 flex flex-col gap-0 [&>button]:hidden">
+        {/* Header - Compact design */}
+        <SheetHeader className="px-4 py-3 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+          <div className="flex items-center gap-2.5">
+            <div className="relative">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
+                <Bell className="h-4 w-4 text-primary" />
               </div>
-              <div className="flex items-center gap-2">
-                <SheetTitle className="text-base font-semibold">
-                  Notifications
-                </SheetTitle>
-                {unreadCount > 0 && (
-                  <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 text-[11px] font-semibold text-white">
-                    {unreadCount}
-                  </span>
-                )}
-              </div>
+              {unreadCount > 0 && (
+                <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-semibold text-white">
+                  {unreadCount}
+                </span>
+              )}
             </div>
-
-            {/* Right: Close button */}
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 rounded-full"
-              onClick={() => onOpenChange(false)}
-            >
-              <X className="h-4 w-4" />
-            </Button>
+            <div>
+              <SheetTitle className="text-sm font-semibold">
+                Notifications
+              </SheetTitle>
+              <p className="text-[11px] text-muted-foreground">
+                Your recent activity
+              </p>
+            </div>
           </div>
-          
-          {/* Subtitle */}
-          <p className="text-xs text-muted-foreground mt-1 ml-12">
-            Your recent activity and updates
-          </p>
         </SheetHeader>
 
-        {/* Action bar - only show when there are notifications */}
-        {notifications.length > 0 && (
-          <div className="flex items-center justify-end gap-1 px-5 py-2.5 border-b bg-muted/30">
-            <Button 
-              variant="ghost" 
-              size="sm" 
-              onClick={handleMarkAllAsRead}
-              disabled={unreadCount === 0}
-              className="h-7 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground"
-            >
-              <CheckCheck className="h-3.5 w-3.5 mr-1.5" />
-              Mark all read
-            </Button>
-            <div className="w-px h-4 bg-border mx-1" />
-            <Button 
-              variant="ghost" 
-              size="sm" 
-              onClick={handleClearAll}
-              disabled={isClearing}
-              className="h-7 px-2.5 text-xs font-medium text-muted-foreground hover:text-destructive"
-            >
-              {isClearing ? (
-                <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-              ) : (
-                <Trash2 className="h-3.5 w-3.5 mr-1.5" />
-              )}
-              Clear all
-            </Button>
-          </div>
-        )}
-
-        {/* Content */}
-        <ScrollArea className="flex-1">
+        {/* Content with scrolling */}
+        <ScrollArea className="flex-1 min-h-0">
           {isLoading ? (
             <div className="flex items-center justify-center h-48">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
           ) : notifications.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-64 text-center px-8">
-              <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-muted mb-4">
-                <Bell className="h-8 w-8 text-muted-foreground/50" />
+            <div className="flex flex-col items-center justify-center h-48 text-center px-6">
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-muted mb-3">
+                <Bell className="h-6 w-6 text-muted-foreground/50" />
               </div>
-              <h3 className="font-semibold text-base mb-1">No notifications</h3>
-              <p className="text-sm text-muted-foreground max-w-[200px]">
-                You're all caught up! We'll notify you when something happens.
+              <h3 className="font-semibold text-sm mb-0.5">No notifications</h3>
+              <p className="text-xs text-muted-foreground max-w-[180px]">
+                You're all caught up!
               </p>
             </div>
           ) : (
@@ -342,49 +279,49 @@ export function NotificationsDialog({ open, onOpenChange, timezone }: Notificati
                   <div
                     key={notification.id}
                     className={cn(
-                      "px-5 py-4 transition-colors relative",
+                      "px-4 py-3 transition-colors relative",
                       !notification.isRead && "bg-primary/[0.03]",
                       isClickable && "cursor-pointer hover:bg-muted/50"
                     )}
                     onClick={() => isClickable && handleNotificationClick(notification)}
                   >
-                    <div className="flex gap-3.5">
+                    <div className="flex gap-3">
                       {/* Icon */}
                       <div className={cn(
-                        "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg",
+                        "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
                         config.bgColor
                       )}>
-                        <Icon className={cn("h-4 w-4", config.iconColor)} />
+                        <Icon className={cn("h-3.5 w-3.5", config.iconColor)} />
                       </div>
 
                       {/* Content */}
-                      <div className="flex-1 min-w-0 space-y-1">
+                      <div className="flex-1 min-w-0 space-y-0.5">
                         {/* Title row with unread indicator */}
                         <div className="flex items-start gap-2">
                           <h4 className={cn(
-                            "text-sm leading-tight flex-1",
+                            "text-[13px] leading-tight flex-1",
                             !notification.isRead ? "font-semibold" : "font-medium text-foreground/90"
                           )}>
                             {notification.title}
                           </h4>
                           {!notification.isRead && (
-                            <span className="shrink-0 h-2 w-2 rounded-full bg-red-500 mt-1.5" />
+                            <span className="shrink-0 h-1.5 w-1.5 rounded-full bg-red-500 mt-1.5" />
                           )}
                         </div>
 
                         {/* Message */}
-                        <p className="text-sm text-muted-foreground leading-relaxed">
+                        <p className="text-xs text-muted-foreground leading-snug">
                           {notification.message}
                         </p>
 
                         {/* Timestamp */}
-                        <p className="text-xs text-muted-foreground/60 pt-0.5">
-                          {formatNotificationTime(notification.createdAt)}
+                        <p className="text-[11px] text-muted-foreground/60">
+                          {formatNotificationTime(notification.createdAt, activeTimezone)}
                         </p>
 
                         {/* Inline action buttons - displayed below message */}
                         {inlineActions.length > 0 && (
-                          <div className="flex flex-wrap gap-2 pt-2">
+                          <div className="flex flex-wrap gap-1.5 pt-1.5">
                             {inlineActions.map((action, idx) => {
                               const ActionIcon = action.icon
                               return (
@@ -392,10 +329,10 @@ export function NotificationsDialog({ open, onOpenChange, timezone }: Notificati
                                   key={idx}
                                   variant="outline"
                                   size="sm"
-                                  className="h-7 px-2.5 text-xs font-medium"
+                                  className="h-6 px-2 text-[11px] font-medium"
                                   onClick={(e) => handleActionClick(e, action.href, notification.id, notification.isRead)}
                                 >
-                                  <ActionIcon className="h-3 w-3 mr-1.5" />
+                                  <ActionIcon className="h-3 w-3 mr-1" />
                                   {action.label}
                                 </Button>
                               )
@@ -410,6 +347,36 @@ export function NotificationsDialog({ open, onOpenChange, timezone }: Notificati
             </div>
           )}
         </ScrollArea>
+
+        {/* Footer with actions - only show when there are notifications */}
+        {notifications.length > 0 && (
+          <SheetFooter className="border-t bg-muted/30 grid grid-cols-2 gap-0 p-0">
+            <Button 
+              variant="ghost" 
+              size="sm" 
+              onClick={handleMarkAllAsRead}
+              disabled={unreadCount === 0}
+              className="h-10 rounded-none text-xs font-medium text-muted-foreground hover:text-foreground border-r"
+            >
+              <CheckCheck className="h-3.5 w-3.5 mr-1.5" />
+              Mark all read
+            </Button>
+            <Button 
+              variant="ghost" 
+              size="sm" 
+              onClick={handleClearAll}
+              disabled={isClearing}
+              className="h-10 rounded-none text-xs font-medium text-muted-foreground hover:text-destructive"
+            >
+              {isClearing ? (
+                <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+              )}
+              Clear all
+            </Button>
+          </SheetFooter>
+        )}
       </SheetContent>
     </Sheet>
   )

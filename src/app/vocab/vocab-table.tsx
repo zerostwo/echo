@@ -57,12 +57,14 @@ export function VocabTable<TData, TValue>({
   data,
   settings,
 }: DataTableProps<TData, TValue>) {
-  const uniquePos = useMemo(() => {
-    const posSet = new Set<string>()
+
+  // Get unique Collins levels from data
+  const uniqueCollins = useMemo(() => {
+    const collinsSet = new Set<number>()
     data.forEach((item: any) => {
-      if (item.pos) posSet.add(item.pos)
+      if (item.collins && item.collins > 0) collinsSet.add(item.collins)
     })
-    return Array.from(posSet).sort()
+    return Array.from(collinsSet).sort((a, b) => b - a) // Sort descending (5 stars first)
   }, [data])
 
   // Apply settings - filter out mastered words if setting is off
@@ -212,29 +214,67 @@ export function VocabTable<TData, TValue>({
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" className="border-dashed">
                   <Filter className="mr-2 h-4 w-4" />
-                  POS
+                  Collins
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuLabel>Filter by POS</DropdownMenuLabel>
+                <DropdownMenuLabel>Filter by Collins Level</DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                {uniquePos.map((pos) => {
-                  const filterValue = (table.getColumn("pos")?.getFilterValue() as string[]) || [];
+                {[5, 4, 3, 2, 1].map((level) => {
+                  const filterValue = (table.getColumn("collins")?.getFilterValue() as number[]) || [];
                   return (
                     <DropdownMenuCheckboxItem
-                      key={pos}
-                      checked={filterValue.includes(pos)}
+                      key={level}
+                      checked={filterValue.includes(level)}
                       onCheckedChange={(checked) => {
                         const newFilterValue = checked
-                          ? [...filterValue, pos]
-                          : filterValue.filter((val) => val !== pos);
-                        table.getColumn("pos")?.setFilterValue(newFilterValue.length ? newFilterValue : undefined);
+                          ? [...filterValue, level]
+                          : filterValue.filter((val) => val !== level);
+                        table.getColumn("collins")?.setFilterValue(newFilterValue.length ? newFilterValue : undefined);
                       }}
                     >
-                      {pos}
+                      <span className="text-yellow-500 mr-2">{"★".repeat(level)}</span>
+                      <span className="text-muted-foreground/30">{"★".repeat(5 - level)}</span>
                     </DropdownMenuCheckboxItem>
                   );
                 })}
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="border-dashed">
+                  <Filter className="mr-2 h-4 w-4" />
+                  Oxford
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuLabel>Filter by Oxford 3000</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuCheckboxItem
+                  checked={table.getColumn("oxford")?.getFilterValue() === true}
+                  onCheckedChange={(checked) => {
+                    if (checked) {
+                      table.getColumn("oxford")?.setFilterValue(true);
+                    } else {
+                      table.getColumn("oxford")?.setFilterValue(undefined);
+                    }
+                  }}
+                >
+                  <Badge variant="secondary" className="text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 mr-2">Oxford</Badge>
+                  Only Oxford 3000
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuCheckboxItem
+                  checked={table.getColumn("oxford")?.getFilterValue() === false}
+                  onCheckedChange={(checked) => {
+                    if (checked) {
+                      table.getColumn("oxford")?.setFilterValue(false);
+                    } else {
+                      table.getColumn("oxford")?.setFilterValue(undefined);
+                    }
+                  }}
+                >
+                  Exclude Oxford 3000
+                </DropdownMenuCheckboxItem>
               </DropdownMenuContent>
             </DropdownMenu>
             <DropdownMenu>
@@ -400,20 +440,40 @@ export const vocabColumns: ColumnDef<any>[] = [
     cell: ({ row }) => <span className="font-mono text-muted-foreground text-sm">{row.getValue("phonetic") || "-"}</span>
   },
   {
-    accessorKey: "pos",
-    header: "POS",
-    filterFn: (row, id, value) => {
-      return value.includes(row.getValue(id))
+    id: "frequency",
+    accessorFn: (row: any) => row.occurrences?.length || 0,
+    header: ({ column }) => {
+      return (
+        <Button
+          variant="ghost"
+          onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+        >
+          Frequency
+          <ArrowUpDown className="ml-2 h-4 w-4" />
+        </Button>
+      )
     },
     cell: ({ row }) => {
-        const pos = row.getValue("pos") as string;
-        if (!pos) return "-";
-        return <Badge variant="outline" className="font-normal text-xs italic">{pos}</Badge>
+      const freq = row.original.occurrences?.length || 0;
+      return (
+        <span className="font-medium text-center pl-4">
+          {freq}
+        </span>
+      );
+    },
+    sortingFn: (rowA, rowB) => {
+      const freqA = rowA.original.occurrences?.length || 0;
+      const freqB = rowB.original.occurrences?.length || 0;
+      return freqA - freqB;
     }
   },
   {
     accessorKey: "collins",
     header: "Level",
+    filterFn: (row, id, value) => {
+      const collins = row.getValue(id) as number;
+      return value.includes(collins);
+    },
     cell: ({ row }) => {
       const stars = row.getValue("collins") as number;
       if (!stars) return <span className="text-muted-foreground text-xs">-</span>;
@@ -423,6 +483,24 @@ export const vocabColumns: ColumnDef<any>[] = [
           <span className="text-muted-foreground/20">{"★".repeat(5 - stars)}</span>
         </div>
       );
+    }
+  },
+  {
+    accessorKey: "oxford",
+    header: "Oxford 3000",
+    filterFn: (row, id, value) => {
+      const oxford = row.getValue(id) as number;
+      if (value === true) return oxford === 1;
+      if (value === false) return oxford !== 1;
+      return true;
+    },
+    enableHiding: true,
+    cell: ({ row }) => {
+      const oxford = row.getValue("oxford") as number;
+      if (oxford === 1) {
+        return <Badge variant="secondary" className="text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">Oxford</Badge>;
+      }
+      return null;
     }
   },
   {

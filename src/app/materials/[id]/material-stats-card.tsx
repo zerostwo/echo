@@ -1,4 +1,8 @@
 
+"use client";
+
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Activity, BookOpen, Clock, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -21,7 +25,14 @@ interface MaterialStatsCardProps {
 }
 
 export function MaterialStatsCard({ material, vocabCount, wpm }: MaterialStatsCardProps) {
+    const router = useRouter();
     const isVideo = material.mimeType?.startsWith('video/');
+
+    useEffect(() => {
+        if (material.isProcessed) return;
+        const interval = setInterval(() => router.refresh(), 4000);
+        return () => clearInterval(interval);
+    }, [material.isProcessed, router]);
 
     return (
         <Card>
@@ -100,4 +111,3 @@ function formatDuration(seconds: number) {
     const secs = Math.floor(seconds % 60);
     return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
-

@@ -29,6 +29,7 @@ export function UploadMaterialDialog({ folderId }: UploadMaterialDialogProps) {
     
     setIsUploading(true);
     let successCount = 0;
+    const uploadedMaterials: { id: string; name: string }[] = [];
     
     try {
         toast.info(`Uploading ${files.length} file(s)...`);
@@ -36,6 +37,7 @@ export function UploadMaterialDialog({ folderId }: UploadMaterialDialogProps) {
         // Convert FileList/array to Array just in case
         const fileArray = Array.from(files);
         
+        // First, upload all files
         for (const file of fileArray) {
             const formData = new FormData();
             formData.append('file', file);
@@ -52,16 +54,8 @@ export function UploadMaterialDialog({ folderId }: UploadMaterialDialogProps) {
                 }
                 
                 successCount++;
-
                 if (res.materialId) {
-                     // Trigger transcription in background
-                     transcribeMaterial(res.materialId).then((transRes) => {
-                        if (transRes.error) {
-                            toast.error(`Transcription failed for ${file.name}: ${transRes.error}`);
-                        } else {
-                            toast.success(`Transcription started for ${file.name}`);
-                        }
-                    });
+                    uploadedMaterials.push({ id: res.materialId, name: file.name });
                 }
             } catch (fileError) {
                 console.error(`Error uploading ${file.name}`, fileError);
@@ -73,6 +67,28 @@ export function UploadMaterialDialog({ folderId }: UploadMaterialDialogProps) {
             toast.success(`Successfully uploaded ${successCount} file(s)`);
             setOpen(false);
             router.refresh();
+        }
+
+        // Then, process transcriptions sequentially (one at a time)
+        if (uploadedMaterials.length > 0) {
+            toast.info(`Starting transcription for ${uploadedMaterials.length} file(s)...`);
+            
+            // Process transcriptions one by one in the background
+            (async () => {
+                for (const material of uploadedMaterials) {
+                    try {
+                        const transRes = await transcribeMaterial(material.id);
+                        if (transRes.error) {
+                            toast.error(`Transcription failed for ${material.name}: ${transRes.error}`);
+                        } else {
+                            toast.success(`Transcription completed for ${material.name}`);
+                        }
+                    } catch (e) {
+                        console.error(`Transcription error for ${material.name}:`, e);
+                        toast.error(`Transcription error for ${material.name}`);
+                    }
+                }
+            })();
         }
         
     } catch (e) {

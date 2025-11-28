@@ -11,35 +11,48 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { restoreMaterial, permanentlyDeleteMaterial } from "@/actions/material-actions"
+import { restoreSentence, permanentlyDeleteSentence } from "@/actions/sentence-actions"
+import { restoreWord, permanentlyDeleteWord } from "@/actions/word-actions"
 import { toast } from "sonner"
 import { useRouter } from "next/navigation"
+import { TrashItem } from "./columns"
 
 interface TrashActionsMenuProps {
-  material: any
+  item: TrashItem
 }
 
-export function TrashActionsMenu({ material }: TrashActionsMenuProps) {
+export function TrashActionsMenu({ item }: TrashActionsMenuProps) {
   const router = useRouter()
 
   const handleRestore = async () => {
-    const result = await restoreMaterial(material.id)
+    const result = item.type === 'material'
+      ? await restoreMaterial(item.id)
+      : item.type === 'sentence'
+        ? await restoreSentence(item.id)
+        : await restoreWord(item.id)
+
     if (result.success) {
-      toast.success("Material restored")
+      toast.success("Item restored")
       router.refresh()
     } else {
-      toast.error("Failed to restore material")
+      toast.error(result.error || "Failed to restore item")
     }
   }
 
   const handleDelete = async () => {
-    if (!confirm("This will permanently delete the material and its transcript. This action cannot be undone.")) return
+    if (!confirm("This will permanently delete the item. This action cannot be undone.")) return
     
-    const result = await permanentlyDeleteMaterial(material.id)
+    const result = item.type === 'material'
+      ? await permanentlyDeleteMaterial(item.id)
+      : item.type === 'sentence'
+        ? await permanentlyDeleteSentence(item.id)
+        : await permanentlyDeleteWord(item.id)
+
     if (result.success) {
-        toast.success("Material deleted permanently")
+        toast.success("Item deleted permanently")
         router.refresh()
     } else {
-        toast.error("Failed to delete material")
+        toast.error(result.error || "Failed to delete item")
     }
   }
 
@@ -66,4 +79,3 @@ export function TrashActionsMenu({ material }: TrashActionsMenuProps) {
     </DropdownMenu>
   )
 }
-

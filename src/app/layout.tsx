@@ -10,6 +10,7 @@ import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/s
 import { Separator } from "@/components/ui/separator";
 import { DynamicBreadcrumb } from "@/components/dynamic-breadcrumb";
 import { BreadcrumbProvider } from "@/context/breadcrumb-context";
+import { UserSettingsProvider } from "@/components/user-settings-provider";
 import { headers } from "next/headers";
 
 const geistSans = Geist({
@@ -51,6 +52,7 @@ export default async function RootLayout({
   let username: string | null = null;
   let quota: number = 10737418240; // 10GB default
   let usedSpace: number = 0;
+  let materials: { id: string; title: string; folderId: string | null; mimeType?: string }[] = [];
   
   if (session?.user?.id) {
     const client = supabaseAdmin || supabase;
@@ -74,6 +76,23 @@ export default async function RootLayout({
         }
       }
     }
+    
+    // Fetch materials for the add materials dialog
+    const { data: materialsList } = await client
+      .from('materials')
+      .select('id, title, folder_id, mime_type')
+      .eq('user_id', session.user.id)
+      .is('deleted_at', null)
+      .order('title', { ascending: true });
+    
+    if (materialsList) {
+      materials = materialsList.map(m => ({
+        id: m.id,
+        title: m.title,
+        folderId: m.folder_id,
+        mimeType: m.mime_type,
+      }));
+    }
   }
   
   // Show sidebar only for logged in users on non-auth pages
@@ -85,32 +104,36 @@ export default async function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased h-full`}
         suppressHydrationWarning
       >
-        <BreadcrumbProvider>
-        {showSidebar ? (
-            <SidebarProvider>
-                <AppSidebar 
-                  user={{ ...session.user, twoFactorEnabled, displayName, username, quota, usedSpace } as any} 
-                  settings={userSettings} 
-                />
-                <SidebarInset>
-                    <header className="flex h-16 shrink-0 items-center gap-2 px-4 sticky top-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-                        <SidebarTrigger className="-ml-1" />
-                        <Separator orientation="vertical" className="mr-2 data-[orientation=vertical]:h-4" />
-                        <DynamicBreadcrumb folders={folders} />
-                        <div id="header-actions" className="ml-auto flex items-center gap-2 pointer-events-auto" />
-                    </header>
-                    <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
-                        {children}
-                    </div>
-                </SidebarInset>
-            </SidebarProvider>
-        ) : (
-            <main className="h-full">
-                {children}
-            </main>
-        )}
-        <Toaster />
-        </BreadcrumbProvider>
+        <UserSettingsProvider initialSettings={userSettings}>
+          <BreadcrumbProvider>
+          {showSidebar ? (
+              <SidebarProvider>
+                  <AppSidebar 
+                    user={{ ...session.user, twoFactorEnabled, displayName, username, quota, usedSpace } as any} 
+                    settings={userSettings}
+                    folders={folders}
+                    materials={materials}
+                  />
+                  <SidebarInset>
+                      <header className="flex h-16 shrink-0 items-center gap-2 px-4 sticky top-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+                          <SidebarTrigger className="-ml-1" />
+                          <Separator orientation="vertical" className="mr-2 data-[orientation=vertical]:h-4" />
+                          <DynamicBreadcrumb folders={folders} />
+                          <div id="header-actions" className="ml-auto flex items-center gap-2 pointer-events-auto" />
+                      </header>
+                      <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
+                          {children}
+                      </div>
+                  </SidebarInset>
+              </SidebarProvider>
+          ) : (
+              <main className="h-full">
+                  {children}
+              </main>
+          )}
+          <Toaster />
+          </BreadcrumbProvider>
+        </UserSettingsProvider>
       </body>
     </html>
   );

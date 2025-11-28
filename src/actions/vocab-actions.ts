@@ -7,10 +7,42 @@ import { promisify } from 'util';
 import path from 'path';
 import { startOfDay } from 'date-fns';
 import { randomUUID } from 'crypto';
+import { revalidatePath } from 'next/cache';
 
 const execFileAsync = promisify(execFile);
+const INTERNAL_REVALIDATE_TOKEN = process.env.INTERNAL_REVALIDATE_TOKEN;
 
-async function queryDictionary(wordList: string[]) {
+function safeRevalidate(paths: string[]) {
+    for (const path of paths) {
+        try {
+            revalidatePath(path);
+        } catch (err) {
+            console.warn(`[revalidate] Failed for ${path}:`, err);
+        }
+    }
+}
+
+const revalidateInBackground = async (paths: string[]) => {
+    const baseUrl =
+        process.env.NEXT_PUBLIC_SITE_URL ||
+        process.env.SITE_URL ||
+        (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : `http://localhost:${process.env.PORT || 3000}`);
+
+    try {
+        await fetch(`${baseUrl}/api/revalidate-paths`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+                ...(INTERNAL_REVALIDATE_TOKEN ? { 'x-revalidate-token': INTERNAL_REVALIDATE_TOKEN } : {}),
+            },
+            body: JSON.stringify({ paths }),
+        });
+    } catch (err) {
+        console.warn('[revalidate] Background revalidation failed:', err);
+    }
+};
+
+export async function queryDictionary(wordList: string[]) {
     if (wordList.length === 0) return {};
 
     const scriptPath = path.join(process.cwd(), 'scripts', 'query_dict.py');
@@ -43,6 +75,17 @@ async function queryDictionary(wordList: string[]) {
     }
 }
 
+/**
+ * Optimized vocabulary extraction with word reuse.
+ * 
+ * Strategy:
+ * 1. Extract raw words from sentences
+ * 2. Check database for existing words (by lemma text) - skip dictionary lookup for these
+ * 3. Only query dictionary for words not in database
+ * 4. Insert new words, reuse existing word IDs
+ * 5. Create word occurrences linking words to sentences
+ * 6. Words are NEVER deleted when material is deleted - only occurrences are removed
+ */
 export async function extractVocabulary(materialId: string) {
   const session = await auth();
   if (!session?.user?.id) return { error: 'Unauthorized' };
@@ -62,8 +105,8 @@ export async function extractVocabulary(materialId: string) {
     }
     
     // Sentences might be null or array, handle it
-    const sentences = material.sentences || [];
-    console.log(`[extractVocabulary] Found ${sentences.length} sentences for material ${materialId}`);
+    const sentences = (material.sentences || []).filter((s: any) => !s.deleted_at);
+    console.log(`[extractVocabulary] Found ${sentences.length} active sentences for material ${materialId}`);
 
     // 2. Extract raw words from sentences
     const rawWords = new Set<string>();
@@ -71,7 +114,8 @@ export async function extractVocabulary(materialId: string) {
 
     for (const sentence of sentences) {
         // Basic tokenization
-        const words = sentence.content
+        const content = sentence.edited_content ?? sentence.content;
+        const words = content
             .toLowerCase()
             .replace(/[.,/#!$%^&*;:{}=\-_`~()?"'\\\[\]|<>@]/g, " ")
             .split(/\s+/)
@@ -83,32 +127,28 @@ export async function extractVocabulary(materialId: string) {
         }
     }
 
-    // 3. Query Dictionary to find Lemmas
     const rawWordList = Array.from(rawWords);
     console.log(`[extractVocabulary] Extracted ${rawWordList.length} unique raw words.`);
+    
+    let totalDuration = 0;
+    const startTime = Date.now();
+
+    // 3. First, check which lemmas already exist in database
+    // We need to get lemmas from raw words first via dictionary, then check DB
+    // But optimization: batch query dictionary, then batch check DB
+    
     const batchSize = 100;
     let dictResults: Record<string, any> = {};
-    let totalDuration = 0;
     
     for (let i = 0; i < rawWordList.length; i += batchSize) {
         const batch = rawWordList.slice(i, i + batchSize);
-        const start = Date.now();
         const batchRes = await queryDictionary(batch);
-        const end = Date.now();
-        totalDuration += (end - start) / 1000;
-        
         dictResults = { ...dictResults, ...batchRes };
     }
-
-    // Update Material with extraction time
-    await client
-        .from('materials')
-        .update({ vocab_extraction_time: totalDuration })
-        .eq('id', materialId);
-
-    const processedWords = new Set<string>();
-    const lemmaMap = new Map<string, any>(); // lemmaText -> data
-    const rawToLemma = new Map<string, string>(); // raw -> lemmaText
+    
+    // Build lemma map
+    const lemmaMap = new Map<string, any>(); // lemmaText -> dict data
+    const rawToLemma = new Map<string, string>(); // raw word -> lemma text
     
     for (const raw of rawWordList) {
         const data = dictResults[raw];
@@ -119,15 +159,46 @@ export async function extractVocabulary(materialId: string) {
         }
     }
     
-    // 4. Upsert Lemmas into Word table
-    const lemmaToId = new Map<string, string>();
-    let newWordsCount = 0;
+    const lemmaTexts = Array.from(lemmaMap.keys());
+    console.log(`[extractVocabulary] Found ${lemmaTexts.length} unique lemmas.`);
+
+    // 4. Check which lemmas already exist in database
+    // Batch query to find existing words (exclude soft-deleted ones)
+    const existingWords = new Map<string, string>(); // text -> id
     
-    for (const [lemma, data] of lemmaMap.entries()) {
-        const d = data;
+    if (lemmaTexts.length > 0) {
+        // Query in batches to avoid hitting query limits
+        for (let i = 0; i < lemmaTexts.length; i += 500) {
+            const batch = lemmaTexts.slice(i, i + 500);
+            const { data: existingBatch } = await client
+                .from('words')
+                .select('id, text')
+                .in('text', batch)
+                .is('deleted_at', null);  // Only get non-deleted words
+            
+            if (existingBatch) {
+                for (const word of existingBatch) {
+                    existingWords.set(word.text, word.id);
+                }
+            }
+        }
+    }
+    
+    console.log(`[extractVocabulary] Found ${existingWords.size} existing words in database.`);
+    const newLemmasToInsert = lemmaTexts.filter(text => !existingWords.has(text));
+    console.log(`[extractVocabulary] Need to insert ${newLemmasToInsert.length} new words.`);
+
+    // 5. Insert only new words (words that don't exist in database)
+    const lemmaToId = new Map<string, string>(existingWords); // Start with existing
+    
+    // Batch insert new words for better performance
+    const wordsToInsert = [];
+    for (const lemma of newLemmasToInsert) {
+        const d = lemmaMap.get(lemma);
+        if (!d) continue;
         
-        const wordData = {
-            id: randomUUID(), // Ensure ID for new inserts
+        wordsToInsert.push({
+            id: randomUUID(),
             text: lemma,
             phonetic: d.phonetic,
             translation: d.translation,
@@ -141,111 +212,174 @@ export async function extractVocabulary(materialId: string) {
             exchange: d.exchange,
             audio: d.audio,
             detail: d.detail ? JSON.stringify(d.detail) : null,
-        };
+            deleted_at: null,
+        });
+    }
 
-        // Upsert word
-        const { data: word, error: upsertError } = await client
-            .from('words')
-            .upsert(wordData, { onConflict: 'text' })
-            .select('id')
-            .single();
+    // Insert words in batches
+    if (wordsToInsert.length > 0) {
+        for (let i = 0; i < wordsToInsert.length; i += 100) {
+            const batch = wordsToInsert.slice(i, i + 100);
+            const { error: insertError } = await client
+                .from('words')
+                .upsert(batch, { onConflict: 'text', ignoreDuplicates: true });
 
-        if (upsertError || !word) {
-            console.error("Failed to upsert word:", lemma, upsertError);
-            continue;
+            if (insertError) {
+                console.error("Failed to insert word batch:", insertError);
+            }
         }
         
-        lemmaToId.set(lemma, word.id);
-        processedWords.add(lemma);
-
-        // Initialize UserWordStatus if it doesn't exist
-        // Use select first to check existence (or upsert if we assume default status is NEW)
-        // We want to KEEP existing status if it exists.
-        // So simple upsert won't work unless we read first, or use ON CONFLICT DO NOTHING
-        // Supabase upsert with `ignoreDuplicates: true` does exactly "ON CONFLICT DO NOTHING"
-        
-        const { error: statusError } = await client
-            .from('user_word_statuses')
-            .upsert({
-                id: randomUUID(),
-                user_id: session.user.id,
-                word_id: word.id,
-                status: "NEW",
-                updated_at: new Date().toISOString()
-            }, { onConflict: 'user_id, word_id', ignoreDuplicates: true });
+        // After insertion, query back to get the actual IDs (handles race conditions)
+        const insertedTexts = wordsToInsert.map(w => w.text);
+        for (let i = 0; i < insertedTexts.length; i += 500) {
+            const batch = insertedTexts.slice(i, i + 500);
+            const { data: insertedWords } = await client
+                .from('words')
+                .select('id, text')
+                .in('text', batch)
+                .is('deleted_at', null);
             
-        if (!statusError) {
-            // If we successfully inserted (or ignored), we count it as processed
-            // But how do we know if it was NEWly created for counting?
-            // We can query to check. For stat accuracy:
-            
-            const { data: existingStatus } = await client
-                .from('user_word_statuses')
-                .select('id')
-                .eq('user_id', session.user.id)
-                .eq('word_id', word.id)
-                .single();
-                
-            // This logic is flawed because upsert happened before.
-            // Correct way: Check existence BEFORE upsert.
-            // But for now, we will assume if we upserted with ignoreDuplicates, 
-            // the count requires knowing if it was inserted.
-            // Let's just skip strict counting for optimization or assume we count all "NEW" statuses found later?
-            // Reverting to check-then-create pattern for accurate counting:
-            
-            // Actually, simpler:
-            const { data: currentStatus } = await client
-                 .from('user_word_statuses')
-                 .select('id')
-                 .eq('user_id', session.user.id)
-                 .eq('word_id', word.id)
-                 .maybeSingle();
-                 
-            if (!currentStatus) {
-                 await client.from('user_word_statuses').insert({
-                     id: randomUUID(),
-                     user_id: session.user.id,
-                     word_id: word.id,
-                     status: "NEW"
-                 });
-                 newWordsCount++;
+            if (insertedWords) {
+                for (const word of insertedWords) {
+                    lemmaToId.set(word.text, word.id);
+                }
             }
         }
     }
     
-    // 5. Create Occurrences
-    console.log(`[extractVocabulary] Processing ${lemmaMap.size} lemmas.`);
+    console.log(`[extractVocabulary] Total words in lemmaToId: ${lemmaToId.size}`);
+
+    // 6. Create/Update UserWordStatus for this user
+    // Only create NEW status if user doesn't have one for this word
+    let newWordsCount = 0;
+    const wordIdsToCheck = Array.from(lemmaToId.values());
+    
+    // Verify these word IDs actually exist in the database before proceeding
+    const verifiedWordIds = new Set<string>();
+    if (wordIdsToCheck.length > 0) {
+        for (let i = 0; i < wordIdsToCheck.length; i += 500) {
+            const batch = wordIdsToCheck.slice(i, i + 500);
+            const { data: verifiedBatch } = await client
+                .from('words')
+                .select('id')
+                .in('id', batch)
+                .is('deleted_at', null);
+            
+            if (verifiedBatch) {
+                for (const w of verifiedBatch) {
+                    verifiedWordIds.add(w.id);
+                }
+            }
+        }
+    }
+    
+    console.log(`[extractVocabulary] Verified ${verifiedWordIds.size} word IDs exist in database.`);
+    
+    // Batch check existing statuses
+    const existingStatuses = new Set<string>(); // word_ids that already have status for this user
+    const verifiedWordIdArray = Array.from(verifiedWordIds);
+    
+    if (verifiedWordIdArray.length > 0) {
+        for (let i = 0; i < verifiedWordIdArray.length; i += 500) {
+            const batch = verifiedWordIdArray.slice(i, i + 500);
+            const { data: statusBatch } = await client
+                .from('user_word_statuses')
+                .select('word_id')
+                .eq('user_id', session.user.id)
+                .in('word_id', batch);
+            
+            if (statusBatch) {
+                for (const s of statusBatch) {
+                    existingStatuses.add(s.word_id);
+                }
+            }
+        }
+    }
+    
+    // Create statuses for words that don't have one (only for verified word IDs)
+    const statusesToInsert = [];
+    for (const wordId of verifiedWordIds) {
+        if (!existingStatuses.has(wordId)) {
+            statusesToInsert.push({
+                id: randomUUID(),
+                user_id: session.user.id,
+                word_id: wordId,
+                status: "NEW",
+                updated_at: new Date().toISOString()
+            });
+        }
+    }
+    
+    if (statusesToInsert.length > 0) {
+        // Batch insert in chunks - use upsert with ignoreDuplicates to handle race conditions
+        for (let i = 0; i < statusesToInsert.length; i += 500) {
+            const batch = statusesToInsert.slice(i, i + 500);
+            const { error: insertError } = await client
+                .from('user_word_statuses')
+                .upsert(batch, { 
+                    onConflict: 'user_id,word_id',
+                    ignoreDuplicates: true 
+                });
+            
+            if (insertError) {
+                console.error("Error inserting word statuses:", insertError);
+            }
+        }
+        newWordsCount = statusesToInsert.length;
+    }
+    
+    console.log(`[extractVocabulary] Created ${newWordsCount} new word statuses for user.`);
+
+    // 7. Create Word Occurrences (only for verified word IDs)
     const occurrencesData = [];
     
     for (const { sentenceId, rawWord } of sentenceWords) {
         const lemma = rawToLemma.get(rawWord);
         if (lemma && lemmaToId.has(lemma)) {
-            occurrencesData.push({
-                id: randomUUID(),
-                word_id: lemmaToId.get(lemma)!,
-                sentence_id: sentenceId
-            });
+            const wordId = lemmaToId.get(lemma)!;
+            // Only add if the word ID was verified to exist
+            if (verifiedWordIds.has(wordId)) {
+                occurrencesData.push({
+                    id: randomUUID(),
+                    word_id: wordId,
+                    sentence_id: sentenceId
+                });
+            }
         }
     }
+    
+    console.log(`[extractVocabulary] Creating ${occurrencesData.length} word occurrences.`);
     
     if (occurrencesData.length > 0) {
         const sentenceIds = sentences.map((s: any) => s.id);
         
-        // Delete existing occurrences for these sentences
+        // Delete existing occurrences for these sentences (re-processing case)
         await client
             .from('word_occurrences')
             .delete()
             .in('sentence_id', sentenceIds);
 
         // Batch insert new occurrences
-        const { error: occError } = await client
-            .from('word_occurrences')
-            .insert(occurrencesData);
-            
-        if (occError) console.error("Error inserting occurrences:", occError);
+        for (let i = 0; i < occurrencesData.length; i += 500) {
+            const batch = occurrencesData.slice(i, i + 500);
+            const { error: occError } = await client
+                .from('word_occurrences')
+                .insert(batch);
+                
+            if (occError) console.error("Error inserting occurrences:", occError);
+        }
     }
 
-    // 6. Update Daily Stats
+    const endTime = Date.now();
+    totalDuration = (endTime - startTime) / 1000;
+
+    // Update Material with extraction time
+    await client
+        .from('materials')
+        .update({ vocab_extraction_time: totalDuration })
+        .eq('id', materialId);
+
+    // 8. Update Daily Stats
     if (newWordsCount > 0) {
         const today = startOfDay(new Date()).toISOString();
         
@@ -273,7 +407,21 @@ export async function extractVocabulary(materialId: string) {
         }
     }
 
-    return { success: true, count: processedWords.size };
+    await revalidateInBackground([
+        '/vocab',
+        '/materials',
+        `/materials/${materialId}`
+    ]);
+
+    console.log(`[extractVocabulary] Completed in ${totalDuration.toFixed(2)}s. ` +
+        `Processed ${lemmaToId.size} words, ${newWordsCount} new for user.`);
+    
+    return { 
+        success: true, 
+        count: lemmaToId.size,
+        newWords: newWordsCount,
+        reusedWords: lemmaToId.size - newLemmasToInsert.length
+    };
 }
 
 export async function getMaterialVocab(materialId: string) {
@@ -289,7 +437,8 @@ export async function getMaterialVocab(materialId: string) {
     const { data: sentences } = await supabase
         .from('sentences')
         .select('id')
-        .eq('material_id', materialId);
+        .eq('material_id', materialId)
+        .is('deleted_at', null);
         
     if (!sentences || sentences.length === 0) return { words: [] };
     
@@ -317,6 +466,7 @@ export async function getMaterialVocab(materialId: string) {
             statuses:user_word_statuses(*)
         `)
         .in('id', wordIds)
+        .is('deleted_at', null)
         .order('text', { ascending: true });
         
     if (error) return { error: 'Failed to fetch words' };

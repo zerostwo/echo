@@ -22,6 +22,16 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog"
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import {
     Select,
     SelectContent,
     SelectItem,
@@ -39,6 +49,7 @@ export function MaterialActionsMenu({ material, folders }: MaterialActionsMenuPr
   const router = useRouter()
   const [isMoveOpen, setIsMoveOpen] = useState(false)
   const [isRenameOpen, setIsRenameOpen] = useState(false)
+  const [isDeleteOpen, setIsDeleteOpen] = useState(false)
   const [selectedFolderId, setSelectedFolderId] = useState<string>(material.folderId || "unfiled")
   const [newTitle, setNewTitle] = useState(material.title)
 
@@ -46,6 +57,7 @@ export function MaterialActionsMenu({ material, folders }: MaterialActionsMenuPr
     const result = await deleteMaterial(material.id)
     if (result.success) {
       toast.success("Material moved to trash")
+      setIsDeleteOpen(false)
     } else {
       toast.error("Failed to delete material")
     }
@@ -98,12 +110,29 @@ export function MaterialActionsMenu({ material, folders }: MaterialActionsMenuPr
             Move to Folder
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={handleDelete} className="text-red-600">
+          <DropdownMenuItem onClick={() => setIsDeleteOpen(true)} className="text-red-600">
             <Trash className="mr-2 h-4 w-4" />
             Delete
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+
+      <AlertDialog open={isDeleteOpen} onOpenChange={setIsDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete &quot;{material.title}&quot;?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will move the material to trash. You can restore it later from the trash.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDelete} className="bg-red-600 hover:bg-red-700">
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog open={isRenameOpen} onOpenChange={setIsRenameOpen}>
         <DialogContent>

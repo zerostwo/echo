@@ -32,6 +32,16 @@ import {
     DialogFooter,
 } from "@/components/ui/dialog"
 import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import {
     Select,
     SelectContent,
     SelectItem,
@@ -76,12 +86,12 @@ export function DataTable<TData, TValue>({
   // Action States
   const [isMoveOpen, setIsMoveOpen] = useState(false)
   const [isRenameOpen, setIsRenameOpen] = useState(false)
+  const [isDeleteOpen, setIsDeleteOpen] = useState(false)
   const [targetFolderId, setTargetFolderId] = useState<string>("unfiled")
   const [newName, setNewName] = useState("")
 
   async function handleBulkDelete() {
-      if (!confirm(`Are you sure you want to delete ${selectedCount} item${selectedCount > 1 ? 's' : ''}?`)) return;
-      
+      setIsDeleteOpen(false);
       const toastId = toast.loading(`Deleting ${selectedCount} items...`);
       let successCount = 0;
       for (const row of selectedRows) {
@@ -166,7 +176,7 @@ export function DataTable<TData, TValue>({
                   Move
               </Button>
               
-              <Button variant="ghost" size="sm" className="text-red-600 hover:text-red-700 hover:bg-red-50" onClick={handleBulkDelete}>
+              <Button variant="ghost" size="sm" className="text-red-600 hover:text-red-700 hover:bg-red-50" onClick={() => setIsDeleteOpen(true)}>
                   <Trash className="h-4 w-4 mr-2" />
                   Delete
               </Button>
@@ -293,6 +303,23 @@ export function DataTable<TData, TValue>({
             </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={isDeleteOpen} onOpenChange={setIsDeleteOpen}>
+        <AlertDialogContent>
+            <AlertDialogHeader>
+                <AlertDialogTitle>Delete {selectedCount} item{selectedCount > 1 ? 's' : ''}?</AlertDialogTitle>
+                <AlertDialogDescription>
+                    This will move the selected item{selectedCount > 1 ? 's' : ''} to trash. You can restore them later from the trash.
+                </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction onClick={handleBulkDelete} className="bg-red-600 hover:bg-red-700">
+                    Delete
+                </AlertDialogAction>
+            </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

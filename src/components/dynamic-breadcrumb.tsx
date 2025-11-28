@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/breadcrumb"
 import React from "react"
 import { useBreadcrumb } from "@/context/breadcrumb-context"
+import { getFolderPath } from "@/lib/folder-utils"
 
 interface DynamicBreadcrumbProps {
   folders: any[]
@@ -22,8 +23,12 @@ export function DynamicBreadcrumb({ folders }: DynamicBreadcrumbProps) {
   const { items: contextItems } = useBreadcrumb()
   
   const getBreadcrumbs = () => {
-    // If context items are set (e.g. from Material Detail page), use them
-    if (contextItems && contextItems.length > 0) {
+    // Only use context items for pages that explicitly set them via SetBreadcrumbs
+    // This prevents stale breadcrumbs from persisting across navigations
+    const shouldUseContextItems = pathname.match(/^\/materials\/[^/]+/) || // /materials/[id]
+                                  pathname.match(/^\/listening\//)  // listening pages
+    
+    if (shouldUseContextItems && contextItems && contextItems.length > 0) {
         return contextItems;
     }
 
@@ -50,12 +55,28 @@ export function DynamicBreadcrumb({ folders }: DynamicBreadcrumbProps) {
       // Handle /materials?folderId=...
       if (pathname === "/materials") {
           const folderId = searchParams.get("folderId")
-          if (folderId) {
-              const folder = folders?.find((f: any) => f.id === folderId)
-              return [
+          if (folderId && folders?.length > 0) {
+              // Get full folder path from root to current folder
+              const folderPath = getFolderPath(folders, folderId)
+              
+              const items: { title: string; href?: string }[] = [
                   { title: "Materials", href: "/materials" },
-                  { title: folder ? folder.name : "Folder" }
               ]
+              
+              // Add each folder in the path
+              folderPath.forEach((folder, index) => {
+                const isLast = index === folderPath.length - 1
+                if (isLast) {
+                  items.push({ title: folder.name })
+                } else {
+                  items.push({ 
+                    title: folder.name, 
+                    href: `/materials?folderId=${folder.id}` 
+                  })
+                }
+              })
+              
+              return items
           }
           return [{ title: "Materials" }]
       }

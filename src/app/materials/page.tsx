@@ -46,7 +46,7 @@ export default async function MaterialsPage({ searchParams }: { searchParams: Pr
 
   // Process materials to calculate stats
   const processedMaterials = (materials || []).map((m: any) => {
-      const sentences = m.sentences || [];
+      const sentences = (m.sentences || []).filter((s: any) => !s.deleted_at);
       // Calculate Practice Stats
       const totalSentences = sentences.length;
       const practicedSentences = sentences.filter((s: any) => s.practices && s.practices.length > 0).length;

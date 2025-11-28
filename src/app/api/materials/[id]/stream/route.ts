@@ -82,12 +82,29 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     }
 
     // Generate signed URL
-    const { data, error } = await client.storage
-        .from('echo')
-        .createSignedUrl(filePath, 3600); // 1 hour validity
+    const storageBucketsToTry = ['materials', 'echo'];
+    let signedUrlData: { signedUrl: string } | null = null;
+    let signedUrlError: any = null;
+    let bucketUsed: string | null = null;
 
-    if (error || !data?.signedUrl) {
-        console.error("Failed to create signed URL:", error);
+    for (const bucket of storageBucketsToTry) {
+        const { data, error } = await client.storage
+            .from(bucket)
+            .createSignedUrl(filePath, 3600); // 1 hour validity
+
+        if (!error && data?.signedUrl) {
+            signedUrlData = data;
+            bucketUsed = bucket;
+            break;
+        }
+
+        if (error) {
+            signedUrlError = error;
+        }
+    }
+
+    if (!signedUrlData?.signedUrl) {
+        console.error("Failed to create signed URL:", signedUrlError);
         console.error("FilePath:", filePath);
         return new NextResponse('File not found in storage', { status: 404 });
     }
@@ -103,14 +120,14 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
             fetchHeaders['Range'] = range;
         }
 
-        console.log(`[Stream] Proxying request to: ${data.signedUrl}`);
-        const upstreamResponse = await fetch(data.signedUrl, {
+        console.log(`[Stream] Proxying request to: ${signedUrlData.signedUrl} (bucket: ${bucketUsed})`);
+        const upstreamResponse = await fetch(signedUrlData.signedUrl, {
             headers: fetchHeaders
         });
 
         if (!upstreamResponse.ok) {
             console.error(`Upstream fetch failed: ${upstreamResponse.status} ${upstreamResponse.statusText}`);
-            console.error(`URL was: ${data.signedUrl}`);
+            console.error(`URL was: ${signedUrlData.signedUrl}`);
             return new NextResponse('Failed to fetch file from storage', { status: upstreamResponse.status });
         }
 

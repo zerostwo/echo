@@ -57,10 +57,12 @@ model Folder {
   parent    Folder?    @relation("FolderHierarchy", fields: [parentId], references: [id])
   children  Folder[]   @relation("FolderHierarchy")
   materials Material[]
+  order     Int        @default(0)
   createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime   @updatedAt @map("updated_at") @db.Timestamptz
   deletedAt DateTime?  @map("deleted_at") @db.Timestamptz
 
+  @@index([userId, parentId, order], name: "folders_user_parent_order_idx")
   @@map("folders")
 }
 
@@ -80,8 +82,15 @@ model Material {
   
   sentences   Sentence[]
   isProcessed Boolean    @default(false) @map("is_processed") // True if Whisper has finished
-  transcriptionModel String? @map("transcription_model")
+  
+  // Transcription settings - records how this material was transcribed
+  transcriptionEngine String? @map("transcription_engine") // "faster-whisper" or "openai-whisper"
+  transcriptionModel String? @map("transcription_model") // Model name (tiny, base, small, etc.)
+  transcriptionLanguage String? @map("transcription_language") // Detected or specified language
+  transcriptionVadFilter Boolean? @map("transcription_vad_filter") // Whether VAD filter was used
+  transcriptionComputeType String? @map("transcription_compute_type") // Compute type used
   transcriptionTime Float? @map("transcription_time") // Duration in seconds
+  
   vocabExtractionTime Float? @map("vocab_extraction_time") // Duration in seconds for vocabulary extraction
   createdAt   DateTime   @default(now()) @map("created_at") @db.Timestamptz
   updatedAt   DateTime   @updatedAt @map("updated_at") @db.Timestamptz
@@ -98,6 +107,10 @@ model Sentence {
   startTime   Float    @map("start_time")
   endTime     Float    @map("end_time")
   content     String
+  editedContent String? @map("edited_content")
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz
   
   occurrences WordOccurrence[]
   practices   PracticeProgress[]
@@ -123,6 +136,7 @@ model Word {
   exchange    String?
   audio       String?
   detail      String?          // JSON string or plain text detail
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz
 
   occurrences WordOccurrence[]
   statuses    UserWordStatus[]

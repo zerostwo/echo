@@ -1,7 +1,6 @@
 "use client"
 
 import {
-  ColumnDef,
   flexRender,
   getCoreRowModel,
   useReactTable,
@@ -20,10 +19,12 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Button } from "@/components/ui/button"
-import { useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { RefreshCw, Trash2, X } from "lucide-react"
 import { toast } from "sonner"
 import { restoreMaterial, permanentlyDeleteMaterial } from "@/actions/material-actions"
+import { restoreSentence, permanentlyDeleteSentence } from "@/actions/sentence-actions"
+import { restoreWord, permanentlyDeleteWord } from "@/actions/word-actions"
 import { useRouter } from "next/navigation"
 import {
     AlertDialog,
@@ -35,26 +36,37 @@ import {
     AlertDialogHeader,
     AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import { TrashItem, buildTrashColumns } from "./columns"
+import { useUserSettings } from "../user-settings-provider"
 
-interface TrashDataTableProps<TData, TValue> {
-  columns: ColumnDef<TData, TValue>[]
-  data: TData[]
+interface TrashDataTableProps {
+  data: TrashItem[]
 }
 
-export function TrashDataTable<TData, TValue>({
-  columns,
+export function TrashDataTable({
   data,
-}: TrashDataTableProps<TData, TValue>) {
+}: TrashDataTableProps) {
   const [sorting, setSorting] = useState<SortingState>([])
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [isRestoring, setIsRestoring] = useState(false)
+  const [typeFilter, setTypeFilter] = useState<'all' | 'material' | 'sentence' | 'word'>('all')
   const router = useRouter()
+  const { timezone } = useUserSettings()
+
+  useEffect(() => {
+    setRowSelection({})
+  }, [typeFilter])
+
+  const filteredData = useMemo(() => {
+    if (typeFilter === 'all') return data
+    return data.filter((item) => item.type === typeFilter)
+  }, [data, typeFilter])
 
   const table = useReactTable({
-    data,
-    columns,
+    data: filteredData,
+    columns: useMemo(() => buildTrashColumns(timezone), [timezone]),
     getCoreRowModel: getCoreRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
     onSortingChange: setSorting,
@@ -66,6 +78,8 @@ export function TrashDataTable<TData, TValue>({
     },
   })
 
+  const emptyColSpan = table.getVisibleFlatColumns().length || 1
+
   const selectedRows = table.getFilteredSelectedRowModel().rows
   const selectedCount = selectedRows.length
 
@@ -75,8 +89,12 @@ export function TrashDataTable<TData, TValue>({
     
     let successCount = 0
     for (const row of selectedRows) {
-      // @ts-ignore
-      const res = await restoreMaterial(row.original.id)
+      const item = row.original as TrashItem
+      const res = item.type === 'material'
+        ? await restoreMaterial(item.id)
+        : item.type === 'sentence'
+          ? await restoreSentence(item.id)
+          : await restoreWord(item.id)
       if (res.success) successCount++
     }
     
@@ -96,8 +114,12 @@ export function TrashDataTable<TData, TValue>({
     
     let successCount = 0
     for (const row of selectedRows) {
-      // @ts-ignore
-      const res = await permanentlyDeleteMaterial(row.original.id)
+      const item = row.original as TrashItem
+      const res = item.type === 'material'
+        ? await permanentlyDeleteMaterial(item.id)
+        : item.type === 'sentence'
+          ? await permanentlyDeleteSentence(item.id)
+          : await permanentlyDeleteWord(item.id)
       if (res.success) successCount++
     }
     
@@ -114,6 +136,24 @@ export function TrashDataTable<TData, TValue>({
 
   return (
     <div>
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-muted-foreground">Filter by:</span>
+          <div className="flex items-center gap-2">
+            {(['all', 'material', 'sentence', 'word'] as const).map((type) => (
+              <Button
+                key={type}
+                variant={typeFilter === type ? "default" : "outline"}
+                size="sm"
+                className="h-8"
+                onClick={() => setTypeFilter(type)}
+              >
+                {type === 'all' ? 'All' : type.charAt(0).toUpperCase() + type.slice(1)}
+              </Button>
+            ))}
+          </div>
+        </div>
+      </div>
       {selectedCount > 0 && (
         <div className="flex items-center gap-2 p-2 bg-muted/50 rounded-md mb-2 animate-in fade-in slide-in-from-top-1">
           <span className="text-sm font-medium ml-2">{selectedCount} selected</span>
@@ -182,7 +222,7 @@ export function TrashDataTable<TData, TValue>({
               ))
             ) : (
               <TableRow>
-                <TableCell colSpan={columns.length} className="h-24 text-center">
+                <TableCell colSpan={emptyColSpan} className="h-24 text-center">
                   No results.
                 </TableCell>
               </TableRow>
@@ -240,4 +280,3 @@ export function TrashDataTable<TData, TValue>({
     </div>
   )
 }
-

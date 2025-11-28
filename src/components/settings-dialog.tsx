@@ -34,8 +34,14 @@ import { AccountForm } from "@/components/account-form"
 import { SecuritySettings } from "@/components/settings/security-settings"
 import { updateSettings } from "@/actions/user-actions"
 import { toast } from "sonner"
-import { Loader2, Settings, User, Book, Bell, Shield } from "lucide-react"
+import { Loader2, Settings, User, Book, Bell, Shield, Info } from "lucide-react"
 import { cn } from "@/lib/utils"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 
 interface SettingsDialogProps {
   open: boolean
@@ -45,13 +51,55 @@ interface SettingsDialogProps {
   defaultTab?: string
 }
 
+const WHISPER_ENGINES = [
+  { 
+    value: "faster-whisper", 
+    label: "Faster Whisper (Recommended)",
+    description: "Faster inference with VAD support"
+  },
+  { 
+    value: "openai-whisper", 
+    label: "OpenAI Whisper",
+    description: "Original OpenAI implementation"
+  },
+]
+
 const WHISPER_MODELS = [
-  { value: "tiny", label: "Tiny (Fastest, lowest accuracy)" },
-  { value: "base", label: "Base (Balanced)" },
-  { value: "small", label: "Small (Better accuracy)" },
-  { value: "medium", label: "Medium (Good accuracy, slower)" },
-  { value: "large", label: "Large (Best accuracy, slow)" },
-  { value: "turbo", label: "Turbo (Optimized)" },
+  { value: "tiny", label: "Tiny", description: "~1GB VRAM, fastest, lowest accuracy" },
+  { value: "base", label: "Base", description: "~1GB VRAM, balanced speed/accuracy" },
+  { value: "small", label: "Small", description: "~2GB VRAM, better accuracy" },
+  { value: "medium", label: "Medium", description: "~5GB VRAM, good accuracy" },
+  { value: "large-v2", label: "Large V2", description: "~10GB VRAM, best accuracy" },
+  { value: "large-v3", label: "Large V3", description: "~10GB VRAM, latest & best" },
+  { value: "turbo", label: "Turbo", description: "Optimized for speed (OpenAI only)" },
+]
+
+const COMPUTE_TYPES = [
+  { value: "auto", label: "Auto", description: "Automatically select best option" },
+  { value: "float16", label: "Float16", description: "GPU with FP16 support" },
+  { value: "int8", label: "Int8", description: "CPU or low-memory GPU" },
+  { value: "int8_float16", label: "Int8 + Float16", description: "Mixed precision" },
+]
+
+const DEVICES = [
+  { value: "auto", label: "Auto", description: "Use GPU if available" },
+  { value: "cuda", label: "CUDA GPU", description: "NVIDIA GPU acceleration" },
+  { value: "cpu", label: "CPU", description: "CPU only (slower)" },
+]
+
+const LANGUAGES = [
+  { value: "auto", label: "Auto Detect" },
+  { value: "en", label: "English" },
+  { value: "zh", label: "Chinese" },
+  { value: "es", label: "Spanish" },
+  { value: "fr", label: "French" },
+  { value: "de", label: "German" },
+  { value: "ja", label: "Japanese" },
+  { value: "ko", label: "Korean" },
+  { value: "ru", label: "Russian" },
+  { value: "pt", label: "Portuguese" },
+  { value: "it", label: "Italian" },
+  { value: "ar", label: "Arabic" },
 ]
 
 const VOCAB_COLUMNS = [
@@ -87,6 +135,21 @@ const TIMEZONES = [
   { value: "Australia/Melbourne", label: "Melbourne" },
   { value: "Pacific/Auckland", label: "Auckland" },
 ]
+
+function InfoTooltip({ children }: { children: React.ReactNode }) {
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Info className="h-4 w-4 text-muted-foreground cursor-help inline-block ml-1" />
+        </TooltipTrigger>
+        <TooltipContent className="max-w-xs">
+          {children}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  )
+}
 
 export function SettingsDialog({
   open,
@@ -128,6 +191,14 @@ export function SettingsDialog({
   const vocabSortBy = settings.vocabSortBy || "date_added"
   const vocabShowMastered = settings.vocabShowMastered ?? false
 
+  // Whisper settings with defaults
+  const whisperEngine = settings.whisperEngine || "faster-whisper"
+  const whisperModel = settings.whisperModel || "base"
+  const whisperLanguage = settings.whisperLanguage || "auto"
+  const whisperVadFilter = settings.whisperVadFilter ?? true
+  const whisperComputeType = settings.whisperComputeType || "auto"
+  const whisperDevice = settings.whisperDevice || "auto"
+
   const items = [
     {
       title: "General",
@@ -153,7 +224,7 @@ export function SettingsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="overflow-hidden p-0 md:h-[500px] md:max-h-[500px] md:max-w-[700px] lg:max-w-[800px]" showCloseButton={false}>
+      <DialogContent className="overflow-hidden p-0 md:h-[600px] md:max-h-[600px] md:max-w-[700px] lg:max-w-[800px]" showCloseButton={false}>
         <DialogTitle className="sr-only">Settings</DialogTitle>
         <DialogDescription className="sr-only">
           Customize your settings
@@ -235,28 +306,187 @@ export function SettingsDialog({
 
                   <Separator />
 
-                  <div className="space-y-2">
-                    <Label htmlFor="model">Whisper Model</Label>
-                    <Select
-                      value={settings.whisperModel || "base"}
-                      onValueChange={(value) =>
-                        setSettings({ ...settings, whisperModel: value })
-                      }
-                    >
-                      <SelectTrigger id="model">
-                        <SelectValue placeholder="Select a model" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {WHISPER_MODELS.map((model) => (
-                          <SelectItem key={model.value} value={model.value}>
-                            {model.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <p className="text-sm text-muted-foreground">
-                      Larger models provide better accuracy but take longer to process.
-                    </p>
+                  <div className="space-y-4">
+                    <h3 className="text-base font-medium">Whisper Transcription Settings</h3>
+                    
+                    <div className="space-y-2">
+                      <Label htmlFor="whisper-engine">
+                        Transcription Engine
+                        <InfoTooltip>
+                          Faster Whisper offers better performance and VAD support for filtering silence.
+                          OpenAI Whisper is the original implementation.
+                        </InfoTooltip>
+                      </Label>
+                      <Select
+                        value={whisperEngine}
+                        onValueChange={(value) =>
+                          setSettings({ ...settings, whisperEngine: value })
+                        }
+                      >
+                        <SelectTrigger id="whisper-engine">
+                          <SelectValue placeholder="Select engine">
+                            {WHISPER_ENGINES.find(e => e.value === whisperEngine)?.label}
+                          </SelectValue>
+                        </SelectTrigger>
+                        <SelectContent>
+                          {WHISPER_ENGINES.map((engine) => (
+                            <SelectItem key={engine.value} value={engine.value}>
+                              <div className="flex flex-col items-start">
+                                <span>{engine.label}</span>
+                                <span className="text-xs text-muted-foreground">{engine.description}</span>
+                              </div>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="whisper-model">
+                        Whisper Model
+                        <InfoTooltip>
+                          Larger models provide better accuracy but require more VRAM and take longer to process.
+                        </InfoTooltip>
+                      </Label>
+                      <Select
+                        value={whisperModel}
+                        onValueChange={(value) =>
+                          setSettings({ ...settings, whisperModel: value })
+                        }
+                      >
+                        <SelectTrigger id="whisper-model">
+                          <SelectValue placeholder="Select a model">
+                            {WHISPER_MODELS.find(m => m.value === whisperModel)?.label}
+                          </SelectValue>
+                        </SelectTrigger>
+                        <SelectContent>
+                          {WHISPER_MODELS.map((model) => (
+                            <SelectItem key={model.value} value={model.value}>
+                              <div className="flex flex-col items-start">
+                                <span>{model.label}</span>
+                                <span className="text-xs text-muted-foreground">{model.description}</span>
+                              </div>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="whisper-language">
+                        Language
+                        <InfoTooltip>
+                          Specify the audio language for better accuracy, or leave as Auto Detect.
+                        </InfoTooltip>
+                      </Label>
+                      <Select
+                        value={whisperLanguage}
+                        onValueChange={(value) => {
+                          // Store "auto" in settings, but pass undefined to transcription
+                          setSettings({ ...settings, whisperLanguage: value })
+                        }}
+                      >
+                        <SelectTrigger id="whisper-language">
+                          <SelectValue placeholder="Auto Detect" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {LANGUAGES.map((lang) => (
+                            <SelectItem key={lang.value} value={lang.value}>
+                              {lang.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {whisperEngine === "faster-whisper" && (
+                      <>
+                        <div className="flex items-center justify-between">
+                          <div className="space-y-0.5">
+                            <Label htmlFor="vad-filter">
+                              VAD Filter (Voice Activity Detection)
+                              <InfoTooltip>
+                                Automatically removes silent segments from audio before transcription,
+                                improving speed and accuracy.
+                              </InfoTooltip>
+                            </Label>
+                            <p className="text-sm text-muted-foreground">
+                              Filter out silence segments for better results.
+                            </p>
+                          </div>
+                          <Switch
+                            id="vad-filter"
+                            checked={whisperVadFilter}
+                            onCheckedChange={(checked) =>
+                              setSettings({ ...settings, whisperVadFilter: checked })
+                            }
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label htmlFor="compute-type">
+                            Compute Type
+                            <InfoTooltip>
+                              Controls precision/speed tradeoff. Float16 is fastest on GPU,
+                              Int8 works better on CPU or limited VRAM.
+                            </InfoTooltip>
+                          </Label>
+                          <Select
+                            value={whisperComputeType}
+                            onValueChange={(value) =>
+                              setSettings({ ...settings, whisperComputeType: value })
+                            }
+                          >
+                            <SelectTrigger id="compute-type">
+                              <SelectValue placeholder="Auto">
+                                {COMPUTE_TYPES.find(ct => ct.value === whisperComputeType)?.label}
+                              </SelectValue>
+                            </SelectTrigger>
+                            <SelectContent>
+                              {COMPUTE_TYPES.map((ct) => (
+                                <SelectItem key={ct.value} value={ct.value}>
+                                  <div className="flex flex-col items-start">
+                                    <span>{ct.label}</span>
+                                    <span className="text-xs text-muted-foreground">{ct.description}</span>
+                                  </div>
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label htmlFor="device">
+                            Device
+                            <InfoTooltip>
+                              Select which device to use for transcription. CUDA requires NVIDIA GPU.
+                            </InfoTooltip>
+                          </Label>
+                          <Select
+                            value={whisperDevice}
+                            onValueChange={(value) =>
+                              setSettings({ ...settings, whisperDevice: value })
+                            }
+                          >
+                            <SelectTrigger id="device">
+                              <SelectValue placeholder="Auto">
+                                {DEVICES.find(d => d.value === whisperDevice)?.label}
+                              </SelectValue>
+                            </SelectTrigger>
+                            <SelectContent>
+                              {DEVICES.map((d) => (
+                                <SelectItem key={d.value} value={d.value}>
+                                  <div className="flex flex-col items-start">
+                                    <span>{d.label}</span>
+                                    <span className="text-xs text-muted-foreground">{d.description}</span>
+                                  </div>
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
               )}
@@ -344,4 +574,3 @@ export function SettingsDialog({
     </Dialog>
   )
 }
-

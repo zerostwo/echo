@@ -24,6 +24,15 @@ import {
   SidebarRail,
 } from "@/components/ui/sidebar"
 import { NavUser } from "@/components/nav-user"
+import { SidebarFolderTree } from "@/components/sidebar"
+import type { Folder } from "@/lib/folder-utils"
+
+interface Material {
+  id: string
+  title: string
+  folderId: string | null
+  mimeType?: string
+}
 
 interface AppSidebarProps extends React.ComponentProps<typeof Sidebar> {
   user: {
@@ -37,9 +46,11 @@ interface AppSidebarProps extends React.ComponentProps<typeof Sidebar> {
     usedSpace?: number
   }
   settings?: any
+  folders?: Folder[]
+  materials?: Material[]
 }
 
-export function AppSidebar({ user, settings, ...props }: AppSidebarProps) {
+export function AppSidebar({ user, settings, folders = [], materials = [], ...props }: AppSidebarProps) {
   const pathname = usePathname()
 
   const navItems = [
@@ -96,6 +107,11 @@ export function AppSidebar({ user, settings, ...props }: AppSidebarProps) {
               ))}
             </SidebarMenu>
           </SidebarGroupContent>
+        </SidebarGroup>
+        
+        {/* Folder tree section - Always show for folder organization */}
+        <SidebarGroup className="flex-1 overflow-hidden">
+          <SidebarFolderTree folders={folders} materials={materials} />
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter>

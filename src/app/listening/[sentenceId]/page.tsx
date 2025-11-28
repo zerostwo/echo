@@ -24,7 +24,7 @@ export default async function ListeningPage({ params }: { params: Promise<{ sent
     .eq('id', sentenceId)
     .single();
   
-  if (error || !sentence || !sentence.material || sentence.material.user_id !== session.user.id) notFound();
+  if (error || !sentence || !sentence.material || sentence.material.user_id !== session.user.id || sentence.deleted_at) notFound();
 
   // Fetch ALL sentences for this material to ensure we can navigate correctly
   // This avoids complex RLS/query issues with single item fetching
@@ -32,6 +32,7 @@ export default async function ListeningPage({ params }: { params: Promise<{ sent
     .from('sentences')
     .select('id, order')
     .eq('material_id', sentence.material_id)
+    .is('deleted_at', null)
     .order('order', { ascending: true });
 
   let nextId = undefined;
@@ -52,6 +53,9 @@ export default async function ListeningPage({ params }: { params: Promise<{ sent
   // Map snake_case to camelCase
   const mappedSentence = {
     ...sentence,
+    content: sentence.edited_content ?? sentence.content,
+    originalContent: sentence.content,
+    editedContent: sentence.edited_content,
     startTime: sentence.start_time,
     endTime: sentence.end_time,
     materialId: sentence.material_id,

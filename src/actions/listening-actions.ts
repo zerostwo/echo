@@ -40,13 +40,18 @@ export async function evaluateDictation(sentenceId: string, userText: string, du
        console.error(`evaluateDictation: Material not found for sentence ID: ${sentenceId}`);
        return { error: 'Material not found' };
   }
+
+  if (sentence.deleted_at) {
+      return { error: 'Sentence is in trash' };
+  }
   
   if (sentence.material.user_id !== session.user.id) return { error: 'Unauthorized' };
 
   // Normalize for comparison
   const normalize = (s: string) => s.trim().toLowerCase().replace(/[.,/#!$%^&*;:{}=\-_`~()]/g,"");
   
-  const target = normalize(sentence.content);
+  const displayContent = sentence.edited_content ?? sentence.content;
+  const target = normalize(displayContent);
   const attempt = normalize(userText);
 
   const diff = Diff.diffWords(target, attempt);
@@ -168,6 +173,6 @@ export async function evaluateDictation(sentenceId: string, userText: string, du
       success: true,
       score,
       diff,
-      target: sentence.content
+      target: displayContent
   };
 }

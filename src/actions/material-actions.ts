@@ -14,6 +14,68 @@ import { startOfDay } from 'date-fns';
 import os from 'os';
 import { randomUUID } from 'crypto';
 
+const MATERIALS_BUCKET = 'materials';
+const INTERNAL_REVALIDATE_TOKEN = process.env.INTERNAL_REVALIDATE_TOKEN;
+const safeRevalidate = (paths: string[]) => {
+    for (const path of paths) {
+        try {
+            revalidatePath(path);
+        } catch (err) {
+            console.warn(`[revalidate] Failed for ${path}:`, err);
+        }
+    }
+};
+const revalidateInBackground = async (paths: string[]) => {
+    const baseUrl =
+        process.env.NEXT_PUBLIC_SITE_URL ||
+        process.env.SITE_URL ||
+        (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : `http://localhost:${process.env.PORT || 3000}`);
+
+    try {
+        await fetch(`${baseUrl}/api/revalidate-paths`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+                ...(INTERNAL_REVALIDATE_TOKEN ? { 'x-revalidate-token': INTERNAL_REVALIDATE_TOKEN } : {}),
+            },
+            body: JSON.stringify({ paths }),
+        });
+    } catch (err) {
+        console.warn('[revalidate] Background revalidation failed:', err);
+    }
+};
+const duplicateDateFormatter = new Intl.DateTimeFormat('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'UTC',
+});
+
+async function ensureMaterialsBucket() {
+    // Bucket creation requires the service role key
+    if (!supabaseAdmin) {
+        return { error: 'Supabase admin client is not configured to create storage buckets.' };
+    }
+
+    const { data: existingBucket } = await supabaseAdmin.storage.getBucket(MATERIALS_BUCKET);
+    if (existingBucket) return { success: true };
+
+    const { error: createError } = await supabaseAdmin.storage.createBucket(MATERIALS_BUCKET, {
+        public: false,
+        allowedMimeTypes: ['audio/*', 'video/*'],
+        fileSizeLimit: 524288000 // 500MB
+    });
+
+    if (createError) {
+        console.error(`Failed to create bucket '${MATERIALS_BUCKET}':`, createError);
+        return { error: 'Failed to create storage bucket' };
+    }
+
+    return { success: true };
+}
+
 export async function registerUploadedMaterial(
     fileUrl: string, 
     filename: string, 
@@ -81,17 +143,68 @@ export async function uploadMaterial(formData: FormData) {
   const file = formData.get('file') as File;
   const folderId = formData.get('folderId') as string; // Support uploading to folder
 
-  if (!file) {
+  if (!file || file.size === 0) {
       return { error: 'No file provided' };
   }
 
-  const buffer = Buffer.from(await file.arrayBuffer());
-  const safeFilename = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
-  const uniqueFilename = `${Date.now()}-${safeFilename}`;
+  const isAudio = file.type?.startsWith('audio/');
+  const isVideo = file.type?.startsWith('video/');
+  if (!isAudio && !isVideo) {
+      return { error: 'Only audio or video files can be uploaded' };
+  }
+
+  const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500MB
+  if (file.size > MAX_FILE_SIZE) {
+      return { error: 'File size must be less than 500MB' };
+  }
+
   const size = file.size;
+  const baseTitle = path.parse(file.name).name;
+
+  const client = supabaseAdmin || supabase;
+
+  // Check for duplicate uploads before storing
+  const { data: duplicateByTitle } = await client
+    .from('materials')
+    .select('id, title, created_at')
+    .eq('user_id', session.user.id)
+    .eq('title', baseTitle)
+    .is('deleted_at', null)
+    .maybeSingle();
+
+  if (duplicateByTitle) {
+    const createdAt = duplicateByTitle.created_at
+      ? duplicateDateFormatter.format(new Date(duplicateByTitle.created_at))
+      : 'previously';
+    return { 
+      error: `Duplicate material. "${duplicateByTitle.title}" already exists (uploaded ${createdAt}).`,
+      duplicateMaterialId: duplicateByTitle.id 
+    };
+  }
+
+  const { data: duplicateBySize } = await client
+    .from('materials')
+    .select('id, title, created_at')
+    .eq('user_id', session.user.id)
+    .eq('size', size)
+    .eq('mime_type', file.type)
+    .is('deleted_at', null)
+    .maybeSingle();
+
+  if (duplicateBySize) {
+    const createdAt = duplicateBySize.created_at
+      ? duplicateDateFormatter.format(new Date(duplicateBySize.created_at))
+      : 'previously';
+    return { 
+      error: `Duplicate material. "${duplicateBySize.title}" with the same file size already exists (uploaded ${createdAt}).`,
+      duplicateMaterialId: duplicateBySize.id 
+    };
+  }
 
   try {
-    const client = supabaseAdmin || supabase;
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const safeFilename = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
+    const uniqueFilename = `${Date.now()}-${safeFilename}`;
 
     // Check quota
     const { data: user, error: userError } = await client
@@ -109,9 +222,15 @@ export async function uploadMaterial(formData: FormData) {
         return { error: 'Storage quota exceeded' };
     }
 
+    // Ensure bucket exists (requires admin client)
+    const bucketResult = await ensureMaterialsBucket();
+    if (bucketResult.error) {
+        return { error: bucketResult.error };
+    }
+
     // Save file to Supabase Storage
     const storagePath = `${session.user.id}/${uniqueFilename}`;
-    const BUCKET_NAME = 'echo';
+    const BUCKET_NAME = MATERIALS_BUCKET;
     
     let { error: uploadError } = await client.storage
         .from(BUCKET_NAME)
@@ -119,30 +238,6 @@ export async function uploadMaterial(formData: FormData) {
             contentType: file.type,
             upsert: false
         });
-
-    // If bucket doesn't exist, try to create it and retry upload
-    if (uploadError && (uploadError.message.includes('Bucket not found') || (uploadError as any).statusCode === '404')) {
-        console.log(`Bucket '${BUCKET_NAME}' not found. Attempting to create it...`);
-        const { error: createError } = await client.storage.createBucket(BUCKET_NAME, {
-            public: false,
-            allowedMimeTypes: ['audio/*', 'video/*'],
-            fileSizeLimit: 524288000 // 500MB
-        });
-
-        if (createError) {
-             console.error("Failed to create bucket:", createError);
-             // Fall through to throw uploadError
-        } else {
-            // Retry upload
-            const retryResult = await client.storage
-                .from(BUCKET_NAME)
-                .upload(storagePath, buffer, {
-                    contentType: file.type,
-                    upsert: false
-                });
-            uploadError = retryResult.error;
-        }
-    }
 
     if (uploadError) {
         console.error("Supabase storage upload error:", uploadError);
@@ -274,7 +369,7 @@ export async function permanentlyDeleteMaterial(materialId: string) {
             } else {
                 // Supabase Storage
                 const { error: removeError } = await client.storage
-                    .from('echo')
+                    .from('materials')
                     .remove([material.file_path]);
                 
                 if (removeError) {
@@ -396,12 +491,42 @@ async function performTranscription(materialId: string, userId: string) {
 
     if (!material) return;
     
-    let model = 'base';
+    // Default transcription options
+    let transcriptionOptions: {
+        engine: 'faster-whisper' | 'openai-whisper';
+        model: string;
+        language?: string;
+        vad_filter: boolean;
+        compute_type: 'auto' | 'float16' | 'int8' | 'int8_float16';
+        device: 'auto' | 'cpu' | 'cuda';
+    } = {
+        engine: 'faster-whisper',
+        model: 'base',
+        vad_filter: true,
+        compute_type: 'auto',
+        device: 'auto',
+    };
+    
     if (user?.settings) {
         try {
             const settings = JSON.parse(user.settings);
+            if (settings.whisperEngine === 'faster-whisper' || settings.whisperEngine === 'openai-whisper') {
+                transcriptionOptions.engine = settings.whisperEngine;
+            }
             if (settings.whisperModel) {
-                model = settings.whisperModel;
+                transcriptionOptions.model = settings.whisperModel;
+            }
+            if (settings.whisperLanguage && settings.whisperLanguage !== "auto") {
+                transcriptionOptions.language = settings.whisperLanguage;
+            }
+            if (typeof settings.whisperVadFilter === 'boolean') {
+                transcriptionOptions.vad_filter = settings.whisperVadFilter;
+            }
+            if (['auto', 'float16', 'int8', 'int8_float16'].includes(settings.whisperComputeType)) {
+                transcriptionOptions.compute_type = settings.whisperComputeType;
+            }
+            if (['auto', 'cpu', 'cuda'].includes(settings.whisperDevice)) {
+                transcriptionOptions.device = settings.whisperDevice;
             }
         } catch(e) { /* ignore */ }
     }
@@ -427,7 +552,7 @@ async function performTranscription(materialId: string, userId: string) {
             } else {
                 // Download from Supabase Storage
                 const { data, error } = await client.storage
-                    .from('echo')
+                    .from('materials')
                     .download(material.file_path);
                 
                 if (error || !data) throw error || new Error('Download failed');
@@ -439,7 +564,7 @@ async function performTranscription(materialId: string, userId: string) {
             filePathToTranscribe = tempFilePath;
         }
 
-        const result = await transcribeFile(filePathToTranscribe, model);
+        const result = await transcribeFile(filePathToTranscribe, transcriptionOptions);
         
         // Save sentences
         // Transaction replacement: Sequential operations (less safe but okay for now)
@@ -448,6 +573,7 @@ async function performTranscription(materialId: string, userId: string) {
 
         // Insert new sentences
         // Batch insert
+        const now = new Date().toISOString();
         const sentences = result.segments.map((seg: any, i: number) => {
             const startTime = Number.isFinite(seg.start) ? seg.start : 0;
             const endTime = Number.isFinite(seg.end) ? seg.end : 0;
@@ -457,7 +583,9 @@ async function performTranscription(materialId: string, userId: string) {
                 start_time: startTime,
                 end_time: endTime,
                 content: seg.text,
-                order: i
+                order: i,
+                created_at: now,
+                updated_at: now
             };
         });
         
@@ -471,12 +599,16 @@ async function performTranscription(materialId: string, userId: string) {
             ? Math.max(...result.segments.map((seg: any) => seg.end || 0))
             : 0;
         
-        // Update material status
+        // Update material status with transcription metadata
         await client
             .from('materials')
             .update({ 
                 is_processed: true,
-                transcription_model: model,
+                transcription_engine: transcriptionOptions.engine,
+                transcription_model: transcriptionOptions.model,
+                transcription_language: result.language || transcriptionOptions.language || null,
+                transcription_vad_filter: transcriptionOptions.engine === 'faster-whisper' ? transcriptionOptions.vad_filter : null,
+                transcription_compute_type: transcriptionOptions.engine === 'faster-whisper' ? transcriptionOptions.compute_type : null,
                 transcription_time: result.duration,
                 duration: mediaDuration
             })
@@ -525,6 +657,12 @@ async function performTranscription(materialId: string, userId: string) {
           'material'
         );
 
+        await revalidateInBackground([
+            '/materials',
+            `/materials/${materialId}`,
+            '/vocab',
+        ]);
+
     } catch (error) {
         console.error("Transcription error:", error);
     } finally {
@@ -549,6 +687,12 @@ export async function transcribeMaterial(materialId: string) {
         .update({ is_processed: false })
         .eq('id', materialId)
         .eq('user_id', session.user.id);
+
+    safeRevalidate([
+        '/materials',
+        `/materials/${materialId}`,
+        '/vocab',
+    ]);
 
     // Run transcription in "background" without awaiting
     performTranscription(materialId, session.user.id).catch(err => {

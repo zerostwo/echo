@@ -19,6 +19,16 @@ import {
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Input } from '@/components/ui/input';
 import { UploadMaterialDialog } from './upload-dialog';
 import { createFolder, deleteFolder, renameFolder } from '@/actions/folder-actions';
@@ -28,6 +38,8 @@ import { toast } from 'sonner';
 import { DndContext, useDraggable, useDroppable, DragOverlay, MouseSensor, TouchSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
 import { cn } from '@/lib/utils';
+import { useUserSettings } from '@/components/user-settings-provider';
+import { formatInTimeZone } from '@/lib/time';
 
 interface MaterialBrowserProps {
   folders: any[];
@@ -115,6 +127,7 @@ export function MaterialBrowser({ folders, materials, currentFolderId, parentFol
   
   const [renamingItem, setRenamingItem] = useState<{id: string, type: 'folder' | 'material', name: string} | null>(null);
   const [newName, setNewName] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; type: 'folder' | 'material'; name: string } | null>(null);
 
   // Configure sensors to ignore small movements (clicks) so they propagate to children (Dropdowns)
   const sensors = useSensors(
@@ -130,6 +143,7 @@ export function MaterialBrowser({ folders, materials, currentFolderId, parentFol
           },
       })
   );
+  const { timezone } = useUserSettings();
 
   async function handleCreateFolder() {
       if (!newFolderName.trim()) return;
@@ -143,15 +157,19 @@ export function MaterialBrowser({ folders, materials, currentFolderId, parentFol
       }
   }
 
-  async function handleDelete(id: string, type: 'folder' | 'material') {
-      if (!confirm('Are you sure you want to delete this item?')) return;
-      
-      const res = type === 'folder' ? await deleteFolder(id) : await deleteMaterial(id);
+  const openDeleteDialog = (id: string, type: 'folder' | 'material', name: string) => {
+      setDeleteTarget({ id, type, name });
+  };
+
+  async function handleDeleteConfirm() {
+      if (!deleteTarget) return;
+      const res = deleteTarget.type === 'folder' ? await deleteFolder(deleteTarget.id) : await deleteMaterial(deleteTarget.id);
       if (res.error) {
           toast.error(res.error);
       } else {
           toast.success('Deleted successfully');
       }
+      setDeleteTarget(null);
   }
 
   async function handleRename() {
@@ -299,7 +317,7 @@ export function MaterialBrowser({ folders, materials, currentFolderId, parentFol
                                             </DropdownMenuItem>
                                             <DropdownMenuItem className="text-destructive" onClick={(e) => {
                                                 e.stopPropagation(); // Prevent drag
-                                                handleDelete(folder.id, 'folder');
+                                                openDeleteDialog(folder.id, 'folder', folder.name);
                                             }}>
                                                 <Trash className="mr-2 h-4 w-4" /> Delete
                                             </DropdownMenuItem>
@@ -323,7 +341,7 @@ export function MaterialBrowser({ folders, materials, currentFolderId, parentFol
                                             <div className="flex gap-2 text-xs text-muted-foreground">
                                                 <span>{(material.size / 1024 / 1024).toFixed(1)} MB</span>
                                                 {viewMode === 'list' && (
-                                                    <span>• {new Date(material.createdAt).toLocaleDateString()}</span>
+                                                    <span>• {formatInTimeZone(material.createdAt, timezone, { dateStyle: 'medium' })}</span>
                                                 )}
                                                 <span className={material.isProcessed ? "text-green-600" : "text-amber-600"}>
                                                     • {material.isProcessed ? 'Processed' : 'Processing'}
@@ -353,7 +371,7 @@ export function MaterialBrowser({ folders, materials, currentFolderId, parentFol
                                             </DropdownMenuItem>
                                             <DropdownMenuItem className="text-destructive" onClick={(e) => {
                                                 e.stopPropagation();
-                                                handleDelete(material.id, 'material');
+                                                openDeleteDialog(material.id, 'material', material.title);
                                             }}>
                                                 <Trash className="mr-2 h-4 w-4" /> Delete
                                             </DropdownMenuItem>
@@ -405,6 +423,24 @@ export function MaterialBrowser({ folders, materials, currentFolderId, parentFol
                         </DialogFooter>
                     </DialogContent>
                 </Dialog>
+
+                {/* Delete Confirmation */}
+                <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+                    <AlertDialogContent>
+                        <AlertDialogHeader>
+                            <AlertDialogTitle>Delete {deleteTarget?.name}?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                                This will move the {deleteTarget?.type} to trash.
+                            </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                            <AlertDialogCancel onClick={() => setDeleteTarget(null)}>Cancel</AlertDialogCancel>
+                            <AlertDialogAction onClick={handleDeleteConfirm} className="bg-red-600 hover:bg-red-700">
+                                Delete
+                            </AlertDialogAction>
+                        </AlertDialogFooter>
+                    </AlertDialogContent>
+                </AlertDialog>
             </div>
         </FileDropZone>
     </DndContext>

@@ -64,8 +64,11 @@ export default async function VocabPage({ searchParams }: { searchParams: Promis
   let filteredMaterialTitle = '';
 
   const filteredUserWords = (userWords || []).map((uw: any) => {
+      if (uw.word?.deleted_at) {
+          return null;
+      }
       const activeOccurrences = uw.word?.occurrences?.filter((occ: any) => {
-          const isNotDeleted = occ.sentence?.material?.deleted_at === null;
+          const isNotDeleted = occ.sentence?.material?.deleted_at === null && occ.sentence?.deleted_at === null;
           const matchesMaterial = !materialId || occ.sentence?.material_id === materialId;
           
           if (materialId && matchesMaterial && !filteredMaterialTitle) {
@@ -89,17 +92,12 @@ export default async function VocabPage({ searchParams }: { searchParams: Promis
       };
   }).filter(Boolean);
 
-  // Transform for table
+  // Transform for table - keep all occurrences for frequency calculation
   const data = filteredUserWords.map((uw: any) => {
       const word = uw.word;
-      // We limit to 1 occurrence for the table display
-      const displayOccurrences = word.occurrences.length > 1 
-          ? word.occurrences.slice(0, 1) 
-          : word.occurrences;
-          
       return { 
           ...word, 
-          occurrences: displayOccurrences,
+          occurrences: word.occurrences, // Keep all occurrences for frequency count
           status: uw.status 
       };
   });

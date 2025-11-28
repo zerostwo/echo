@@ -10,6 +10,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import Link from 'next/link';
 import { ShieldCheck, MailWarning, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { useRouter } from 'next/navigation';
 
 export default function LoginPage() {
   const [errorMessage, formAction, isPending] = useActionState(authenticate, undefined);
@@ -18,6 +19,7 @@ export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isResending, setIsResending] = useState(false);
+  const router = useRouter();
 
   useEffect(() => {
     if (errorMessage === '2FA_REQUIRED') {
@@ -28,6 +30,21 @@ export default function LoginPage() {
       setShow2FA(false);
     }
   }, [errorMessage]);
+
+  useEffect(() => {
+    if (errorMessage === 'USER_NOT_FOUND') {
+      const timeout = setTimeout(() => {
+        const params = new URLSearchParams();
+        if (email) {
+          params.set('email', email);
+        }
+        params.set('reason', 'user_not_found');
+        router.push(params.size ? `/register?${params.toString()}` : '/register');
+      }, 300);
+
+      return () => clearTimeout(timeout);
+    }
+  }, [errorMessage, email, router]);
 
   const handleResendVerification = async () => {
     if (!email || isResending) return;
@@ -160,7 +177,7 @@ export default function LoginPage() {
             </>
           )}
 
-          {errorMessage && errorMessage !== '2FA_REQUIRED' && errorMessage !== 'EMAIL_NOT_VERIFIED' && (
+          {errorMessage && errorMessage !== '2FA_REQUIRED' && errorMessage !== 'EMAIL_NOT_VERIFIED' && errorMessage !== 'USER_NOT_FOUND' && (
             <Alert variant="destructive">
               <AlertDescription>{errorMessage}</AlertDescription>
             </Alert>

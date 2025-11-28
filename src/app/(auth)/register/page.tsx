@@ -10,12 +10,16 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import { Loader2, Mail, RefreshCw } from 'lucide-react';
+import { useSearchParams } from 'next/navigation';
 
 export default function RegisterPage() {
   const [state, formAction, isPending] = useActionState(registerUser, undefined);
   const [registeredEmail, setRegisteredEmail] = useState('');
   const [isResending, setIsResending] = useState(false);
   const [resendCooldown, setResendCooldown] = useState(0);
+  const searchParams = useSearchParams();
+  const prefilledEmail = searchParams.get('email') || '';
+  const fromLoginUserNotFound = searchParams.get('reason') === 'user_not_found';
 
   // Cooldown timer
   useEffect(() => {
@@ -108,6 +112,13 @@ export default function RegisterPage() {
         <CardTitle className="text-center text-2xl font-bold">Create Account</CardTitle>
       </CardHeader>
       <CardContent>
+        {fromLoginUserNotFound && (
+          <Alert className="mb-4">
+            <AlertDescription>
+              We couldn&apos;t find an account for {prefilledEmail || 'that email'}. Create your account below to get started.
+            </AlertDescription>
+          </Alert>
+        )}
         <form 
           action={(formData) => {
             setRegisteredEmail(formData.get('email') as string);
@@ -121,7 +132,14 @@ export default function RegisterPage() {
           </div>
           <div className="grid gap-2">
             <Label htmlFor="email">Email</Label>
-            <Input id="email" name="email" type="email" required placeholder="user@example.com" />
+            <Input 
+              id="email" 
+              name="email" 
+              type="email" 
+              required 
+              placeholder="user@example.com" 
+              defaultValue={prefilledEmail}
+            />
           </div>
           <div className="grid gap-2">
             <Label htmlFor="password">Password</Label>
@@ -146,4 +164,3 @@ export default function RegisterPage() {
     </Card>
   );
 }
-

@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge"
 import { ArrowUpDown } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import { formatInTimeZone } from "@/lib/time"
 
 // Determine the shape of our data.
 export type Material = {
@@ -26,29 +27,13 @@ export type Material = {
   }
 }
 
-function formatDate(date: Date | string | null | undefined) {
-  if (!date) return 'N/A';
-  try {
-    const d = typeof date === 'string' ? new Date(date) : date;
-    if (isNaN(d.getTime())) return 'Invalid Date';
-    
-    return new Intl.DateTimeFormat('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    }).format(d)
-  } catch (e) {
-    return 'Error';
-  }
-}
-
 function getDisplayName(filename: string) {
     return filename.replace(/\.[^/.]+$/, "")
 }
 
-export const columns = (folders: any[]): ColumnDef<Material>[] => [
+export const columns = (folders: any[], timezone: string): ColumnDef<Material>[] => {
+  const tz = timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+  return [
   {
     id: "select",
     header: ({ table }) => (
@@ -239,7 +224,8 @@ export const columns = (folders: any[]): ColumnDef<Material>[] => [
         )
     },
     cell: ({ row }) => {
-        return formatDate(row.getValue("created_at"))
+        return formatInTimeZone(row.getValue("created_at"), tz)
     }
   }
 ]
+}

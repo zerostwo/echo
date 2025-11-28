@@ -10,12 +10,14 @@ import { Separator } from "@/components/ui/separator"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Camera, Loader2 } from "lucide-react"
 import { toast } from "sonner"
+import { useRouter } from "next/navigation"
 
 export function AccountForm({ user }: { user: any }) {
   const [state, formAction, isPending] = useActionState(updateUser, null)
   const [avatarUrl, setAvatarUrl] = useState(user.avatar || user.image || "")
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const router = useRouter()
 
   // Show toast notifications when state changes
   useEffect(() => {
@@ -28,10 +30,11 @@ export function AccountForm({ user }: { user: any }) {
       } else {
         toast.success(state.success)
       }
+      router.refresh()
     } else if (state?.error && typeof state.error === 'string') {
       toast.error(state.error)
     }
-  }, [state])
+  }, [state, router])
 
   const getErrorMessage = (field: string) => {
       if (state?.error && typeof state.error !== 'string') {
@@ -78,6 +81,7 @@ export function AccountForm({ user }: { user: any }) {
       } else if (result.url) {
         setAvatarUrl(result.url)
         toast.success("Avatar updated successfully")
+        router.refresh()
       }
     } catch (error) {
       toast.error("Failed to upload avatar")
