@@ -3,6 +3,7 @@
 import { auth } from '@/auth';
 import { supabase, supabaseAdmin } from '@/lib/supabase';
 import { revalidatePath } from 'next/cache';
+import { invalidateVocabCache } from '@/lib/redis';
 
 export async function getWordContext(wordId: string) {
     const session = await auth();
@@ -149,6 +150,9 @@ export async function updateWordsStatus(wordIds: string[], status: string) {
             if (insertError) throw insertError;
         }
 
+        // Invalidate vocab cache
+        await invalidateVocabCache(session.user.id);
+
         return { success: true };
     } catch (e) {
         console.error(e);
@@ -187,6 +191,9 @@ export async function restoreWord(wordId: string) {
 
     if (error) return { error: 'Failed to restore word' };
 
+    // Invalidate vocab cache
+    await invalidateVocabCache(session.user.id);
+
     revalidatePath('/trash');
     revalidatePath('/vocab');
     return { success: true };
@@ -222,6 +229,9 @@ export async function permanentlyDeleteWord(wordId: string) {
         console.error('Failed to delete word', error);
         return { error: 'Failed to delete word' };
     }
+
+    // Invalidate vocab cache
+    await invalidateVocabCache(session.user.id);
 
     revalidatePath('/trash');
     revalidatePath('/vocab');

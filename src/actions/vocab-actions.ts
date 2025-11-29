@@ -8,6 +8,13 @@ import path from 'path';
 import { startOfDay } from 'date-fns';
 import { randomUUID } from 'crypto';
 import { revalidatePath } from 'next/cache';
+import { 
+  getCached, 
+  setCached, 
+  generateCacheKey, 
+  CACHE_KEYS,
+  invalidateVocabCache 
+} from '@/lib/redis';
 
 const execFileAsync = promisify(execFile);
 const INTERNAL_REVALIDATE_TOKEN = process.env.INTERNAL_REVALIDATE_TOKEN;
@@ -382,6 +389,9 @@ export async function extractVocabulary(materialId: string) {
         }
     }
 
+    // Invalidate vocab cache after extraction
+    await invalidateVocabCache(session.user.id);
+
     await revalidateInBackground([
         '/vocab',
         '/materials',
@@ -460,4 +470,361 @@ export async function getMaterialVocab(materialId: string) {
     });
 
     return { words: wordsWithUserStatus };
+}
+
+/**
+ * Get paginated vocabulary with server-side pagination
+ */
+export interface VocabFilters {
+    search?: string;
+    status?: string[];
+    collins?: number[];
+    oxford?: boolean;
+    materialId?: string;
+}
+
+export interface PaginatedVocabResult {
+    data: any[];
+    total: number;
+    page: number;
+    pageSize: number;
+    totalPages: number;
+    stats: {
+        totalWords: number;
+        masteredWords: number;
+        newWords24h: number;
+        masteredWords24h: number;
+    };
+}
+
+// Helper function with retry logic for Supabase requests
+async function fetchWithRetry<T>(
+    fetchFn: () => Promise<{ data: T | null; error: any }>,
+    maxRetries: number = 3,
+    delayMs: number = 500
+): Promise<{ data: T | null; error: any }> {
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+        const result = await fetchFn();
+        if (!result.error) return result;
+        
+        // Check if it's a retryable error (502, 503, etc.)
+        const errorMessage = result.error?.message || '';
+        if (errorMessage.includes('502') || errorMessage.includes('503') || errorMessage.includes('timeout')) {
+            if (attempt < maxRetries - 1) {
+                await new Promise(resolve => setTimeout(resolve, delayMs * (attempt + 1)));
+                continue;
+            }
+        }
+        return result;
+    }
+    return { data: null, error: { message: 'Max retries exceeded' } };
+}
+
+export async function getVocabPaginated(
+    page: number = 1,
+    pageSize: number = 10,
+    filters: VocabFilters = {},
+    sortBy: string = 'updated_at',
+    sortOrder: 'asc' | 'desc' = 'desc'
+): Promise<PaginatedVocabResult | { error: string }> {
+    const session = await auth();
+    if (!session?.user?.id) return { error: 'Unauthorized' };
+
+    const client = supabaseAdmin || supabase;
+    const userId = session.user.id;
+    const offset = (page - 1) * pageSize;
+
+    // Generate cache key
+    const cacheKey = generateCacheKey(CACHE_KEYS.VOCAB_PAGINATED, {
+        user_id: userId,
+        page,
+        pageSize,
+        filters,
+        sortBy,
+        sortOrder
+    });
+
+    // Try to get from cache first
+    const cached = await getCached<PaginatedVocabResult>(cacheKey);
+    if (cached) {
+        console.log('[getVocabPaginated] Cache hit');
+        return cached;
+    }
+
+    console.log('[getVocabPaginated] Cache miss, fetching from database');
+
+    try {
+        // Step 1: Get user's material IDs first
+        let materialsQuery = client
+            .from('materials')
+            .select('id')
+            .eq('user_id', userId)
+            .is('deleted_at', null);
+
+        if (filters.materialId) {
+            materialsQuery = materialsQuery.eq('id', filters.materialId);
+        }
+
+        const { data: materials, error: materialsError } = await materialsQuery;
+        
+        console.log('[getVocabPaginated] Materials found:', materials?.length, 'Error:', materialsError);
+        
+        const materialIds = (materials || []).map((m: any) => m.id);
+
+        if (materialIds.length === 0) {
+            console.log('[getVocabPaginated] No materials found, returning empty');
+            const emptyResult: PaginatedVocabResult = {
+                data: [],
+                total: 0,
+                page,
+                pageSize,
+                totalPages: 0,
+                stats: { totalWords: 0, masteredWords: 0, newWords24h: 0, masteredWords24h: 0 }
+            };
+            await setCached(cacheKey, emptyResult, 60);
+            return emptyResult;
+        }
+
+        // Step 2: Get sentences for these materials - use larger batch size
+        const MATERIAL_BATCH_SIZE = 100;
+        const sentencePromises = [];
+        
+        for (let i = 0; i < materialIds.length; i += MATERIAL_BATCH_SIZE) {
+            const batchMaterialIds = materialIds.slice(i, i + MATERIAL_BATCH_SIZE);
+            sentencePromises.push(
+                client
+                    .from('sentences')
+                    .select('id')
+                    .in('material_id', batchMaterialIds)
+                    .is('deleted_at', null)
+            );
+        }
+
+        const sentenceResults = await Promise.all(sentencePromises);
+        const allSentences = sentenceResults.flatMap(r => r.data || []);
+        const sentenceIds = allSentences.map((s: any) => s.id);
+
+        console.log('[getVocabPaginated] Sentences found:', sentenceIds.length);
+
+        if (sentenceIds.length === 0) {
+            console.log('[getVocabPaginated] No sentences found, returning empty');
+            const emptyResult: PaginatedVocabResult = {
+                data: [],
+                total: 0,
+                page,
+                pageSize,
+                totalPages: 0,
+                stats: { totalWords: 0, masteredWords: 0, newWords24h: 0, masteredWords24h: 0 }
+            };
+            await setCached(cacheKey, emptyResult, 60);
+            return emptyResult;
+        }
+
+        // Step 3: Get word occurrences - use larger batch size and parallel requests
+        const BATCH_SIZE = 200;
+        const occurrencePromises = [];
+        
+        for (let i = 0; i < sentenceIds.length; i += BATCH_SIZE) {
+            const batchIds = sentenceIds.slice(i, i + BATCH_SIZE);
+            occurrencePromises.push(
+                client
+                    .from('word_occurrences')
+                    .select('word_id, sentence_id')
+                    .in('sentence_id', batchIds)
+            );
+        }
+
+        const occurrenceResults = await Promise.all(occurrencePromises);
+        const allOccurrences = occurrenceResults.flatMap(r => r.data || []);
+
+        console.log('[getVocabPaginated] Occurrences found:', allOccurrences.length);
+
+        if (allOccurrences.length === 0) {
+            console.log('[getVocabPaginated] No occurrences found, returning empty');
+            const emptyResult: PaginatedVocabResult = {
+                data: [],
+                total: 0,
+                page,
+                pageSize,
+                totalPages: 0,
+                stats: { totalWords: 0, masteredWords: 0, newWords24h: 0, masteredWords24h: 0 }
+            };
+            await setCached(cacheKey, emptyResult, 60);
+            return emptyResult;
+        }
+
+        // Group by word and count frequencies
+        const wordFrequencyMap = new Map<string, { frequency: number; sentenceIds: string[] }>();
+        allOccurrences.forEach((occ) => {
+            const wordId = occ.word_id;
+            if (!wordFrequencyMap.has(wordId)) {
+                wordFrequencyMap.set(wordId, { frequency: 0, sentenceIds: [] });
+            }
+            const entry = wordFrequencyMap.get(wordId)!;
+            entry.frequency++;
+            entry.sentenceIds.push(occ.sentence_id);
+        });
+
+        const wordIds = Array.from(wordFrequencyMap.keys());
+
+        if (wordIds.length === 0) {
+            const emptyResult: PaginatedVocabResult = {
+                data: [],
+                total: 0,
+                page,
+                pageSize,
+                totalPages: 0,
+                stats: { totalWords: 0, masteredWords: 0, newWords24h: 0, masteredWords24h: 0 }
+            };
+            await setCached(cacheKey, emptyResult, 60);
+            return emptyResult;
+        }
+
+        // Step 4 & 5: Get word details and user statuses in parallel
+        const wordPromises = [];
+        const statusPromises = [];
+        
+        for (let i = 0; i < wordIds.length; i += BATCH_SIZE) {
+            const batchWordIds = wordIds.slice(i, i + BATCH_SIZE);
+            wordPromises.push(
+                client
+                    .from('words')
+                    .select('id, text, phonetic, translation, pos, definition, collins, oxford, tag, bnc, frq, exchange, audio, detail, deleted_at')
+                    .in('id', batchWordIds)
+                    .is('deleted_at', null)
+            );
+            statusPromises.push(
+                client
+                    .from('user_word_statuses')
+                    .select('*')
+                    .eq('user_id', userId)
+                    .in('word_id', batchWordIds)
+            );
+        }
+
+        // Execute all in parallel
+        const [wordResults, statusResults] = await Promise.all([
+            Promise.all(wordPromises),
+            Promise.all(statusPromises)
+        ]);
+
+        const allWords = wordResults.flatMap(r => r.data || []);
+        const allStatuses = statusResults.flatMap(r => r.data || []);
+
+        const statusMap = new Map<string, any>();
+        allStatuses.forEach((s: any) => statusMap.set(s.word_id, s));
+
+        // Merge data
+        let mergedWords: any[] = [];
+        
+        allWords.forEach((word) => {
+            const freqData = wordFrequencyMap.get(word.id);
+            const status = statusMap.get(word.id);
+            
+            mergedWords.push({
+                id: word.id,
+                text: word.text,
+                phonetic: word.phonetic,
+                translation: word.translation,
+                pos: word.pos,
+                definition: word.definition,
+                collins: word.collins,
+                oxford: word.oxford,
+                tag: word.tag,
+                bnc: word.bnc,
+                frq: word.frq,
+                exchange: word.exchange,
+                audio: word.audio,
+                detail: word.detail,
+                frequency: freqData?.frequency || 0,
+                occurrences: (freqData?.sentenceIds || []).map(sid => ({ sentence_id: sid })),
+                status: status?.status ?? 'NEW',
+                statusCreatedAt: status?.created_at,
+                statusUpdatedAt: status?.updated_at,
+            });
+        });
+
+        // Calculate stats before filtering
+        const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+        const totalWords = mergedWords.length;
+        const masteredWords = mergedWords.filter(w => w.status === 'MASTERED').length;
+        const newWords24h = mergedWords.filter(w => w.statusCreatedAt > oneDayAgo).length;
+        const masteredWords24h = mergedWords.filter(w => w.status === 'MASTERED' && w.statusUpdatedAt > oneDayAgo).length;
+
+        // Apply filters
+        if (filters.search) {
+            const searchLower = filters.search.toLowerCase();
+            mergedWords = mergedWords.filter(w => 
+                w.text?.toLowerCase().includes(searchLower) ||
+                w.translation?.toLowerCase().includes(searchLower)
+            );
+        }
+
+        if (filters.status && filters.status.length > 0) {
+            mergedWords = mergedWords.filter(w => filters.status!.includes(w.status));
+        }
+
+        if (filters.collins && filters.collins.length > 0) {
+            mergedWords = mergedWords.filter(w => filters.collins!.includes(w.collins));
+        }
+
+        if (filters.oxford === true) {
+            mergedWords = mergedWords.filter(w => w.oxford === 1);
+        } else if (filters.oxford === false) {
+            mergedWords = mergedWords.filter(w => w.oxford !== 1);
+        }
+
+        // Sort
+        mergedWords.sort((a, b) => {
+            let aVal: any, bVal: any;
+            
+            switch (sortBy) {
+                case 'text':
+                    aVal = a.text?.toLowerCase() || '';
+                    bVal = b.text?.toLowerCase() || '';
+                    break;
+                case 'frequency':
+                    aVal = a.frequency;
+                    bVal = b.frequency;
+                    break;
+                case 'collins':
+                    aVal = a.collins || 0;
+                    bVal = b.collins || 0;
+                    break;
+                case 'updated_at':
+                default:
+                    aVal = new Date(a.statusUpdatedAt || 0).getTime();
+                    bVal = new Date(b.statusUpdatedAt || 0).getTime();
+                    break;
+            }
+
+            if (sortOrder === 'asc') {
+                return aVal > bVal ? 1 : aVal < bVal ? -1 : 0;
+            } else {
+                return aVal < bVal ? 1 : aVal > bVal ? -1 : 0;
+            }
+        });
+
+        // Paginate
+        const total = mergedWords.length;
+        const totalPages = Math.ceil(total / pageSize);
+        const paginatedData = mergedWords.slice(offset, offset + pageSize);
+
+        const result: PaginatedVocabResult = {
+            data: paginatedData,
+            total,
+            page,
+            pageSize,
+            totalPages,
+            stats: { totalWords, masteredWords, newWords24h, masteredWords24h }
+        };
+
+        // Cache the result for 2 minutes
+        await setCached(cacheKey, result, 120);
+
+        return result;
+    } catch (error) {
+        console.error('[getVocabPaginated] Error:', error);
+        return { error: 'Failed to fetch vocabulary' };
+    }
 }

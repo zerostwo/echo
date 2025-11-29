@@ -13,6 +13,14 @@ import { createNotification } from './notification-actions';
 import { startOfDay } from 'date-fns';
 import os from 'os';
 import { randomUUID } from 'crypto';
+import { 
+  getCached, 
+  setCached, 
+  generateCacheKey, 
+  CACHE_KEYS,
+  invalidateMaterialsCache,
+  invalidateVocabCache
+} from '@/lib/redis';
 
 const MATERIALS_BUCKET = 'materials';
 const INTERNAL_REVALIDATE_TOKEN = process.env.INTERNAL_REVALIDATE_TOKEN;
@@ -125,6 +133,9 @@ export async function registerUploadedMaterial(
                 .eq('id', session.user.id);
         }
 
+        // Invalidate cache
+        await invalidateMaterialsCache(session.user.id);
+        
         revalidatePath('/materials');
         revalidatePath('/dashboard');
         return { success: true, materialId: material.id };
@@ -279,6 +290,9 @@ export async function uploadMaterial(formData: FormData) {
       'material'
     );
 
+    // Invalidate cache
+    await invalidateMaterialsCache(session.user.id);
+
     revalidatePath('/materials');
     revalidatePath('/dashboard');
     return { success: true, materialId: material.id };
@@ -312,6 +326,12 @@ export async function deleteMaterial(materialId: string) {
             
         if (updateError) throw updateError;
 
+        // Invalidate cache
+        await Promise.all([
+            invalidateMaterialsCache(session.user.id),
+            invalidateVocabCache(session.user.id)
+        ]);
+
         revalidatePath('/materials');
         revalidatePath('/dashboard');
         return { success: true };
@@ -334,6 +354,12 @@ export async function restoreMaterial(materialId: string) {
             .eq('user_id', session.user.id);
             
         if (error) throw error;
+        
+        // Invalidate cache
+        await Promise.all([
+            invalidateMaterialsCache(session.user.id),
+            invalidateVocabCache(session.user.id)
+        ]);
         
         revalidatePath('/materials');
         revalidatePath('/trash');
@@ -676,6 +702,30 @@ async function performTranscription(materialId: string, userId: string) {
     }
 }
 
+// Simple in-memory queue for transcription tasks
+const transcriptionQueue: { materialId: string; userId: string }[] = [];
+let isProcessingQueue = false;
+
+async function processTranscriptionQueue() {
+    if (isProcessingQueue) return;
+    isProcessingQueue = true;
+
+    while (transcriptionQueue.length > 0) {
+        const task = transcriptionQueue.shift();
+        if (task) {
+            try {
+                console.log(`[Queue] Processing transcription for material: ${task.materialId}`);
+                await performTranscription(task.materialId, task.userId);
+                console.log(`[Queue] Completed transcription for material: ${task.materialId}`);
+            } catch (err) {
+                console.error(`[Queue] Transcription failed for material ${task.materialId}:`, err);
+            }
+        }
+    }
+
+    isProcessingQueue = false;
+}
+
 export async function transcribeMaterial(materialId: string) {
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
@@ -694,12 +744,16 @@ export async function transcribeMaterial(materialId: string) {
         '/vocab',
     ]);
 
-    // Run transcription in "background" without awaiting
-    performTranscription(materialId, session.user.id).catch(err => {
-        console.error("Background transcription failed:", err);
+    // Add to queue instead of running directly
+    transcriptionQueue.push({ materialId, userId: session.user.id });
+    console.log(`[Queue] Added material ${materialId} to queue. Queue length: ${transcriptionQueue.length}`);
+    
+    // Start processing queue (will return immediately if already processing)
+    processTranscriptionQueue().catch(err => {
+        console.error("Queue processing error:", err);
     });
 
-    return { success: true, message: 'Transcription started in background' };
+    return { success: true, message: 'Transcription queued for processing' };
 }
 
 export async function computeUserStorage() {
@@ -724,4 +778,213 @@ export async function computeUserStorage() {
         quota: Number(user.quota),
         usedSpace: Number(user.used_space)
     };
+}
+
+/**
+ * Get paginated materials with server-side pagination
+ */
+export interface MaterialFilters {
+    search?: string;
+    folderId?: string | null;
+}
+
+export interface PaginatedMaterialResult {
+    data: any[];
+    total: number;
+    page: number;
+    pageSize: number;
+    totalPages: number;
+}
+
+export async function getMaterialsPaginated(
+    page: number = 1,
+    pageSize: number = 10,
+    filters: MaterialFilters = {},
+    sortBy: string = 'title',
+    sortOrder: 'asc' | 'desc' = 'asc'
+): Promise<PaginatedMaterialResult | { error: string }> {
+    const session = await auth();
+    if (!session?.user?.id) return { error: 'Unauthorized' };
+
+    const client = supabaseAdmin || supabase;
+    const userId = session.user.id;
+    const offset = (page - 1) * pageSize;
+
+    // Generate cache key
+    const cacheKey = generateCacheKey(CACHE_KEYS.MATERIALS_PAGINATED, {
+        user_id: userId,
+        page,
+        pageSize,
+        filters,
+        sortBy,
+        sortOrder
+    });
+
+    // Try to get from cache first
+    const cached = await getCached<PaginatedMaterialResult>(cacheKey);
+    if (cached) {
+        console.log('[getMaterialsPaginated] Cache hit');
+        return cached;
+    }
+
+    console.log('[getMaterialsPaginated] Cache miss, fetching from database');
+
+    try {
+        // Step 1: Get materials with basic info only (no heavy joins)
+        let query = client
+            .from('materials')
+            .select('*', { count: 'exact' })
+            .eq('user_id', userId)
+            .is('deleted_at', null);
+
+        // Apply folder filter
+        if (filters.folderId === 'unfiled') {
+            query = query.is('folder_id', null);
+        } else if (filters.folderId) {
+            query = query.eq('folder_id', filters.folderId);
+        }
+
+        // Apply search filter
+        if (filters.search) {
+            query = query.ilike('title', `%${filters.search}%`);
+        }
+
+        // Apply sorting
+        const orderColumn = sortBy === 'title' ? 'title' : sortBy === 'created_at' ? 'created_at' : 'title';
+        query = query.order(orderColumn, { ascending: sortOrder === 'asc' });
+
+        // Apply pagination
+        query = query.range(offset, offset + pageSize - 1);
+
+        const { data: materials, count, error } = await query;
+
+        if (error) {
+            console.error('[getMaterialsPaginated] Error:', error);
+            return { error: 'Failed to fetch materials' };
+        }
+
+        if (!materials || materials.length === 0) {
+            const emptyResult: PaginatedMaterialResult = {
+                data: [],
+                total: count || 0,
+                page,
+                pageSize,
+                totalPages: Math.ceil((count || 0) / pageSize),
+            };
+            await setCached(cacheKey, emptyResult, 60);
+            return emptyResult;
+        }
+
+        // Step 2: Get stats for these materials in parallel
+        const materialIds = materials.map((m: any) => m.id);
+
+        // Fetch sentences, practices, and occurrences in parallel
+        const [sentencesResult, practicesResult, occurrencesResult] = await Promise.all([
+            client
+                .from('sentences')
+                .select('id, material_id')
+                .in('material_id', materialIds)
+                .is('deleted_at', null),
+            client
+                .from('practice_progress')
+                .select('sentence_id, score, attempts, user_id')
+                .eq('user_id', userId),
+            client
+                .from('word_occurrences')
+                .select('sentence_id, word_id')
+        ]);
+
+        const sentences = sentencesResult.data || [];
+        const practices = practicesResult.data || [];
+        const occurrences = occurrencesResult.data || [];
+
+        // Build lookup maps
+        const sentencesByMaterial = new Map<string, string[]>();
+        const sentenceIdSet = new Set<string>();
+        
+        sentences.forEach((s: any) => {
+            if (!sentencesByMaterial.has(s.material_id)) {
+                sentencesByMaterial.set(s.material_id, []);
+            }
+            sentencesByMaterial.get(s.material_id)!.push(s.id);
+            sentenceIdSet.add(s.id);
+        });
+
+        const practicesBySentence = new Map<string, any>();
+        practices.forEach((p: any) => {
+            if (sentenceIdSet.has(p.sentence_id)) {
+                practicesBySentence.set(p.sentence_id, p);
+            }
+        });
+
+        const occurrencesBySentence = new Map<string, Set<string>>();
+        occurrences.forEach((o: any) => {
+            if (sentenceIdSet.has(o.sentence_id)) {
+                if (!occurrencesBySentence.has(o.sentence_id)) {
+                    occurrencesBySentence.set(o.sentence_id, new Set());
+                }
+                occurrencesBySentence.get(o.sentence_id)!.add(o.word_id);
+            }
+        });
+
+        // Process materials to calculate stats
+        const processedMaterials = materials.map((m: any) => {
+            const materialSentenceIds = sentencesByMaterial.get(m.id) || [];
+            const totalSentences = materialSentenceIds.length;
+            
+            let practicedSentences = 0;
+            let totalScore = 0;
+            let totalDuration = 0;
+            let totalAttempts = 0;
+            const uniqueWordIds = new Set<string>();
+
+            materialSentenceIds.forEach((sentenceId: string) => {
+                const practice = practicesBySentence.get(sentenceId);
+                if (practice) {
+                    practicedSentences++;
+                    totalScore += practice.score || 0;
+                    totalDuration += practice.duration || 0;
+                    totalAttempts += practice.attempts || 0;
+                }
+                
+                const wordIds = occurrencesBySentence.get(sentenceId);
+                if (wordIds) {
+                    wordIds.forEach(wid => uniqueWordIds.add(wid));
+                }
+            });
+
+            const avgScore = practicedSentences > 0 ? Math.round(totalScore / practicedSentences) : 0;
+            
+            return {
+                ...m,
+                stats: {
+                    practicedCount: practicedSentences,
+                    totalSentences: totalSentences,
+                    avgScore: avgScore,
+                    vocabCount: uniqueWordIds.size,
+                    duration: totalDuration,
+                    attempts: totalAttempts
+                }
+            };
+        });
+
+        const total = count || 0;
+        const totalPages = Math.ceil(total / pageSize);
+
+        const result: PaginatedMaterialResult = {
+            data: processedMaterials,
+            total,
+            page,
+            pageSize,
+            totalPages,
+        };
+
+        // Cache the result for 2 minutes
+        await setCached(cacheKey, result, 120);
+
+        return result;
+    } catch (error) {
+        console.error('[getMaterialsPaginated] Error:', error);
+        return { error: 'Failed to fetch materials' };
+    }
 }

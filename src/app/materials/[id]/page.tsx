@@ -3,8 +3,9 @@ import { supabaseAdmin, supabase } from '@/lib/supabase';
 import { notFound } from 'next/navigation';
 import { SetBreadcrumbs } from '@/components/set-breadcrumbs';
 import { MaterialStatsCard } from './material-stats-card';
-import { SentencesTable } from './sentences-table';
+import { PaginatedSentencesTable } from './paginated-sentences-table';
 import { getFolderPath, type Folder } from '@/lib/folder-utils';
+import { getSentencesPaginated } from '@/actions/sentence-actions';
 
 export default async function MaterialDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -13,16 +14,11 @@ export default async function MaterialDetailPage({ params }: { params: Promise<{
 
   const client = supabaseAdmin || supabase;
 
-  // Fetch material with folder info
+  // Fetch material with folder info (without sentences for initial load)
   const { data: material, error } = await client
     .from('materials')
     .select(`
         *,
-        sentences:sentences(
-          *,
-          practices:practice_progress(score, attempts, user_id),
-          occurrences:word_occurrences(word_id)
-        ),
         folder:folders(*)
     `)
     .eq('id', id)
@@ -52,32 +48,35 @@ export default async function MaterialDetailPage({ params }: { params: Promise<{
     }));
   }
 
-  const sentences = (material.sentences || []).filter((s: any) => !s.deleted_at);
+  // Get sentence count and vocab count for stats
+  const { count: sentenceCount } = await client
+    .from('sentences')
+    .select('id', { count: 'exact', head: true })
+    .eq('material_id', id)
+    .is('deleted_at', null);
 
-  const sentenceIds = sentences.map((s: any) => s.id);
+  // Get vocab count
+  const { data: sentenceIds } = await client
+    .from('sentences')
+    .select('id')
+    .eq('material_id', id)
+    .is('deleted_at', null);
+
   let vocabCount = 0;
   let totalWords = 0;
 
-  if (sentenceIds.length > 0) {
-      const wordIds = new Set<string>();
-      sentences.forEach((s: any) => {
-          const occurrences = s.occurrences || [];
-          totalWords += occurrences.length;
-          occurrences.forEach((o: any) => wordIds.add(o.word_id));
-      });
-      vocabCount = wordIds.size;
+  if (sentenceIds && sentenceIds.length > 0) {
+    const ids = sentenceIds.map(s => s.id);
+    
+    const { data: occurrences } = await client
+      .from('word_occurrences')
+      .select('word_id')
+      .in('sentence_id', ids);
 
-      if (totalWords === 0) {
-          const { data: occurrences } = await client
-              .from('word_occurrences')
-              .select('word_id')
-              .in('sentence_id', sentenceIds);
-
-          totalWords = occurrences?.length || 0;
-          if (occurrences) {
-              vocabCount = new Set(occurrences.map((o: any) => o.word_id)).size;
-          }
-      }
+    totalWords = occurrences?.length || 0;
+    if (occurrences) {
+      vocabCount = new Set(occurrences.map((o: any) => o.word_id)).size;
+    }
   }
 
   // Calculate Words Per Minute
@@ -104,35 +103,23 @@ export default async function MaterialDetailPage({ params }: { params: Promise<{
   
   breadcrumbs.push({ title: material.title });
 
-  // Sort sentences by order
-  // Supabase might return them unsorted unless we specify order in the nested select
-  // We can sort here in JS safely
-  // Also map snake_case to camelCase for the UI components
-  const sortedSentences = [...sentences]
-    .sort((a: any, b: any) => a.order - b.order)
-    .map((s: any) => {
-      const displayContent = s.edited_content ?? s.content;
-      return {
-        ...s,
-        content: displayContent,
-        originalContent: s.content,
-        editedContent: s.edited_content,
-        startTime: s.start_time,
-        endTime: s.end_time,
-        materialId: s.material_id,
-        createdAt: s.created_at,
-        updatedAt: s.updated_at,
-        practiceAttempts: s.practices?.find((p: any) => p.user_id === session.user.id)?.attempts || 0,
-        practiceScore: s.practices?.find((p: any) => p.user_id === session.user.id)?.score ?? null
-      };
-    });
+  // Get initial paginated sentences
+  const initialSentences = await getSentencesPaginated(id, 1, 10, {}, 'order', 'asc');
+  
+  if ('error' in initialSentences) {
+    return <div className="p-8">Error loading sentences: {initialSentences.error}</div>;
+  }
 
   // Map snake_case to camelCase for material fields
-  const materialWithSortedSentences = {
+  const materialWithStats = {
     ...material,
     isProcessed: material.is_processed,
     mimeType: material.mime_type,
-    sentences: sortedSentences
+    sentences: [], // We don't pass sentences here anymore
+    stats: {
+      totalSentences: sentenceCount || 0,
+      vocabCount,
+    }
   };
 
   return (
@@ -140,13 +127,16 @@ export default async function MaterialDetailPage({ params }: { params: Promise<{
       <SetBreadcrumbs items={breadcrumbs} />
 
       <MaterialStatsCard 
-        material={materialWithSortedSentences}
+        material={materialWithStats}
         vocabCount={vocabCount}
         wpm={wpm}
       />
 
       <div className="space-y-4">
-        <SentencesTable data={sortedSentences} />
+        <PaginatedSentencesTable 
+          materialId={id} 
+          initialData={initialSentences}
+        />
       </div>
     </div>
   );

@@ -395,3 +395,112 @@ export async function permanentlyDeleteSentence(sentenceId: string) {
 
     return { success: true };
 }
+
+/**
+ * Get paginated sentences for a material with server-side pagination
+ */
+export interface SentenceFilters {
+    search?: string;
+}
+
+export interface PaginatedSentenceResult {
+    data: any[];
+    total: number;
+    page: number;
+    pageSize: number;
+    totalPages: number;
+}
+
+export async function getSentencesPaginated(
+    materialId: string,
+    page: number = 1,
+    pageSize: number = 10,
+    filters: SentenceFilters = {},
+    sortBy: string = 'order',
+    sortOrder: 'asc' | 'desc' = 'asc'
+): Promise<PaginatedSentenceResult | { error: string }> {
+    const session = await auth();
+    if (!session?.user?.id) return { error: 'Unauthorized' };
+
+    const client = supabaseAdmin || supabase;
+    const userId = session.user.id;
+    const offset = (page - 1) * pageSize;
+
+    try {
+        // Verify material belongs to user
+        const { data: material, error: materialError } = await client
+            .from('materials')
+            .select('id, user_id')
+            .eq('id', materialId)
+            .single();
+
+        if (materialError || !material || material.user_id !== userId) {
+            return { error: 'Material not found or unauthorized' };
+        }
+
+        // Build base query
+        let query = client
+            .from('sentences')
+            .select(`
+                *,
+                practices:practice_progress(score, attempts, user_id),
+                occurrences:word_occurrences(word_id)
+            `, { count: 'exact' })
+            .eq('material_id', materialId)
+            .is('deleted_at', null);
+
+        // Apply search filter
+        if (filters.search) {
+            query = query.or(`content.ilike.%${filters.search}%,edited_content.ilike.%${filters.search}%`);
+        }
+
+        // Apply sorting
+        const orderColumn = sortBy === 'order' ? 'order' : sortBy === 'start_time' ? 'start_time' : 'order';
+        query = query.order(orderColumn, { ascending: sortOrder === 'asc' });
+
+        // Apply pagination
+        query = query.range(offset, offset + pageSize - 1);
+
+        const { data: sentences, count, error } = await query;
+
+        if (error) {
+            console.error('[getSentencesPaginated] Error:', error);
+            return { error: 'Failed to fetch sentences' };
+        }
+
+        // Process sentences
+        const processedSentences = (sentences || []).map((s: any) => {
+            const displayContent = s.edited_content ?? s.content;
+            const userPractice = (s.practices || []).find((p: any) => p.user_id === userId);
+            
+            return {
+                id: s.id,
+                order: s.order,
+                content: displayContent,
+                originalContent: s.content,
+                editedContent: s.edited_content,
+                startTime: s.start_time,
+                endTime: s.end_time,
+                materialId: s.material_id,
+                createdAt: s.created_at,
+                updatedAt: s.updated_at,
+                practiceAttempts: userPractice?.attempts || 0,
+                practiceScore: userPractice?.score ?? null,
+            };
+        });
+
+        const total = count || 0;
+        const totalPages = Math.ceil(total / pageSize);
+
+        return {
+            data: processedSentences,
+            total,
+            page,
+            pageSize,
+            totalPages,
+        };
+    } catch (error) {
+        console.error('[getSentencesPaginated] Error:', error);
+        return { error: 'Failed to fetch sentences' };
+    }
+}
