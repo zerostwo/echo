@@ -1,9 +1,8 @@
 import { auth } from '@/auth';
 import { supabaseAdmin, supabase } from '@/lib/supabase';
 import { VocabClient } from './vocab-client';
-import { AnkiExportButton } from './anki-export';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { BookOpen, Trophy, Activity, Calendar, Filter } from "lucide-react";
+import { BookOpen, Trophy, Activity, Clock, GraduationCap, TrendingUp, AlertCircle } from "lucide-react";
 import { HeaderPortal } from '@/components/header-portal';
 import { Badge } from "@/components/ui/badge";
 import Link from 'next/link';
@@ -35,8 +34,12 @@ export default async function VocabPage({ searchParams }: { searchParams: Promis
     }
   }
 
-  // Get initial paginated data
-  const initialResult = await getVocabPaginated(1, 10, { materialId }, 'updated_at', 'desc');
+  // Get initial paginated data with user's saved page size
+  const pageSize = userSettings.vocabPageSize || 10;
+  const sortBy = userSettings.vocabSortBy || 'updated_at';
+  const sortOrder = userSettings.vocabSortOrder || 'desc';
+  
+  const initialResult = await getVocabPaginated(1, pageSize, { materialId }, sortBy, sortOrder);
   
   if ('error' in initialResult) {
     return <div className="p-8">Error loading vocabulary: {initialResult.error}</div>;
@@ -55,16 +58,10 @@ export default async function VocabPage({ searchParams }: { searchParams: Promis
     filteredMaterialTitle = material?.title || '';
   }
 
-  // Fetch practice stats
-  const { data: practices } = await client
-    .from('practice_progress')
-    .select('attempts')
-    .eq('user_id', session.user.id);
-
-  const practiceSessions = practices?.reduce((acc, p) => acc + p.attempts, 0) || 0;
-  const dueTomorrow = 18; // TODO: Calculate from spaced repetition algorithm
-
   const { stats, data } = initialResult;
+  
+  // Build learning URL with material filter
+  const learnUrl = materialId ? `/learn?materialId=${materialId}` : '/learn';
 
   return (
     <div className="flex-1 space-y-8 p-8 pt-6">
@@ -73,7 +70,7 @@ export default async function VocabPage({ searchParams }: { searchParams: Promis
             {materialId && (
                 <div className="flex items-center gap-2 mr-4">
                     <Badge variant="secondary" className="h-8 px-3 text-sm gap-2">
-                        <Filter className="h-3.5 w-3.5" />
+                        <BookOpen className="h-3.5 w-3.5" />
                         Filtered by: {filteredMaterialTitle || 'Material'}
                     </Badge>
                     <Link href="/vocab">
@@ -83,7 +80,12 @@ export default async function VocabPage({ searchParams }: { searchParams: Promis
                     </Link>
                 </div>
             )}
-            <AnkiExportButton words={data} />
+            <Link href={learnUrl}>
+              <Button>
+                <GraduationCap className="mr-2 h-4 w-4" />
+                Start Learning
+              </Button>
+            </Link>
         </div>
       </HeaderPortal>
       
@@ -97,12 +99,20 @@ export default async function VocabPage({ searchParams }: { searchParams: Promis
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{stats.totalWords.toLocaleString()}</div>
-            <p className="text-xs text-muted-foreground">
-              <span className="text-green-500 font-medium">+{stats.newWords24h}</span> since yesterday
-            </p>
-            <p className="text-xs text-muted-foreground mt-1">
-                New words added in the last 24 hours
-            </p>
+            <div className="flex items-center gap-2 mt-1">
+              <span className="text-xs text-muted-foreground">
+                {stats.newWords.toLocaleString()} new
+              </span>
+              <span className="text-xs text-muted-foreground">•</span>
+              <span className="text-xs text-muted-foreground">
+                {stats.learningWords.toLocaleString()} learning
+              </span>
+            </div>
+            {stats.newWords24h > 0 && (
+              <p className="text-xs text-green-500 mt-1">
+                +{stats.newWords24h} added today
+              </p>
+            )}
           </CardContent>
         </Card>
         
@@ -116,44 +126,54 @@ export default async function VocabPage({ searchParams }: { searchParams: Promis
           <CardContent>
             <div className="text-2xl font-bold">{stats.masteredWords.toLocaleString()}</div>
             <p className="text-xs text-muted-foreground">
-               <span className="text-green-500 font-medium">+{stats.masteredWords24h}</span> mastered since yesterday
+              {stats.totalWords > 0 ? Math.round((stats.masteredWords / stats.totalWords) * 100) : 0}% of total vocabulary
             </p>
-             <p className="text-xs text-muted-foreground mt-1">
-                Overall learning progress
-            </p>
+            {stats.masteredWords24h > 0 && (
+              <p className="text-xs text-green-500 mt-1">
+                +{stats.masteredWords24h} mastered today
+              </p>
+            )}
           </CardContent>
         </Card>
         
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Practice Sessions</CardTitle>
-            <Activity className="h-4 w-4 text-muted-foreground" />
+            <CardTitle className="text-sm font-medium">Due for Review</CardTitle>
+            <Clock className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{practiceSessions.toLocaleString()}</div>
-            <p className="text-xs text-muted-foreground">
-              Consistent practice maintained ↗
-            </p>
-             <p className="text-xs text-muted-foreground mt-1">
-                Total exercises completed
-            </p>
+            <div className="text-2xl font-bold">{(stats.dueToday + stats.overdueWords).toLocaleString()}</div>
+            <div className="flex items-center gap-2 mt-1">
+              {stats.overdueWords > 0 && (
+                <>
+                  <span className="text-xs text-red-500 flex items-center gap-1">
+                    <AlertCircle className="h-3 w-3" />
+                    {stats.overdueWords} overdue
+                  </span>
+                  <span className="text-xs text-muted-foreground">•</span>
+                </>
+              )}
+              <span className="text-xs text-muted-foreground">
+                {stats.dueToday} due today
+              </span>
+            </div>
           </CardContent>
         </Card>
         
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">
-              Next Review
+              Retention Rate
             </CardTitle>
-            <Calendar className="h-4 w-4 text-muted-foreground" />
+            <TrendingUp className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{dueTomorrow} words</div>
+            <div className="text-2xl font-bold">{stats.averageRetention}%</div>
             <p className="text-xs text-muted-foreground">
-              Scheduled for tomorrow →
+              Average retention across reviewed words
             </p>
-             <p className="text-xs text-muted-foreground mt-1">
-                Words due for spaced repetition
+            <p className="text-xs text-muted-foreground mt-1">
+              Based on FSRS algorithm
             </p>
           </CardContent>
         </Card>

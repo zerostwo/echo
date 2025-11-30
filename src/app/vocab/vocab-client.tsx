@@ -24,7 +24,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Button } from "@/components/ui/button"
-import { ArrowUpDown, SlidersHorizontal, Filter, Loader2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Check, CheckCircle, Eye, EyeOff, Trash2 } from "lucide-react"
+import { SlidersHorizontal, Loader2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Trash2, ChevronDown, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react"
 import { WordDetailSheet } from "./word-detail-sheet"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
@@ -49,6 +49,8 @@ import { getVocabPaginated, VocabFilters, PaginatedVocabResult } from "@/actions
 import { updateWordsStatus, deleteWords } from "@/actions/word-actions"
 import { useDebounce } from "@/hooks/use-debounce"
 import { toast } from "sonner"
+import { VocabFilterDrawer, FilterChips, VocabFilterState } from "./vocab-filter-drawer"
+import { useUserSettings } from "@/components/user-settings-provider"
 
 interface VocabClientProps {
   initialData: PaginatedVocabResult
@@ -56,16 +58,60 @@ interface VocabClientProps {
   settings?: {
     vocabColumns?: string[]
     vocabSortBy?: string
+    vocabSortOrder?: 'asc' | 'desc'
+    vocabPageSize?: number
     vocabShowMastered?: boolean
   }
 }
 
+// Column header with sort dropdown (Supabase style)
+function SortableColumnHeader({ 
+  column, 
+  label, 
+  sortBy, 
+  sortOrder, 
+  onSort 
+}: { 
+  column: string
+  label: string
+  sortBy: string
+  sortOrder: 'asc' | 'desc'
+  onSort: (column: string, order: 'asc' | 'desc') => void
+}) {
+  const isActive = sortBy === column
+  
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" className="h-8 px-2 -ml-2 font-medium text-muted-foreground hover:text-foreground">
+          {label}
+          <ChevronDown className="ml-1 h-3.5 w-3.5" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-40">
+        <DropdownMenuItem onClick={() => onSort(column, 'asc')} className="gap-2">
+          <ArrowUp className="h-3.5 w-3.5" />
+          Sort Ascending
+          {isActive && sortOrder === 'asc' && <span className="ml-auto text-primary">✓</span>}
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => onSort(column, 'desc')} className="gap-2">
+          <ArrowDown className="h-3.5 w-3.5" />
+          Sort Descending
+          {isActive && sortOrder === 'desc' && <span className="ml-auto text-primary">✓</span>}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 export function VocabClient({ initialData, materialId, settings }: VocabClientProps) {
+  const { updateSettings } = useUserSettings()
+  
   const [data, setData] = useState(initialData.data || [])
   const [total, setTotal] = useState(initialData.total)
   const [stats, setStats] = useState(initialData.stats)
   const [page, setPage] = useState(initialData.page)
-  const [pageSize, setPageSize] = useState(initialData.pageSize)
+  const [pageSize, setPageSize] = useState(settings?.vocabPageSize ?? initialData.pageSize)
   const [totalPages, setTotalPages] = useState(initialData.totalPages)
   const [loading, setLoading] = useState(false)
   const [isPending, startTransition] = useTransition()
@@ -73,18 +119,24 @@ export function VocabClient({ initialData, materialId, settings }: VocabClientPr
   // Row selection
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
   
-  // Filters
+  // Filters - unified state
+  const [filters, setFilters] = useState<VocabFilterState>({
+    statusFilter: [],
+    collinsFilter: [],
+    oxfordFilter: undefined,
+    showMastered: settings?.vocabShowMastered ?? false,
+    frequencyRange: undefined, // undefined means no filter
+    materialFilter: materialId || undefined,
+    learningStateFilter: [],
+    dueFilter: undefined,
+  })
+  
+  // Search
   const [search, setSearch] = useState("")
-  const [statusFilter, setStatusFilter] = useState<string[]>([])
-  const [collinsFilter, setCollinsFilter] = useState<number[]>([])
-  const [oxfordFilter, setOxfordFilter] = useState<boolean | undefined>(undefined)
   
-  // Show/hide mastered words - default to false (hidden)
-  const [showMastered, setShowMastered] = useState(settings?.vocabShowMastered ?? false)
-  
-  // Sorting - server-side sorting
-  const [sortBy, setSortBy] = useState<string>('updated_at')
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
+  // Sorting - server-side sorting with persistence
+  const [sortBy, setSortBy] = useState<string>(settings?.vocabSortBy || 'updated_at')
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>(settings?.vocabSortOrder || 'desc')
   
   // Client-side sorting state for table display
   const [sorting, setSorting] = useState<SortingState>([])
@@ -93,38 +145,55 @@ export function VocabClient({ initialData, materialId, settings }: VocabClientPr
   
   const debouncedSearch = useDebounce(search, 300)
 
+  // Max frequency for slider - only use when data is loaded
+  const maxFrequency = useMemo(() => {
+    if (data.length === 0) return 1000
+    const max = Math.max(...(data.map(d => d.frequency || 0)), 100)
+    return Math.ceil(max / 10) * 10 // Round up to nearest 10
+  }, [data])
+
   // Sync state with initialData when materialId changes
   useEffect(() => {
     setData(initialData.data || [])
     setTotal(initialData.total)
     setStats(initialData.stats)
     setPage(initialData.page)
-    setPageSize(initialData.pageSize)
     setTotalPages(initialData.totalPages)
     setSearch("")
-    setStatusFilter([])
-    setCollinsFilter([])
-    setOxfordFilter(undefined)
+    setFilters({
+      statusFilter: [],
+      collinsFilter: [],
+      oxfordFilter: undefined,
+      showMastered: settings?.vocabShowMastered ?? false,
+      frequencyRange: undefined,
+      materialFilter: materialId || undefined,
+      learningStateFilter: [],
+      dueFilter: undefined,
+    })
     setRowSelection({})
-  }, [materialId, initialData])
+  }, [materialId, initialData, settings?.vocabShowMastered])
 
   const fetchData = useCallback(async (newPage?: number, newPageSize?: number, newSortBy?: string, newSortOrder?: 'asc' | 'desc') => {
     setLoading(true)
     try {
-      const filters: VocabFilters = {
-        materialId,
+      const apiFilters: VocabFilters = {
+        materialId: filters.materialFilter,
         search: debouncedSearch || undefined,
-        status: showMastered 
-          ? (statusFilter.length > 0 ? statusFilter : undefined)
-          : (statusFilter.length > 0 ? statusFilter.filter(s => s !== 'MASTERED') : ['NEW', 'LEARNING']),
-        collins: collinsFilter.length > 0 ? collinsFilter : undefined,
-        oxford: oxfordFilter,
+        status: filters.showMastered 
+          ? (filters.statusFilter.length > 0 ? filters.statusFilter : undefined)
+          : (filters.statusFilter.length > 0 ? filters.statusFilter.filter(s => s !== 'MASTERED') : ['NEW', 'LEARNING']),
+        collins: filters.collinsFilter.length > 0 ? filters.collinsFilter : undefined,
+        oxford: filters.oxfordFilter,
+        minFrequency: filters.frequencyRange ? filters.frequencyRange[0] : undefined,
+        maxFrequency: filters.frequencyRange ? filters.frequencyRange[1] : undefined,
+        learningState: (filters.learningStateFilter && filters.learningStateFilter.length > 0) ? filters.learningStateFilter : undefined,
+        dueFilter: filters.dueFilter,
       }
       
       const result = await getVocabPaginated(
         newPage ?? page,
         newPageSize ?? pageSize,
-        filters,
+        apiFilters,
         newSortBy ?? sortBy,
         newSortOrder ?? sortOrder
       )
@@ -148,21 +217,32 @@ export function VocabClient({ initialData, materialId, settings }: VocabClientPr
     } finally {
       setLoading(false)
     }
-  }, [page, pageSize, debouncedSearch, statusFilter, collinsFilter, oxfordFilter, materialId, showMastered, sortBy, sortOrder])
+  }, [page, pageSize, debouncedSearch, filters, sortBy, sortOrder])
 
   // Fetch when filters change
   useEffect(() => {
     fetchData(1) // Reset to page 1 when filters change
-  }, [debouncedSearch, statusFilter, collinsFilter, oxfordFilter, showMastered])
+  }, [debouncedSearch, filters])
 
   const handlePageChange = (newPage: number) => {
     setPage(newPage)
     fetchData(newPage)
   }
 
-  const handlePageSizeChange = (newSize: number) => {
+  const handlePageSizeChange = async (newSize: number) => {
     setPageSize(newSize)
     fetchData(1, newSize)
+    // Persist page size preference
+    await updateSettings({ vocabPageSize: newSize })
+  }
+
+  // Handle server-side sorting with persistence
+  const handleSort = async (column: string, order: 'asc' | 'desc') => {
+    setSortBy(column)
+    setSortOrder(order)
+    fetchData(1, undefined, column, order)
+    // Persist sort preference
+    await updateSettings({ vocabSortBy: column, vocabSortOrder: order })
   }
 
   // Handle bulk status update
@@ -183,6 +263,60 @@ export function VocabClient({ initialData, materialId, settings }: VocabClientPr
       } catch (error) {
         toast.error('Failed to update word status')
       }
+    })
+  }
+
+  // Handle single word status update
+  const handleSingleStatusUpdate = async (wordId: string, status: string) => {
+    startTransition(async () => {
+      try {
+        const result = await updateWordsStatus([wordId], status)
+        if (result?.error) {
+          toast.error(result.error)
+          return
+        }
+        // Update local state immediately for better UX
+        setData(prev => prev.map(word => 
+          word.id === wordId ? { ...word, status } : word
+        ))
+        toast.success(`Word marked as ${status}`)
+      } catch (error) {
+        toast.error('Failed to update word status')
+      }
+    })
+  }
+
+  // Handle filter removal
+  const handleRemoveFilter = (type: string, value?: string | number) => {
+    setFilters(prev => {
+      const newFilters = { ...prev }
+      switch (type) {
+        case 'status':
+          newFilters.statusFilter = prev.statusFilter.filter(s => s !== value)
+          break
+        case 'collins':
+          newFilters.collinsFilter = prev.collinsFilter.filter(c => c !== value)
+          break
+        case 'oxford':
+          newFilters.oxfordFilter = undefined
+          break
+        case 'showMastered':
+          newFilters.showMastered = false
+          break
+        case 'frequency':
+          newFilters.frequencyRange = undefined
+          break
+        case 'material':
+          newFilters.materialFilter = undefined
+          break
+        case 'learningState':
+          newFilters.learningStateFilter = prev.learningStateFilter?.filter(s => s !== value) || []
+          break
+        case 'due':
+          newFilters.dueFilter = undefined
+          break
+      }
+      return newFilters
     })
   }
 
@@ -207,37 +341,31 @@ export function VocabClient({ initialData, materialId, settings }: VocabClientPr
     })
   }
 
-  // Handle server-side sorting
-  const handleSort = (column: string) => {
-    const newOrder = sortBy === column && sortOrder === 'asc' ? 'desc' : 'asc'
-    setSortBy(column)
-    setSortOrder(newOrder)
-    fetchData(1, undefined, column, newOrder)
+  // Handle column visibility change with persistence
+  const handleColumnVisibilityChange = async (columnId: string, isVisible: boolean) => {
+    setColumnVisibility(prev => {
+      const newVisibility = { ...prev, [columnId]: isVisible }
+      // Persist column visibility
+      const visibleColumns = Object.entries(newVisibility)
+        .filter(([, visible]) => visible)
+        .map(([id]) => id)
+      updateSettings({ vocabColumns: visibleColumns })
+      return newVisibility
+    })
   }
 
-  // Create columns with server-side sorting handlers
-  const columns = useMemo(() => getVocabColumns(handleSort, sortBy, sortOrder), [handleSort, sortBy, sortOrder])
+  // Create columns with server-side sorting handlers and status update
+  const columns = useMemo(() => getVocabColumns(handleSort, sortBy, sortOrder, handleSingleStatusUpdate, isPending), [sortBy, sortOrder, isPending])
 
   // Get initial column visibility based on settings
   const getInitialColumnVisibility = () => {
-    const visibleCols = settings?.vocabColumns || ["word", "translation", "pronunciation"]
+    const defaultVisible = ["select", "text", "phonetic", "status", "frequency", "oxford", "fsrsReps", "fsrsDue"]
+    const visibleCols = settings?.vocabColumns || defaultVisible
     const visibility: Record<string, boolean> = {}
-    const columnMapping: Record<string, string> = {
-      word: "text",
-      translation: "tag",
-      definition: "pos",
-      pronunciation: "phonetic",
-      example: "collins"
-    }
     
     columns.forEach((col: any) => {
       const colId = col.id || col.accessorKey
-      const settingKey = Object.entries(columnMapping).find(([, v]) => v === colId)?.[0]
-      if (settingKey) {
-        visibility[colId] = visibleCols.includes(settingKey)
-      } else {
-        visibility[colId] = true
-      }
+      visibility[colId] = visibleCols.includes(colId)
     })
     return visibility
   }
@@ -264,8 +392,12 @@ export function VocabClient({ initialData, materialId, settings }: VocabClientPr
 
   const selectedCount = Object.keys(rowSelection).length
 
+  // Get current filters for learning page
+  const currentFilters = useMemo(() => filters, [filters])
+
   return (
     <div className="space-y-4">
+      {/* Toolbar */}
       <div className="flex items-center justify-between py-4">
         <div className="flex items-center gap-2">
           <Input
@@ -277,31 +409,28 @@ export function VocabClient({ initialData, materialId, settings }: VocabClientPr
           {selectedCount > 0 && (
             <div className="flex items-center gap-2 ml-4">
               <span className="text-sm text-muted-foreground">{selectedCount} selected</span>
-              <Button 
-                variant="outline" 
-                size="sm"
-                onClick={() => handleBulkStatusUpdate('MASTERED')}
-                disabled={isPending}
-              >
-                <CheckCircle className="mr-2 h-4 w-4" />
-                Mark Mastered
-              </Button>
-              <Button 
-                variant="outline" 
-                size="sm"
-                onClick={() => handleBulkStatusUpdate('LEARNING')}
-                disabled={isPending}
-              >
-                Mark Learning
-              </Button>
-              <Button 
-                variant="outline" 
-                size="sm"
-                onClick={() => handleBulkStatusUpdate('NEW')}
-                disabled={isPending}
-              >
-                Mark New
-              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm">
+                    Set Status
+                    <ChevronDown className="ml-2 h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start">
+                  <DropdownMenuItem onClick={() => handleBulkStatusUpdate('NEW')} disabled={isPending}>
+                    <Badge variant="secondary" className="mr-2 bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300">NEW</Badge>
+                    Mark as New
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleBulkStatusUpdate('LEARNING')} disabled={isPending}>
+                    <Badge variant="outline" className="mr-2 border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-400">LEARNING</Badge>
+                    Mark as Learning
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleBulkStatusUpdate('MASTERED')} disabled={isPending}>
+                    <Badge variant="default" className="mr-2 bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">MASTERED</Badge>
+                    Mark as Mastered
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
               <Button 
                 variant="outline" 
                 size="sm"
@@ -316,157 +445,61 @@ export function VocabClient({ initialData, materialId, settings }: VocabClientPr
           )}
         </div>
         <div className="flex gap-2">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="border-dashed">
-                  <Filter className="mr-2 h-4 w-4" />
-                  Status
-                  {statusFilter.length > 0 && (
-                    <Badge variant="secondary" className="ml-2">{statusFilter.length}</Badge>
-                  )}
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuLabel>Filter by Status</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                {["NEW", "LEARNING", "MASTERED"].map((status) => (
-                  <DropdownMenuCheckboxItem
-                    key={status}
-                    checked={statusFilter.includes(status)}
-                    onCheckedChange={(checked) => {
-                      setStatusFilter(
-                        checked
-                          ? [...statusFilter, status]
-                          : statusFilter.filter((val) => val !== status)
-                      )
-                    }}
-                  >
-                    {status}
-                  </DropdownMenuCheckboxItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="border-dashed">
-                  <Filter className="mr-2 h-4 w-4" />
-                  Collins
-                  {collinsFilter.length > 0 && (
-                    <Badge variant="secondary" className="ml-2">{collinsFilter.length}</Badge>
-                  )}
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuLabel>Filter by Collins Level</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                {[5, 4, 3, 2, 1].map((level) => (
-                  <DropdownMenuCheckboxItem
-                    key={level}
-                    checked={collinsFilter.includes(level)}
-                    onCheckedChange={(checked) => {
-                      setCollinsFilter(
-                        checked
-                          ? [...collinsFilter, level]
-                          : collinsFilter.filter((val) => val !== level)
-                      )
-                    }}
-                  >
-                    <span className="text-yellow-500 mr-2">{"★".repeat(level)}</span>
-                    <span className="text-muted-foreground/30">{"★".repeat(5 - level)}</span>
-                  </DropdownMenuCheckboxItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="border-dashed">
-                  <Filter className="mr-2 h-4 w-4" />
-                  Oxford
-                  {oxfordFilter !== undefined && (
-                    <Badge variant="secondary" className="ml-2">1</Badge>
-                  )}
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuLabel>Filter by Oxford 3000</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuCheckboxItem
-                  checked={oxfordFilter === true}
-                  onCheckedChange={(checked) => {
-                    setOxfordFilter(checked ? true : undefined)
-                  }}
-                >
-                  <Badge variant="secondary" className="text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 mr-2">Oxford</Badge>
-                  Only Oxford 3000
-                </DropdownMenuCheckboxItem>
-                <DropdownMenuCheckboxItem
-                  checked={oxfordFilter === false}
-                  onCheckedChange={(checked) => {
-                    setOxfordFilter(checked ? false : undefined)
-                  }}
-                >
-                  Exclude Oxford 3000
-                </DropdownMenuCheckboxItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <Button
-              variant={showMastered ? "default" : "outline"}
-              onClick={() => setShowMastered(!showMastered)}
-              className="border-dashed"
-            >
-              {showMastered ? (
-                <>
-                  <Eye className="mr-2 h-4 w-4" />
-                  Showing Mastered
-                </>
-              ) : (
-                <>
-                  <EyeOff className="mr-2 h-4 w-4" />
-                  Hiding Mastered
-                </>
-              )}
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="ml-auto">
-                  <SlidersHorizontal className="mr-2 h-4 w-4" />
-                  View
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                {table
-                  .getAllColumns()
-                  .filter((column) => column.getCanHide())
-                  .map((column) => {
-                    return (
-                      <DropdownMenuCheckboxItem
-                        key={column.id}
-                        className="capitalize"
-                        checked={column.getIsVisible()}
-                        onCheckedChange={(value) =>
-                          column.toggleVisibility(!!value)
-                        }
-                      >
-                        {column.id}
-                      </DropdownMenuCheckboxItem>
-                    )
-                  })}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
+          <VocabFilterDrawer
+            filters={filters}
+            onFiltersChange={setFilters}
+            maxFrequency={maxFrequency}
+          />
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline">
+                <SlidersHorizontal className="mr-2 h-4 w-4" />
+                View
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {table
+                .getAllColumns()
+                .filter((column) => column.getCanHide())
+                .map((column) => {
+                  return (
+                    <DropdownMenuCheckboxItem
+                      key={column.id}
+                      className="capitalize"
+                      checked={column.getIsVisible()}
+                      onCheckedChange={(value) => handleColumnVisibilityChange(column.id, !!value)}
+                    >
+                      {column.id === 'text' ? 'Word' :
+                       column.id === 'fsrsReps' ? 'Reviews' :
+                       column.id === 'fsrsDue' ? 'Next Review' :
+                       column.id}
+                    </DropdownMenuCheckboxItem>
+                  )
+                })}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
+      </div>
 
-        <div className="rounded-md border relative">
-          {loading && (
-            <div className="absolute inset-0 bg-background/50 flex items-center justify-center z-10">
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-            </div>
-          )}
-          <Table>
-            <TableHeader>
-              {table.getHeaderGroups().map((headerGroup) => (
+      {/* Active Filter Chips */}
+      <FilterChips
+        filters={filters}
+        onRemoveFilter={handleRemoveFilter}
+        maxFrequency={maxFrequency}
+      />
+
+      {/* Table */}
+      <div className="rounded-md border relative">
+        {loading && (
+          <div className="absolute inset-0 bg-background/50 flex items-center justify-center z-10">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        )}
+        <Table>
+          <TableHeader>
+            {table.getHeaderGroups().map((headerGroup) => (
                 <TableRow key={headerGroup.id}>
                   {headerGroup.headers.map((header) => {
                     return (
@@ -584,11 +617,13 @@ export function VocabClient({ initialData, materialId, settings }: VocabClientPr
   )
 }
 
-// Column definitions factory function with server-side sorting
+// Column definitions factory function with server-side sorting and status update
 export const getVocabColumns = (
-  handleSort: (column: string) => void, 
+  handleSort: (column: string, order: 'asc' | 'desc') => void, 
   sortBy: string, 
-  sortOrder: 'asc' | 'desc'
+  sortOrder: 'asc' | 'desc',
+  onStatusChange: (wordId: string, status: string) => void,
+  isPending: boolean
 ): ColumnDef<any>[] => [
   {
     id: "select",
@@ -616,23 +651,28 @@ export const getVocabColumns = (
   },
   {
     accessorKey: "text",
-    header: () => {
-        return (
-          <Button
-            variant="ghost"
-            className="pl-0"
-            onClick={() => handleSort('text')}
-          >
-            Word
-            <ArrowUpDown className={`ml-2 h-4 w-4 ${sortBy === 'text' ? 'text-primary' : ''}`} />
-          </Button>
-        )
-    },
+    header: () => (
+      <SortableColumnHeader 
+        column="text" 
+        label="Word" 
+        sortBy={sortBy} 
+        sortOrder={sortOrder} 
+        onSort={handleSort} 
+      />
+    ),
     cell: ({ row }) => <span className="font-medium">{row.getValue("text")}</span>
   },
   {
     accessorKey: "phonetic",
-    header: "Phonetic",
+    header: () => (
+      <SortableColumnHeader 
+        column="phonetic" 
+        label="Phonetic" 
+        sortBy={sortBy} 
+        sortOrder={sortOrder} 
+        onSort={handleSort} 
+      />
+    ),
     cell: ({ row }) => {
       const phonetic = row.getValue("phonetic") as string | null;
       if (!phonetic) return <span className="text-muted-foreground">-</span>;
@@ -645,32 +685,86 @@ export const getVocabColumns = (
   },
   {
     accessorKey: "status",
-    header: "Status",
+    header: () => (
+      <SortableColumnHeader 
+        column="status" 
+        label="Status" 
+        sortBy={sortBy} 
+        sortOrder={sortOrder} 
+        onSort={handleSort} 
+      />
+    ),
     cell: ({ row }) => {
         const status = row.getValue("status") as string;
-        let variant: "default" | "secondary" | "destructive" | "outline" = "outline";
+        const wordId = row.original.id;
         
-        if (status === "MASTERED") variant = "default";
-        if (status === "NEW") variant = "secondary";
-        if (status === "LEARNING") variant = "outline";
+        const statusConfig = {
+          NEW: {
+            label: "New",
+            className: "bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700",
+          },
+          LEARNING: {
+            label: "Learning",
+            className: "bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:hover:bg-blue-900/50",
+          },
+          MASTERED: {
+            label: "Mastered",
+            className: "bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:hover:bg-amber-900/50",
+          },
+        };
         
-        return <Badge variant={variant} className="text-xs">{status}</Badge>
+        const currentConfig = statusConfig[status as keyof typeof statusConfig] || statusConfig.NEW;
+        
+        return (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button 
+                className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors cursor-pointer ${currentConfig.className}`}
+                onClick={(e) => e.stopPropagation()}
+                disabled={isPending}
+              >
+                {currentConfig.label}
+                <ChevronDown className="h-3 w-3 opacity-50" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" onClick={(e) => e.stopPropagation()}>
+              <DropdownMenuItem 
+                onClick={() => onStatusChange(wordId, 'NEW')}
+                disabled={isPending || status === 'NEW'}
+              >
+                <span className={`inline-block w-2 h-2 rounded-full mr-2 bg-gray-400`} />
+                New
+              </DropdownMenuItem>
+              <DropdownMenuItem 
+                onClick={() => onStatusChange(wordId, 'LEARNING')}
+                disabled={isPending || status === 'LEARNING'}
+              >
+                <span className={`inline-block w-2 h-2 rounded-full mr-2 bg-blue-500`} />
+                Learning
+              </DropdownMenuItem>
+              <DropdownMenuItem 
+                onClick={() => onStatusChange(wordId, 'MASTERED')}
+                disabled={isPending || status === 'MASTERED'}
+              >
+                <span className={`inline-block w-2 h-2 rounded-full mr-2 bg-amber-500`} />
+                Mastered
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        );
     }
   },
   {
     accessorKey: "frequency",
-    header: () => {
-      return (
-        <Button
-          variant="ghost"
-          className="pl-0"
-          onClick={() => handleSort('frequency')}
-        >
-          Frequency
-          <ArrowUpDown className={`ml-2 h-4 w-4 ${sortBy === 'frequency' ? 'text-primary' : ''}`} />
-        </Button>
-      )
-    },
+    header: () => (
+      <SortableColumnHeader 
+        column="frequency" 
+        label="Frequency" 
+        sortBy={sortBy} 
+        sortOrder={sortOrder} 
+        onSort={handleSort} 
+      />
+    ),
     cell: ({ row }) => {
       const freq = (row.getValue("frequency") as number) ?? 0;
       return (
@@ -682,7 +776,15 @@ export const getVocabColumns = (
   },
   {
     accessorKey: "collins",
-    header: "Level",
+    header: () => (
+      <SortableColumnHeader 
+        column="collins" 
+        label="Level" 
+        sortBy={sortBy} 
+        sortOrder={sortOrder} 
+        onSort={handleSort} 
+      />
+    ),
     cell: ({ row }) => {
       const stars = row.getValue("collins") as number;
       if (!stars) return <span className="text-muted-foreground text-xs">-</span>;
@@ -696,7 +798,15 @@ export const getVocabColumns = (
   },
   {
     accessorKey: "oxford",
-    header: "Oxford 3000",
+    header: () => (
+      <SortableColumnHeader 
+        column="oxford" 
+        label="Oxford 3000" 
+        sortBy={sortBy} 
+        sortOrder={sortOrder} 
+        onSort={handleSort} 
+      />
+    ),
     enableHiding: true,
     cell: ({ row }) => {
       const oxford = row.getValue("oxford") as number;
@@ -704,6 +814,87 @@ export const getVocabColumns = (
         return <Badge variant="secondary" className="text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">Oxford</Badge>;
       }
       return null;
+    }
+  },
+  {
+    accessorKey: "fsrsReps",
+    header: () => (
+      <SortableColumnHeader 
+        column="fsrs_reps" 
+        label="Reviews" 
+        sortBy={sortBy} 
+        sortOrder={sortOrder} 
+        onSort={handleSort} 
+      />
+    ),
+    enableHiding: true,
+    cell: ({ row }) => {
+      const reps = row.getValue("fsrsReps") as number;
+      const lapses = row.original.fsrsLapses as number;
+      
+      return (
+        <div className="flex items-center gap-1 text-sm">
+          <span>{reps}</span>
+          {lapses > 0 && (
+            <span className="text-red-500 text-xs">(-{lapses})</span>
+          )}
+        </div>
+      );
+    }
+  },
+  {
+    accessorKey: "fsrsDue",
+    header: () => (
+      <SortableColumnHeader 
+        column="fsrs_due" 
+        label="Next Review" 
+        sortBy={sortBy} 
+        sortOrder={sortOrder} 
+        onSort={handleSort} 
+      />
+    ),
+    enableHiding: true,
+    cell: ({ row }) => {
+      const fsrsDue = row.getValue("fsrsDue") as string | null;
+      const fsrsState = row.original.fsrsState as number;
+      
+      // State: 0=New, 1=Learning, 2=Review, 3=Relearning
+      if (fsrsState === 0 || !fsrsDue) {
+        return <span className="text-muted-foreground text-xs">Not started</span>;
+      }
+      
+      const dueDate = new Date(fsrsDue);
+      const now = new Date();
+      const diffMs = dueDate.getTime() - now.getTime();
+      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+      
+      let displayText = '';
+      let colorClass = '';
+      
+      if (diffMs < 0) {
+        // Overdue
+        const overdueDays = Math.abs(diffDays);
+        displayText = overdueDays === 0 ? 'Due now' : `${overdueDays} d overdue`;
+        colorClass = 'text-red-600 dark:text-red-400';
+      } else if (diffDays === 0) {
+        displayText = 'Today';
+        colorClass = 'text-orange-600 dark:text-orange-400';
+      } else if (diffDays === 1) {
+        displayText = 'Tomorrow';
+        colorClass = 'text-yellow-600 dark:text-yellow-400';
+      } else if (diffDays <= 7) {
+        displayText = `${diffDays} days`;
+        colorClass = 'text-green-600 dark:text-green-400';
+      } else {
+        displayText = dueDate.toLocaleDateString();
+        colorClass = 'text-muted-foreground';
+      }
+      
+      return (
+        <span className={`text-sm ${colorClass}`}>
+          {displayText}
+        </span>
+      );
     }
   },
 ]

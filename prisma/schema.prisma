@@ -166,11 +166,53 @@ model UserWordStatus {
   word      Word       @relation(fields: [wordId], references: [id], onDelete: Cascade)
   
   status    String     @default("UNKNOWN")
+  
+  // FSRS fields for spaced repetition
+  fsrsDue         DateTime?  @map("fsrs_due") @db.Timestamptz
+  fsrsStability   Float?     @map("fsrs_stability")
+  fsrsDifficulty  Float?     @map("fsrs_difficulty")
+  fsrsElapsedDays Int        @default(0) @map("fsrs_elapsed_days")
+  fsrsScheduledDays Int      @default(0) @map("fsrs_scheduled_days")
+  fsrsReps        Int        @default(0) @map("fsrs_reps")
+  fsrsLapses      Int        @default(0) @map("fsrs_lapses")
+  fsrsState       Int        @default(0) @map("fsrs_state") // 0=New, 1=Learning, 2=Review, 3=Relearning
+  fsrsLastReview  DateTime?  @map("fsrs_last_review") @db.Timestamptz
+  
+  // Error tracking
+  errorCount      Int        @default(0) @map("error_count")
+  lastErrorAt     DateTime?  @map("last_error_at") @db.Timestamptz
+  
   createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime   @updatedAt @map("updated_at") @db.Timestamptz
+  
+  reviews   WordReview[]
 
   @@unique([userId, wordId])
+  @@index([userId, status])
+  @@index([userId, fsrsDue])
   @@map("user_word_statuses")
+}
+
+model WordReview {
+  id              String   @id @default(cuid())
+  userWordStatusId String  @map("user_word_status_id")
+  userWordStatus  UserWordStatus @relation(fields: [userWordStatusId], references: [id], onDelete: Cascade)
+  
+  rating          Int      // FSRS rating 1-4 (Again, Hard, Good, Easy)
+  mode            String   // "typing" or "multiple_choice"
+  responseTimeMs  Int      @map("response_time_ms")
+  wasCorrect      Boolean  @map("was_correct")
+  errorCount      Int      @default(0) @map("error_count")
+  
+  // FSRS state after this review
+  newStability    Float    @map("new_stability")
+  newDifficulty   Float    @map("new_difficulty")
+  newDue          DateTime @map("new_due") @db.Timestamptz
+  
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([userWordStatusId])
+  @@map("word_reviews")
 }
 
 model PracticeProgress {

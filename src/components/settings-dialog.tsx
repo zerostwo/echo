@@ -110,6 +110,14 @@ const VOCAB_COLUMNS = [
   { id: "pronunciation", label: "Pronunciation" },
 ]
 
+const DAILY_WORD_GOALS = [
+  { value: 5, label: "5 words/day (Light)" },
+  { value: 10, label: "10 words/day (Regular)" },
+  { value: 20, label: "20 words/day (Intensive)" },
+  { value: 30, label: "30 words/day (Serious)" },
+  { value: 50, label: "50 words/day (Extreme)" },
+]
+
 // Common timezones list
 const TIMEZONES = [
   { value: "UTC", label: "UTC (Coordinated Universal Time)" },
@@ -190,6 +198,7 @@ export function SettingsDialog({
   const vocabColumns = settings.vocabColumns || ["word", "translation"]
   const vocabSortBy = settings.vocabSortBy || "date_added"
   const vocabShowMastered = settings.vocabShowMastered ?? false
+  const dailyWordGoal = settings.dailyWordGoal || 10
 
   // Whisper settings with defaults
   const whisperEngine = settings.whisperEngine || "faster-whisper"
@@ -301,29 +310,6 @@ export function SettingsDialog({
                     </Select>
                     <p className="text-sm text-muted-foreground">
                       Used for displaying notification times and daily activity.
-                    </p>
-                  </div>
-
-                  <Separator />
-
-                  <div className="space-y-2">
-                    <Label htmlFor="pronunciation-accent">Pronunciation Accent</Label>
-                    <Select
-                      value={settings.pronunciationAccent || "us"}
-                      onValueChange={(value) =>
-                        setSettings({ ...settings, pronunciationAccent: value })
-                      }
-                    >
-                      <SelectTrigger id="pronunciation-accent">
-                        <SelectValue placeholder="Select accent" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="us">American English (US)</SelectItem>
-                        <SelectItem value="uk">British English (UK)</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <p className="text-sm text-muted-foreground">
-                      Choose the accent for word pronunciation playback.
                     </p>
                   </div>
 
@@ -517,64 +503,58 @@ export function SettingsDialog({
               {activeTab === "vocabulary" && (
                 <div className="space-y-6">
                   <div className="space-y-4">
-                    <Label className="text-base">Data Table Columns</Label>
-                    <div className="grid gap-4">
-                      {VOCAB_COLUMNS.map((column) => (
-                        <div key={column.id} className="flex items-center space-x-2">
-                          <Checkbox
-                            id={`col-${column.id}`}
-                            checked={vocabColumns.includes(column.id)}
-                            onCheckedChange={(checked) => {
-                              const newCols = checked
-                                ? [...vocabColumns, column.id]
-                                : vocabColumns.filter((c: string) => c !== column.id)
-                              setSettings({ ...settings, vocabColumns: newCols })
-                            }}
-                          />
-                          <Label htmlFor={`col-${column.id}`}>{column.label}</Label>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                  
-                  <Separator />
-
-                  <div className="space-y-2">
-                    <Label htmlFor="vocab-sort">Default Sort Order</Label>
-                    <Select
-                      value={vocabSortBy}
-                      onValueChange={(value) =>
-                        setSettings({ ...settings, vocabSortBy: value })
-                      }
-                    >
-                      <SelectTrigger id="vocab-sort">
-                        <SelectValue placeholder="Select sort order" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="date_added">Date Added (Newest First)</SelectItem>
-                        <SelectItem value="date_added_asc">Date Added (Oldest First)</SelectItem>
-                        <SelectItem value="alphabetical">Alphabetical (A-Z)</SelectItem>
-                        <SelectItem value="alphabetical_desc">Alphabetical (Z-A)</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <Separator />
-
-                  <div className="flex items-center justify-between">
-                    <div className="space-y-0.5">
-                      <Label htmlFor="show-mastered">Show Mastered Words</Label>
+                    <h3 className="text-base font-medium">Learning Goals</h3>
+                    
+                    <div className="space-y-2">
+                      <Label htmlFor="daily-word-goal">Daily Word Goal</Label>
+                      <Select
+                        value={dailyWordGoal.toString()}
+                        onValueChange={(value) =>
+                          setSettings({ ...settings, dailyWordGoal: parseInt(value) })
+                        }
+                      >
+                        <SelectTrigger id="daily-word-goal">
+                          <SelectValue placeholder="Select daily goal" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {DAILY_WORD_GOALS.map((goal) => (
+                            <SelectItem key={goal.value} value={goal.value.toString()}>
+                              {goal.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                       <p className="text-sm text-muted-foreground">
-                        Include words you have already mastered in the table.
+                        Set how many new words you want to learn each day.
                       </p>
                     </div>
-                    <Switch
-                      id="show-mastered"
-                      checked={vocabShowMastered}
-                      onCheckedChange={(checked) =>
-                        setSettings({ ...settings, vocabShowMastered: checked })
-                      }
-                    />
+                  </div>
+
+                  <Separator />
+
+                  <div className="space-y-4">
+                    <h3 className="text-base font-medium">Pronunciation</h3>
+                    
+                    <div className="space-y-2">
+                      <Label htmlFor="pronunciation-accent">Pronunciation Accent</Label>
+                      <Select
+                        value={settings.pronunciationAccent || "us"}
+                        onValueChange={(value) =>
+                          setSettings({ ...settings, pronunciationAccent: value })
+                        }
+                      >
+                        <SelectTrigger id="pronunciation-accent">
+                          <SelectValue placeholder="Select accent" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="us">American English (US)</SelectItem>
+                          <SelectItem value="uk">British English (UK)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <p className="text-sm text-muted-foreground">
+                        Choose the accent for word pronunciation playback during learning.
+                      </p>
+                    </div>
                   </div>
                 </div>
               )}

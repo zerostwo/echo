@@ -481,6 +481,10 @@ export interface VocabFilters {
     collins?: number[];
     oxford?: boolean;
     materialId?: string;
+    minFrequency?: number;
+    maxFrequency?: number;
+    learningState?: number[]; // FSRS states: 0=New, 1=Learning, 2=Review, 3=Relearning
+    dueFilter?: 'overdue' | 'today' | 'week' | 'month';
 }
 
 export interface PaginatedVocabResult {
@@ -492,8 +496,13 @@ export interface PaginatedVocabResult {
     stats: {
         totalWords: number;
         masteredWords: number;
+        learningWords: number;
+        newWords: number;
         newWords24h: number;
         masteredWords24h: number;
+        dueToday: number;
+        overdueWords: number;
+        averageRetention: number;
     };
 }
 
@@ -579,7 +588,7 @@ export async function getVocabPaginated(
                 page,
                 pageSize,
                 totalPages: 0,
-                stats: { totalWords: 0, masteredWords: 0, newWords24h: 0, masteredWords24h: 0 }
+                stats: { totalWords: 0, masteredWords: 0, learningWords: 0, newWords: 0, newWords24h: 0, masteredWords24h: 0, dueToday: 0, overdueWords: 0, averageRetention: 0 }
             };
             await setCached(cacheKey, emptyResult, 60);
             return emptyResult;
@@ -614,7 +623,7 @@ export async function getVocabPaginated(
                 page,
                 pageSize,
                 totalPages: 0,
-                stats: { totalWords: 0, masteredWords: 0, newWords24h: 0, masteredWords24h: 0 }
+                stats: { totalWords: 0, masteredWords: 0, learningWords: 0, newWords: 0, newWords24h: 0, masteredWords24h: 0, dueToday: 0, overdueWords: 0, averageRetention: 0 }
             };
             await setCached(cacheKey, emptyResult, 60);
             return emptyResult;
@@ -647,7 +656,7 @@ export async function getVocabPaginated(
                 page,
                 pageSize,
                 totalPages: 0,
-                stats: { totalWords: 0, masteredWords: 0, newWords24h: 0, masteredWords24h: 0 }
+                stats: { totalWords: 0, masteredWords: 0, learningWords: 0, newWords: 0, newWords24h: 0, masteredWords24h: 0, dueToday: 0, overdueWords: 0, averageRetention: 0 }
             };
             await setCached(cacheKey, emptyResult, 60);
             return emptyResult;
@@ -674,7 +683,7 @@ export async function getVocabPaginated(
                 page,
                 pageSize,
                 totalPages: 0,
-                stats: { totalWords: 0, masteredWords: 0, newWords24h: 0, masteredWords24h: 0 }
+                stats: { totalWords: 0, masteredWords: 0, learningWords: 0, newWords: 0, newWords24h: 0, masteredWords24h: 0, dueToday: 0, overdueWords: 0, averageRetention: 0 }
             };
             await setCached(cacheKey, emptyResult, 60);
             return emptyResult;
@@ -741,15 +750,46 @@ export async function getVocabPaginated(
                 status: status?.status ?? 'NEW',
                 statusCreatedAt: status?.created_at,
                 statusUpdatedAt: status?.updated_at,
+                // FSRS learning progress fields
+                fsrsDue: status?.fsrs_due,
+                fsrsReps: status?.fsrs_reps ?? 0,
+                fsrsLapses: status?.fsrs_lapses ?? 0,
+                fsrsState: status?.fsrs_state ?? 0, // 0=New, 1=Learning, 2=Review, 3=Relearning
+                fsrsLastReview: status?.fsrs_last_review,
             });
         });
 
         // Calculate stats before filtering
         const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+        const now = new Date();
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const todayEnd = new Date(today.getTime() + 24 * 60 * 60 * 1000);
+        
         const totalWords = mergedWords.length;
         const masteredWords = mergedWords.filter(w => w.status === 'MASTERED').length;
+        const learningWords = mergedWords.filter(w => w.status === 'LEARNING').length;
+        const newWords = mergedWords.filter(w => w.status === 'NEW').length;
         const newWords24h = mergedWords.filter(w => w.statusCreatedAt > oneDayAgo).length;
         const masteredWords24h = mergedWords.filter(w => w.status === 'MASTERED' && w.statusUpdatedAt > oneDayAgo).length;
+        
+        // Calculate due today and overdue
+        const dueToday = mergedWords.filter(w => {
+            if (!w.fsrsDue || w.fsrsState === 0) return false;
+            const dueDate = new Date(w.fsrsDue);
+            return dueDate >= today && dueDate < todayEnd;
+        }).length;
+        
+        const overdueWords = mergedWords.filter(w => {
+            if (!w.fsrsDue || w.fsrsState === 0) return false;
+            const dueDate = new Date(w.fsrsDue);
+            return dueDate < now;
+        }).length;
+        
+        // Calculate average retention (based on words with reviews)
+        const wordsWithReviews = mergedWords.filter(w => w.fsrsReps > 0);
+        const avgRetention = wordsWithReviews.length > 0 
+            ? wordsWithReviews.reduce((acc, w) => acc + (w.fsrsLapses > 0 ? 1 - (w.fsrsLapses / w.fsrsReps) : 1), 0) / wordsWithReviews.length * 100
+            : 0;
 
         // Apply filters
         if (filters.search) {
@@ -772,6 +812,44 @@ export async function getVocabPaginated(
             mergedWords = mergedWords.filter(w => w.oxford === 1);
         } else if (filters.oxford === false) {
             mergedWords = mergedWords.filter(w => w.oxford !== 1);
+        }
+
+        // Frequency range filter
+        if (filters.minFrequency !== undefined) {
+            mergedWords = mergedWords.filter(w => w.frequency >= filters.minFrequency!);
+        }
+        if (filters.maxFrequency !== undefined) {
+            mergedWords = mergedWords.filter(w => w.frequency <= filters.maxFrequency!);
+        }
+
+        // FSRS learning state filter
+        if (filters.learningState && filters.learningState.length > 0) {
+            mergedWords = mergedWords.filter(w => filters.learningState!.includes(w.fsrsState));
+        }
+
+        // Due filter
+        if (filters.dueFilter) {
+            const filterNow = new Date();
+            const weekEnd = new Date(filterNow.getTime() + 7 * 24 * 60 * 60 * 1000);
+            const monthEnd = new Date(filterNow.getTime() + 30 * 24 * 60 * 60 * 1000);
+            
+            mergedWords = mergedWords.filter(w => {
+                if (!w.fsrsDue) return false;
+                const dueDate = new Date(w.fsrsDue);
+                
+                switch (filters.dueFilter) {
+                    case 'overdue':
+                        return dueDate < filterNow;
+                    case 'today':
+                        return dueDate >= today && dueDate < todayEnd;
+                    case 'week':
+                        return dueDate <= weekEnd;
+                    case 'month':
+                        return dueDate <= monthEnd;
+                    default:
+                        return true;
+                }
+            });
         }
 
         // Sort
@@ -816,7 +894,17 @@ export async function getVocabPaginated(
             page,
             pageSize,
             totalPages,
-            stats: { totalWords, masteredWords, newWords24h, masteredWords24h }
+            stats: { 
+                totalWords, 
+                masteredWords, 
+                learningWords,
+                newWords,
+                newWords24h, 
+                masteredWords24h,
+                dueToday,
+                overdueWords,
+                averageRetention: Math.round(avgRetention),
+            }
         };
 
         // Cache the result for 2 minutes

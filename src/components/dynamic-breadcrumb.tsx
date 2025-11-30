@@ -38,6 +38,12 @@ export function DynamicBreadcrumb({ folders }: DynamicBreadcrumbProps) {
     if (pathname === "/vocab") {
       return [{ title: "Vocabulary" }]
     }
+    if (pathname === "/learn") {
+      return [
+        { title: "Vocabulary", href: "/vocab" },
+        { title: "Learn" }
+      ]
+    }
     if (pathname === "/trash") {
       return [{ title: "Trash" }]
     }
