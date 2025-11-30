@@ -24,7 +24,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Button } from "@/components/ui/button"
-import { ArrowUpDown, SlidersHorizontal, Filter, Loader2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Check, CheckCircle } from "lucide-react"
+import { ArrowUpDown, SlidersHorizontal, Filter, Loader2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Check, CheckCircle, Eye, EyeOff, Trash2 } from "lucide-react"
 import { WordDetailSheet } from "./word-detail-sheet"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
@@ -46,7 +46,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { getVocabPaginated, VocabFilters, PaginatedVocabResult } from "@/actions/vocab-actions"
-import { updateWordsStatus } from "@/actions/word-actions"
+import { updateWordsStatus, deleteWords } from "@/actions/word-actions"
 import { useDebounce } from "@/hooks/use-debounce"
 import { toast } from "sonner"
 
@@ -79,15 +79,19 @@ export function VocabClient({ initialData, materialId, settings }: VocabClientPr
   const [collinsFilter, setCollinsFilter] = useState<number[]>([])
   const [oxfordFilter, setOxfordFilter] = useState<boolean | undefined>(undefined)
   
-  // Sorting - use local state for client-side sorting
+  // Show/hide mastered words - default to false (hidden)
+  const [showMastered, setShowMastered] = useState(settings?.vocabShowMastered ?? false)
+  
+  // Sorting - server-side sorting
+  const [sortBy, setSortBy] = useState<string>('updated_at')
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
+  
+  // Client-side sorting state for table display
   const [sorting, setSorting] = useState<SortingState>([])
   
   const [selectedWord, setSelectedWord] = useState<any>(null)
   
   const debouncedSearch = useDebounce(search, 300)
-
-  // Apply settings - filter out mastered words if setting is off
-  const showMastered = settings?.vocabShowMastered !== false
 
   // Sync state with initialData when materialId changes
   useEffect(() => {
@@ -104,7 +108,7 @@ export function VocabClient({ initialData, materialId, settings }: VocabClientPr
     setRowSelection({})
   }, [materialId, initialData])
 
-  const fetchData = useCallback(async (newPage?: number, newPageSize?: number) => {
+  const fetchData = useCallback(async (newPage?: number, newPageSize?: number, newSortBy?: string, newSortOrder?: 'asc' | 'desc') => {
     setLoading(true)
     try {
       const filters: VocabFilters = {
@@ -121,8 +125,8 @@ export function VocabClient({ initialData, materialId, settings }: VocabClientPr
         newPage ?? page,
         newPageSize ?? pageSize,
         filters,
-        'updated_at',
-        'desc'
+        newSortBy ?? sortBy,
+        newSortOrder ?? sortOrder
       )
       
       if ('error' in result) {
@@ -144,7 +148,7 @@ export function VocabClient({ initialData, materialId, settings }: VocabClientPr
     } finally {
       setLoading(false)
     }
-  }, [page, pageSize, debouncedSearch, statusFilter, collinsFilter, oxfordFilter, materialId, showMastered])
+  }, [page, pageSize, debouncedSearch, statusFilter, collinsFilter, oxfordFilter, materialId, showMastered, sortBy, sortOrder])
 
   // Fetch when filters change
   useEffect(() => {
@@ -182,6 +186,38 @@ export function VocabClient({ initialData, materialId, settings }: VocabClientPr
     })
   }
 
+  // Handle bulk delete
+  const handleBulkDelete = async () => {
+    const selectedIds = Object.keys(rowSelection).map(idx => data[parseInt(idx)]?.id).filter(Boolean)
+    if (selectedIds.length === 0) return
+
+    startTransition(async () => {
+      try {
+        const result = await deleteWords(selectedIds)
+        if (result?.error) {
+          toast.error(result.error)
+          return
+        }
+        toast.success(`${selectedIds.length} word(s) deleted`)
+        setRowSelection({})
+        fetchData(page)
+      } catch (error) {
+        toast.error('Failed to delete words')
+      }
+    })
+  }
+
+  // Handle server-side sorting
+  const handleSort = (column: string) => {
+    const newOrder = sortBy === column && sortOrder === 'asc' ? 'desc' : 'asc'
+    setSortBy(column)
+    setSortOrder(newOrder)
+    fetchData(1, undefined, column, newOrder)
+  }
+
+  // Create columns with server-side sorting handlers
+  const columns = useMemo(() => getVocabColumns(handleSort, sortBy, sortOrder), [handleSort, sortBy, sortOrder])
+
   // Get initial column visibility based on settings
   const getInitialColumnVisibility = () => {
     const visibleCols = settings?.vocabColumns || ["word", "translation", "pronunciation"]
@@ -194,7 +230,7 @@ export function VocabClient({ initialData, materialId, settings }: VocabClientPr
       example: "collins"
     }
     
-    vocabColumns.forEach((col: any) => {
+    columns.forEach((col: any) => {
       const colId = col.id || col.accessorKey
       const settingKey = Object.entries(columnMapping).find(([, v]) => v === colId)?.[0]
       if (settingKey) {
@@ -210,7 +246,7 @@ export function VocabClient({ initialData, materialId, settings }: VocabClientPr
 
   const table = useReactTable({
     data,
-    columns: vocabColumns,
+    columns,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
@@ -265,6 +301,16 @@ export function VocabClient({ initialData, materialId, settings }: VocabClientPr
                 disabled={isPending}
               >
                 Mark New
+              </Button>
+              <Button 
+                variant="outline" 
+                size="sm"
+                onClick={handleBulkDelete}
+                disabled={isPending}
+                className="text-destructive hover:text-destructive"
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                Delete
               </Button>
             </div>
           )}
@@ -363,6 +409,23 @@ export function VocabClient({ initialData, materialId, settings }: VocabClientPr
                 </DropdownMenuCheckboxItem>
               </DropdownMenuContent>
             </DropdownMenu>
+            <Button
+              variant={showMastered ? "default" : "outline"}
+              onClick={() => setShowMastered(!showMastered)}
+              className="border-dashed"
+            >
+              {showMastered ? (
+                <>
+                  <Eye className="mr-2 h-4 w-4" />
+                  Showing Mastered
+                </>
+              ) : (
+                <>
+                  <EyeOff className="mr-2 h-4 w-4" />
+                  Hiding Mastered
+                </>
+              )}
+            </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" className="ml-auto">
@@ -437,7 +500,7 @@ export function VocabClient({ initialData, materialId, settings }: VocabClientPr
                 ))
               ) : (
                 <TableRow>
-                  <TableCell colSpan={vocabColumns.length} className="h-24 text-center">
+                  <TableCell colSpan={columns.length} className="h-24 text-center">
                     No results.
                   </TableCell>
                 </TableRow>
@@ -521,8 +584,12 @@ export function VocabClient({ initialData, materialId, settings }: VocabClientPr
   )
 }
 
-// Column definitions with checkbox selection
-export const vocabColumns: ColumnDef<any>[] = [
+// Column definitions factory function with server-side sorting
+export const getVocabColumns = (
+  handleSort: (column: string) => void, 
+  sortBy: string, 
+  sortOrder: 'asc' | 'desc'
+): ColumnDef<any>[] => [
   {
     id: "select",
     header: ({ table }) => (
@@ -549,15 +616,15 @@ export const vocabColumns: ColumnDef<any>[] = [
   },
   {
     accessorKey: "text",
-    header: ({ column }) => {
+    header: () => {
         return (
           <Button
             variant="ghost"
             className="pl-0"
-            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+            onClick={() => handleSort('text')}
           >
             Word
-            <ArrowUpDown className="ml-2 h-4 w-4" />
+            <ArrowUpDown className={`ml-2 h-4 w-4 ${sortBy === 'text' ? 'text-primary' : ''}`} />
           </Button>
         )
     },
@@ -592,15 +659,15 @@ export const vocabColumns: ColumnDef<any>[] = [
   },
   {
     accessorKey: "frequency",
-    header: ({ column }) => {
+    header: () => {
       return (
         <Button
           variant="ghost"
           className="pl-0"
-          onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+          onClick={() => handleSort('frequency')}
         >
           Frequency
-          <ArrowUpDown className="ml-2 h-4 w-4" />
+          <ArrowUpDown className={`ml-2 h-4 w-4 ${sortBy === 'frequency' ? 'text-primary' : ''}`} />
         </Button>
       )
     },

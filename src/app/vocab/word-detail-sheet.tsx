@@ -16,6 +16,7 @@ import { Loader2, Volume2, Play, Pause, ExternalLink, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import Link from "next/link"
 import { parsePos, parseExchange, parseTags } from "@/lib/vocab-utils"
+import { useUserSettings } from "@/components/user-settings-provider"
 
 interface WordDetailSheetProps {
     word: any
@@ -24,13 +25,14 @@ interface WordDetailSheetProps {
 }
 
 export function WordDetailSheet({ word, open, onOpenChange }: WordDetailSheetProps) {
+    const { pronunciationAccent } = useUserSettings();
     const [occurrences, setOccurrences] = useState<any[]>([]);
     const [loadingCtx, setLoadingCtx] = useState(false);
     const [playingSentenceId, setPlayingSentenceId] = useState<string | null>(null);
     const [isPlayingWord, setIsPlayingWord] = useState(false);
     
     const sentenceAudioRef = useRef<HTMLAudioElement>(null);
-    const wordAudioRef = useRef<HTMLAudioElement>(null);
+    const youdaoAudioRef = useRef<HTMLAudioElement>(null);
 
     useEffect(() => {
         if (open && word?.id) {
@@ -108,35 +110,30 @@ export function WordDetailSheet({ word, open, onOpenChange }: WordDetailSheetPro
         };
     };
 
-    // Handle word pronunciation playback
+    // Handle word pronunciation playback using Youdao API
     const handlePlayWord = () => {
-        // Use existing audio if available
-        if (word?.audio && wordAudioRef.current) {
-            const audio = wordAudioRef.current;
-            if (isPlayingWord) {
-                audio.pause();
-                setIsPlayingWord(false);
-            } else {
-                audio.currentTime = 0;
-                audio.play().catch(console.error);
-                setIsPlayingWord(true);
-            }
+        if (!youdaoAudioRef.current || !word?.text) return;
+
+        const audio = youdaoAudioRef.current;
+        
+        if (isPlayingWord) {
+            audio.pause();
+            setIsPlayingWord(false);
             return;
         }
 
-        // Fallback to Web Speech API
-        if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-            if (window.speechSynthesis.speaking) {
-                window.speechSynthesis.cancel();
-                setIsPlayingWord(false);
-            } else {
-                const utterance = new SpeechSynthesisUtterance(word.text);
-                utterance.lang = 'en-US';
-                utterance.onend = () => setIsPlayingWord(false);
-                setIsPlayingWord(true);
-                window.speechSynthesis.speak(utterance);
-            }
-        }
+        // type=1 for UK accent, type=2 for US accent
+        const accentType = pronunciationAccent === 'uk' ? 1 : 2;
+        const audioUrl = `https://dict.youdao.com/dictvoice?audio=${encodeURIComponent(word.text)}&type=${accentType}`;
+        
+        audio.src = audioUrl;
+        audio.currentTime = 0;
+        audio.play()
+            .then(() => setIsPlayingWord(true))
+            .catch(console.error);
+        
+        audio.onended = () => setIsPlayingWord(false);
+        audio.onerror = () => setIsPlayingWord(false);
     };
 
     if (!word) return null;
@@ -325,7 +322,7 @@ export function WordDetailSheet({ word, open, onOpenChange }: WordDetailSheetPro
             
             {/* Hidden Audio Elements */}
             <audio ref={sentenceAudioRef} className="hidden" />
-            {word.audio && <audio ref={wordAudioRef} src={word.audio} className="hidden" onEnded={() => setIsPlayingWord(false)} />}
+            <audio ref={youdaoAudioRef} className="hidden" />
         </Sheet>
     )
 }

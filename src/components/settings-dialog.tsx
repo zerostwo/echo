@@ -306,6 +306,29 @@ export function SettingsDialog({
 
                   <Separator />
 
+                  <div className="space-y-2">
+                    <Label htmlFor="pronunciation-accent">Pronunciation Accent</Label>
+                    <Select
+                      value={settings.pronunciationAccent || "us"}
+                      onValueChange={(value) =>
+                        setSettings({ ...settings, pronunciationAccent: value })
+                      }
+                    >
+                      <SelectTrigger id="pronunciation-accent">
+                        <SelectValue placeholder="Select accent" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="us">American English (US)</SelectItem>
+                        <SelectItem value="uk">British English (UK)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-sm text-muted-foreground">
+                      Choose the accent for word pronunciation playback.
+                    </p>
+                  </div>
+
+                  <Separator />
+
                   <div className="space-y-4">
                     <h3 className="text-base font-medium">Whisper Transcription Settings</h3>
                     

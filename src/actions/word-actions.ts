@@ -237,3 +237,47 @@ export async function permanentlyDeleteWord(wordId: string) {
     revalidatePath('/vocab');
     return { success: true };
 }
+
+// Soft delete multiple words (move to trash)
+export async function deleteWords(wordIds: string[]) {
+    const session = await auth();
+    if (!session?.user?.id) return { error: 'Unauthorized' };
+
+    const client = supabaseAdmin || supabase;
+
+    try {
+        // First verify user has access to these words
+        const { data: userStatuses, error: checkError } = await client
+            .from('user_word_statuses')
+            .select('word_id')
+            .eq('user_id', session.user.id)
+            .in('word_id', wordIds);
+
+        if (checkError) throw checkError;
+
+        const validWordIds = userStatuses?.map(s => s.word_id) || [];
+        
+        if (validWordIds.length === 0) {
+            return { error: 'No valid words to delete' };
+        }
+
+        // Soft delete words by setting deleted_at
+        const { error: deleteError } = await client
+            .from('words')
+            .update({ deleted_at: new Date().toISOString() })
+            .in('id', validWordIds);
+
+        if (deleteError) throw deleteError;
+
+        // Invalidate vocab cache
+        await invalidateVocabCache(session.user.id);
+
+        revalidatePath('/vocab');
+        revalidatePath('/trash');
+
+        return { success: true, count: validWordIds.length };
+    } catch (e) {
+        console.error('Failed to delete words:', e);
+        return { error: 'Failed to delete words' };
+    }
+}
