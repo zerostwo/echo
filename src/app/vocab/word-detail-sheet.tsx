@@ -144,7 +144,7 @@ export function WordDetailSheet({ word, open, onOpenChange }: WordDetailSheetPro
 
     return (
         <Sheet open={open} onOpenChange={onOpenChange}>
-            <SheetContent className="sm:max-w-xl w-full p-0 [&>button]:hidden">
+            <SheetContent className="w-[480px] sm:max-w-[480px] p-0 [&>button]:hidden">
                 <div className="flex flex-col h-full">
                     <div className="p-6 pb-2 flex-shrink-0">
                         <SheetHeader className="p-0 space-y-2">

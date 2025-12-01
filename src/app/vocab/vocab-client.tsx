@@ -62,6 +62,7 @@ interface VocabClientProps {
     vocabPageSize?: number
     vocabShowMastered?: boolean
   }
+  materials?: { id: string; title: string }[]
 }
 
 // Column header with sort dropdown (Supabase style)
@@ -88,15 +89,15 @@ function SortableColumnHeader({
           <ChevronDown className="ml-1 h-3.5 w-3.5" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-40">
+      <DropdownMenuContent align="start" className="w-44">
         <DropdownMenuItem onClick={() => onSort(column, 'asc')} className="gap-2">
-          <ArrowUp className="h-3.5 w-3.5" />
-          Sort Ascending
+          <ArrowUp className="h-3.5 w-3.5 flex-shrink-0" />
+          <span className="whitespace-nowrap">Sort Ascending</span>
           {isActive && sortOrder === 'asc' && <span className="ml-auto text-primary">✓</span>}
         </DropdownMenuItem>
         <DropdownMenuItem onClick={() => onSort(column, 'desc')} className="gap-2">
-          <ArrowDown className="h-3.5 w-3.5" />
-          Sort Descending
+          <ArrowDown className="h-3.5 w-3.5 flex-shrink-0" />
+          <span className="whitespace-nowrap">Sort Descending</span>
           {isActive && sortOrder === 'desc' && <span className="ml-auto text-primary">✓</span>}
         </DropdownMenuItem>
       </DropdownMenuContent>
@@ -104,7 +105,7 @@ function SortableColumnHeader({
   )
 }
 
-export function VocabClient({ initialData, materialId, settings }: VocabClientProps) {
+export function VocabClient({ initialData, materialId, settings, materials = [] }: VocabClientProps) {
   const { updateSettings } = useUserSettings()
   
   const [data, setData] = useState(initialData.data || [])
@@ -127,6 +128,7 @@ export function VocabClient({ initialData, materialId, settings }: VocabClientPr
     showMastered: settings?.vocabShowMastered ?? false,
     frequencyRange: undefined, // undefined means no filter
     materialFilter: materialId || undefined,
+    materialFilters: materialId ? [materialId] : [],
     learningStateFilter: [],
     dueFilter: undefined,
   })
@@ -167,6 +169,7 @@ export function VocabClient({ initialData, materialId, settings }: VocabClientPr
       showMastered: settings?.vocabShowMastered ?? false,
       frequencyRange: undefined,
       materialFilter: materialId || undefined,
+      materialFilters: materialId ? [materialId] : [],
       learningStateFilter: [],
       dueFilter: undefined,
     })
@@ -176,12 +179,32 @@ export function VocabClient({ initialData, materialId, settings }: VocabClientPr
   const fetchData = useCallback(async (newPage?: number, newPageSize?: number, newSortBy?: string, newSortOrder?: 'asc' | 'desc') => {
     setLoading(true)
     try {
+      // Determine which material IDs to filter by
+      const materialIds = filters.materialFilters && filters.materialFilters.length > 0 
+        ? filters.materialFilters 
+        : (filters.materialFilter ? [filters.materialFilter] : undefined)
+      
+      // Fix status filter logic:
+      // - If user has selected specific statuses, use those exactly
+      // - If no statuses selected and showMastered is false, default to NEW and LEARNING
+      // - If no statuses selected and showMastered is true, show all (undefined)
+      let statusFilterValue: string[] | undefined
+      if (filters.statusFilter.length > 0) {
+        // User explicitly selected statuses - use those exactly
+        statusFilterValue = filters.statusFilter
+      } else if (!filters.showMastered) {
+        // No explicit selection and showMastered is off - default to NEW and LEARNING
+        statusFilterValue = ['NEW', 'LEARNING']
+      } else {
+        // No explicit selection and showMastered is on - show all
+        statusFilterValue = undefined
+      }
+      
       const apiFilters: VocabFilters = {
-        materialId: filters.materialFilter,
+        materialId: materialIds && materialIds.length === 1 ? materialIds[0] : undefined,
+        materialIds: materialIds && materialIds.length > 1 ? materialIds : undefined,
         search: debouncedSearch || undefined,
-        status: filters.showMastered 
-          ? (filters.statusFilter.length > 0 ? filters.statusFilter : undefined)
-          : (filters.statusFilter.length > 0 ? filters.statusFilter.filter(s => s !== 'MASTERED') : ['NEW', 'LEARNING']),
+        status: statusFilterValue,
         collins: filters.collinsFilter.length > 0 ? filters.collinsFilter : undefined,
         oxford: filters.oxfordFilter,
         minFrequency: filters.frequencyRange ? filters.frequencyRange[0] : undefined,
@@ -307,7 +330,15 @@ export function VocabClient({ initialData, materialId, settings }: VocabClientPr
           newFilters.frequencyRange = undefined
           break
         case 'material':
-          newFilters.materialFilter = undefined
+          // Support removing individual materials from multi-select
+          if (value && newFilters.materialFilters) {
+            newFilters.materialFilters = newFilters.materialFilters.filter(id => id !== value)
+            // Update materialFilter for backward compatibility
+            newFilters.materialFilter = newFilters.materialFilters.length > 0 ? newFilters.materialFilters[0] : undefined
+          } else {
+            newFilters.materialFilter = undefined
+            newFilters.materialFilters = []
+          }
           break
         case 'learningState':
           newFilters.learningStateFilter = prev.learningStateFilter?.filter(s => s !== value) || []
@@ -401,17 +432,17 @@ export function VocabClient({ initialData, materialId, settings }: VocabClientPr
       <div className="flex items-center justify-between py-4">
         <div className="flex items-center gap-2">
           <Input
-            placeholder="Filter words..."
+            placeholder="Search words..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="max-w-sm"
+            className="max-w-sm h-9"
           />
           {selectedCount > 0 && (
             <div className="flex items-center gap-2 ml-4">
-              <span className="text-sm text-muted-foreground">{selectedCount} selected</span>
+              <span className="text-sm text-muted-foreground whitespace-nowrap h-9 flex items-center">{selectedCount} selected</span>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm">
+                  <Button variant="outline" size="sm" className="h-9">
                     Set Status
                     <ChevronDown className="ml-2 h-4 w-4" />
                   </Button>
@@ -436,7 +467,7 @@ export function VocabClient({ initialData, materialId, settings }: VocabClientPr
                 size="sm"
                 onClick={handleBulkDelete}
                 disabled={isPending}
-                className="text-destructive hover:text-destructive"
+                className="text-destructive hover:text-destructive h-9"
               >
                 <Trash2 className="mr-2 h-4 w-4" />
                 Delete
@@ -444,15 +475,16 @@ export function VocabClient({ initialData, materialId, settings }: VocabClientPr
             </div>
           )}
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 h-9">
           <VocabFilterDrawer
             filters={filters}
             onFiltersChange={setFilters}
             maxFrequency={maxFrequency}
+            materials={materials}
           />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline">
+              <Button variant="outline" className="h-9">
                 <SlidersHorizontal className="mr-2 h-4 w-4" />
                 View
               </Button>
@@ -488,6 +520,7 @@ export function VocabClient({ initialData, materialId, settings }: VocabClientPr
         filters={filters}
         onRemoveFilter={handleRemoveFilter}
         maxFrequency={maxFrequency}
+        materials={materials}
       />
 
       {/* Table */}

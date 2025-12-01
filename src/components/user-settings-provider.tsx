@@ -16,6 +16,8 @@ type Settings = {
   vocabShowMastered?: boolean;
   // Learning settings
   dailyWordGoal?: number;
+  sessionSize?: number;
+  preferredLearningMode?: 'typing' | 'multiple_choice' | 'context_listening';
   [key: string]: any;
 };
 

@@ -58,6 +58,16 @@ export default async function VocabPage({ searchParams }: { searchParams: Promis
     filteredMaterialTitle = material?.title || '';
   }
 
+  // Fetch all materials for the filter dropdown
+  const { data: materialsList } = await client
+    .from('materials')
+    .select('id, title')
+    .eq('user_id', session.user.id)
+    .is('deleted_at', null)
+    .order('title', { ascending: true });
+
+  const materials = materialsList?.map(m => ({ id: m.id, title: m.title })) || [];
+
   const { stats, data } = initialResult;
   
   // Build learning URL with material filter
@@ -182,7 +192,8 @@ export default async function VocabPage({ searchParams }: { searchParams: Promis
       <VocabClient 
         initialData={initialResult} 
         materialId={materialId} 
-        settings={userSettings} 
+        settings={userSettings}
+        materials={materials}
       />
     </div>
   );

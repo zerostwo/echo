@@ -22,6 +22,34 @@ function tokenize(content: string) {
         .filter((w) => w.length > 1 && !/^\d+$/.test(w));
 }
 
+interface TokenWithPosition {
+    word: string;          // lowercase word for dictionary lookup
+    startIndex: number;    // position in original content
+    endIndex: number;      // position in original content
+}
+
+// Tokenize content and return words with their positions in the original content
+function tokenizeWithPositions(content: string): TokenWithPosition[] {
+    const tokens: TokenWithPosition[] = [];
+    // Match word characters (letters, numbers, apostrophes for contractions)
+    const wordRegex = /[a-zA-Z']+/g;
+    let match;
+    
+    while ((match = wordRegex.exec(content)) !== null) {
+        const word = match[0].toLowerCase();
+        // Skip if too short or only digits
+        if (word.length > 1 && !/^\d+$/.test(word) && !/^'+$/.test(word)) {
+            tokens.push({
+                word: word.replace(/'/g, ''),  // Remove apostrophes for lookup
+                startIndex: match.index,
+                endIndex: match.index + match[0].length,
+            });
+        }
+    }
+    
+    return tokens;
+}
+
 async function cleanupOrphanWords(client: typeof supabase, wordIds: string[]) {
     const unique = Array.from(new Set(wordIds));
     for (const wordId of unique) {
@@ -182,16 +210,24 @@ export async function updateSentence(sentenceId: string, payload: SentenceUpdate
         return { error: 'Failed to update vocabulary for sentence' };
     }
 
-    const tokens = tokenize(effectiveContent);
+    // Use tokenizeWithPositions to get word positions for fill-in-blank feature
+    const tokensWithPositions = tokenizeWithPositions(effectiveContent);
+    const tokens = tokensWithPositions.map(t => t.word);
     const rawToWordId = await upsertWordsForTokens(client, session.user.id, tokens);
 
-    const occurrences = tokens
-        .map((raw) => {
-            const wordId = rawToWordId.get(raw);
+    const occurrences = tokensWithPositions
+        .map((token) => {
+            const wordId = rawToWordId.get(token.word);
             if (!wordId) return null;
-            return { id: randomUUID(), word_id: wordId, sentence_id: sentenceId };
+            return { 
+                id: randomUUID(), 
+                word_id: wordId, 
+                sentence_id: sentenceId,
+                start_index: token.startIndex,
+                end_index: token.endIndex,
+            };
         })
-        .filter(Boolean) as { id: string; word_id: string; sentence_id: string }[];
+        .filter(Boolean) as { id: string; word_id: string; sentence_id: string; start_index: number; end_index: number }[];
 
     if (occurrences.length > 0) {
         const { error: occError } = await client.from('word_occurrences').insert(occurrences);

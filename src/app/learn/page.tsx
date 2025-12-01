@@ -5,6 +5,7 @@ import { LearnClient } from './learn-client';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { ArrowLeft } from 'lucide-react';
+import { supabaseAdmin, supabase } from '@/lib/supabase';
 
 export default async function LearnPage({ 
   searchParams 
@@ -20,6 +21,24 @@ export default async function LearnPage({
 
   const params = await searchParams;
   
+  // Get user settings for session size
+  const client = supabaseAdmin || supabase;
+  const { data: user } = await client
+    .from('users')
+    .select('settings')
+    .eq('id', session.user.id)
+    .single();
+
+  let sessionSize = 50; // Default
+  if (user?.settings) {
+    try {
+      const settings = JSON.parse(user.settings);
+      sessionSize = settings.sessionSize || 50;
+    } catch {
+      // Use default if parsing fails
+    }
+  }
+
   // Build filters from search params
   const filters: LearningFilters = {};
   
@@ -37,7 +56,7 @@ export default async function LearnPage({
     filters.collins = params.collins.split(',').map(Number).filter(n => !isNaN(n));
   }
 
-  const { words, error } = await getWordsForLearning(50, Object.keys(filters).length > 0 ? filters : undefined);
+  const { words, error } = await getWordsForLearning(sessionSize, Object.keys(filters).length > 0 ? filters : undefined);
   const stats = await getLearningStats();
 
   if (error) {

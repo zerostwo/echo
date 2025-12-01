@@ -35,6 +35,20 @@ export interface LearningWord {
   errorCount: number;
 }
 
+// Context Listening mode types
+export interface ContextListeningWord extends LearningWord {
+  sentence: {
+    id: string;
+    content: string;
+    startTime: number;
+    endTime: number;
+    materialId: string;
+    materialTitle: string;
+  };
+  wordStartIndex: number;
+  wordEndIndex: number;
+}
+
 export interface ReviewResult {
   success: boolean;
   newStatus?: string;
@@ -52,12 +66,14 @@ export interface LearningFilters {
 
 /**
  * Get words that are due for learning (status = NEW or LEARNING, not MASTERED)
+ * Priority: 1. Due for review (fsrs_due <= now), 2. New words (fsrs_due is null)
  */
 export async function getWordsForLearning(limit: number = 20, filters?: LearningFilters): Promise<{ words: LearningWord[], error?: string }> {
   const session = await auth();
   if (!session?.user?.id) return { words: [], error: 'Unauthorized' };
 
   const client = supabaseAdmin || supabase;
+  const now = new Date().toISOString();
   
   // If we have material filter, we need to get word IDs from that material first
   let filteredWordIds: string[] | null = null;
@@ -89,8 +105,9 @@ export async function getWordsForLearning(limit: number = 20, filters?: Learning
     }
   }
   
-  // Get words with status NEW or LEARNING, ordered by due date
-  let query = client
+  // First, get words that are due for review (fsrs_due <= now)
+  // These should be prioritized over new words
+  let dueQuery = client
     .from('user_word_statuses')
     .select(`
       id,
@@ -115,26 +132,76 @@ export async function getWordsForLearning(limit: number = 20, filters?: Learning
       )
     `)
     .eq('user_id', session.user.id)
-    .in('status', ['NEW', 'LEARNING']);
+    .in('status', ['NEW', 'LEARNING'])
+    .lte('fsrs_due', now);
   
-  // Apply word ID filter if we have material filter
   if (filteredWordIds) {
-    query = query.in('word_id', filteredWordIds);
+    dueQuery = dueQuery.in('word_id', filteredWordIds);
   }
   
-  query = query
-    .order('fsrs_due', { ascending: true, nullsFirst: true })
-    .limit(limit * 2); // Fetch extra to filter
+  dueQuery = dueQuery
+    .order('fsrs_due', { ascending: true })
+    .limit(limit);
 
-  const { data: wordStatuses, error } = await query;
+  const { data: dueWords, error: dueError } = await dueQuery;
+  
+  if (dueError) {
+    console.error('[getWordsForLearning] Error fetching due words:', dueError);
+  }
+  
+  let allWords = dueWords || [];
+  
+  // If we need more words, get new words (fsrs_due is null)
+  if (allWords.length < limit) {
+    const remaining = limit - allWords.length;
+    
+    let newQuery = client
+      .from('user_word_statuses')
+      .select(`
+        id,
+        word_id,
+        status,
+        fsrs_due,
+        fsrs_stability,
+        fsrs_difficulty,
+        fsrs_reps,
+        fsrs_lapses,
+        fsrs_state,
+        error_count,
+        words:word_id (
+          id,
+          text,
+          phonetic,
+          translation,
+          definition,
+          pos,
+          oxford,
+          collins
+        )
+      `)
+      .eq('user_id', session.user.id)
+      .in('status', ['NEW', 'LEARNING'])
+      .is('fsrs_due', null);
+    
+    if (filteredWordIds) {
+      newQuery = newQuery.in('word_id', filteredWordIds);
+    }
+    
+    newQuery = newQuery.limit(remaining * 2); // Fetch extra for filtering
 
-  if (error) {
-    console.error('[getWordsForLearning] Error:', error);
-    return { words: [], error: error.message };
+    const { data: newWords, error: newError } = await newQuery;
+    
+    if (newError) {
+      console.error('[getWordsForLearning] Error fetching new words:', newError);
+    }
+    
+    if (newWords) {
+      allWords = [...allWords, ...newWords];
+    }
   }
 
   // Filter by oxford/collins/frequency if needed
-  let filteredStatuses = wordStatuses || [];
+  let filteredStatuses = allWords;
   
   if (filters?.oxford !== undefined) {
     filteredStatuses = filteredStatuses.filter((ws: any) => {
@@ -217,7 +284,7 @@ function calculateRating(
   isCorrect: boolean, 
   responseTimeMs: number, 
   errorCount: number,
-  mode: 'typing' | 'multiple_choice'
+  mode: 'typing' | 'multiple_choice' | 'context_listening'
 ): Grade {
   if (!isCorrect || errorCount > 0) {
     // If wrong, use Again (1)
@@ -225,7 +292,8 @@ function calculateRating(
   }
 
   // For correct answers, use response time to determine rating
-  const avgResponseTime = mode === 'typing' ? 5000 : 3000; // Expected average response time in ms
+  // Context listening takes longer due to audio playback
+  const avgResponseTime = mode === 'multiple_choice' ? 3000 : mode === 'context_listening' ? 8000 : 5000;
 
   if (responseTimeMs < avgResponseTime * 0.5) {
     // Very fast = Easy
@@ -247,7 +315,7 @@ export async function recordReview(params: {
   isCorrect: boolean;
   responseTimeMs: number;
   errorCount: number;
-  mode: 'typing' | 'multiple_choice';
+  mode: 'typing' | 'multiple_choice' | 'context_listening';
 }): Promise<ReviewResult> {
   const session = await auth();
   if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
@@ -412,4 +480,214 @@ export async function getLearningStats(): Promise<{
     totalMastered: counts['MASTERED'] || 0,
     dueToday: dueCount || 0,
   };
+}
+
+/**
+ * Get words with their source sentences for Context Listening mode
+ * Each word must have at least one sentence with audio
+ */
+export async function getWordsForContextListening(
+  limit: number = 20, 
+  filters?: LearningFilters
+): Promise<{ words: ContextListeningWord[], error?: string }> {
+  const session = await auth();
+  if (!session?.user?.id) return { words: [], error: 'Unauthorized' };
+
+  const client = supabaseAdmin || supabase;
+  
+  // If we have material filter, we need to get word IDs from that material first
+  let filteredWordIds: string[] | null = null;
+  
+  if (filters?.materialId) {
+    // Get sentences from material
+    const { data: sentences } = await client
+      .from('sentences')
+      .select('id')
+      .eq('material_id', filters.materialId)
+      .is('deleted_at', null);
+    
+    if (sentences && sentences.length > 0) {
+      const sentenceIds = sentences.map(s => s.id);
+      
+      // Get word occurrences
+      const { data: occurrences } = await client
+        .from('word_occurrences')
+        .select('word_id')
+        .in('sentence_id', sentenceIds);
+      
+      if (occurrences) {
+        filteredWordIds = [...new Set(occurrences.map(o => o.word_id))];
+      }
+    }
+    
+    if (!filteredWordIds || filteredWordIds.length === 0) {
+      return { words: [], error: 'No words found for this material' };
+    }
+  }
+  
+  // Get words with status NEW or LEARNING, ordered by due date
+  let query = client
+    .from('user_word_statuses')
+    .select(`
+      id,
+      word_id,
+      status,
+      fsrs_due,
+      fsrs_stability,
+      fsrs_difficulty,
+      fsrs_reps,
+      fsrs_lapses,
+      fsrs_state,
+      error_count,
+      words:word_id (
+        id,
+        text,
+        phonetic,
+        translation,
+        definition,
+        pos,
+        oxford,
+        collins
+      )
+    `)
+    .eq('user_id', session.user.id)
+    .in('status', ['NEW', 'LEARNING']);
+  
+  // Apply word ID filter if we have material filter
+  if (filteredWordIds) {
+    query = query.in('word_id', filteredWordIds);
+  }
+  
+  query = query
+    .order('fsrs_due', { ascending: true, nullsFirst: true })
+    .limit(limit * 3); // Fetch extra since some may not have sentences
+
+  const { data: wordStatuses, error } = await query;
+
+  if (error) {
+    console.error('[getWordsForContextListening] Error:', error);
+    return { words: [], error: error.message };
+  }
+
+  // Filter by oxford/collins/frequency if needed
+  let filteredStatuses = wordStatuses || [];
+  
+  if (filters?.oxford !== undefined) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    filteredStatuses = filteredStatuses.filter((ws: any) => {
+      const word = ws.words;
+      return filters.oxford ? word?.oxford === 1 : word?.oxford !== 1;
+    });
+  }
+  
+  if (filters?.collins && filters.collins.length > 0) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    filteredStatuses = filteredStatuses.filter((ws: any) => {
+      const word = ws.words;
+      return filters.collins!.includes(word?.collins);
+    });
+  }
+
+  // Get word IDs that we'll fetch sentences for
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const wordIds = filteredStatuses.map((ws: any) => ws.words?.id || ws.word_id).filter(Boolean);
+  
+  if (wordIds.length === 0) {
+    return { words: [] };
+  }
+
+  // Get all word occurrences with sentences for these words
+  const { data: occurrencesData, error: occError } = await client
+    .from('word_occurrences')
+    .select(`
+      word_id,
+      start_index,
+      end_index,
+      sentence:sentences!inner(
+        id,
+        content,
+        start_time,
+        end_time,
+        material:materials!inner(
+          id,
+          title,
+          user_id
+        )
+      )
+    `)
+    .in('word_id', wordIds)
+    .eq('sentence.material.user_id', session.user.id)
+    .is('sentence.deleted_at', null);
+
+  if (occError) {
+    console.error('[getWordsForContextListening] Occurrences error:', occError);
+    return { words: [], error: occError.message };
+  }
+
+  // Group occurrences by word_id
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const occurrencesByWordId: Record<string, any[]> = {};
+  for (const occ of (occurrencesData || [])) {
+    if (!occurrencesByWordId[occ.word_id]) {
+      occurrencesByWordId[occ.word_id] = [];
+    }
+    occurrencesByWordId[occ.word_id].push(occ);
+  }
+
+  // Build the result, only include words that have at least one sentence
+  const contextWords: ContextListeningWord[] = [];
+  
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const ws of filteredStatuses as any[]) {
+    const word = ws.words;
+    const wordId = word?.id || ws.word_id;
+    const occurrences = occurrencesByWordId[wordId];
+    
+    if (!occurrences || occurrences.length === 0) {
+      continue; // Skip words without sentences
+    }
+    
+    // Pick a random sentence from the available ones
+    const randomOcc = occurrences[Math.floor(Math.random() * occurrences.length)];
+    const sentence = randomOcc.sentence;
+    
+    if (!sentence || !sentence.material) {
+      continue;
+    }
+
+    contextWords.push({
+      id: ws.id,
+      wordId: wordId,
+      text: word?.text || '',
+      phonetic: word?.phonetic ?? null,
+      translation: word?.translation ?? null,
+      definition: word?.definition ?? null,
+      pos: word?.pos ?? null,
+      status: ws.status,
+      exampleSentence: sentence.content,
+      fsrsState: ws.fsrs_state || 0,
+      fsrsDue: ws.fsrs_due,
+      fsrsStability: ws.fsrs_stability,
+      fsrsDifficulty: ws.fsrs_difficulty,
+      fsrsReps: ws.fsrs_reps || 0,
+      fsrsLapses: ws.fsrs_lapses || 0,
+      errorCount: ws.error_count || 0,
+      sentence: {
+        id: sentence.id,
+        content: sentence.content,
+        startTime: sentence.start_time || 0,
+        endTime: sentence.end_time || 0,
+        materialId: sentence.material.id,
+        materialTitle: sentence.material.title,
+      },
+      wordStartIndex: randomOcc.start_index ?? -1,
+      wordEndIndex: randomOcc.end_index ?? -1,
+    });
+
+    if (contextWords.length >= limit) {
+      break;
+    }
+  }
+
+  return { words: contextWords };
 }

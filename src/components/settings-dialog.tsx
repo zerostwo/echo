@@ -21,6 +21,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
+import { Input } from "@/components/ui/input"
 import {
   Select,
   SelectContent,
@@ -34,7 +35,7 @@ import { AccountForm } from "@/components/account-form"
 import { SecuritySettings } from "@/components/settings/security-settings"
 import { updateSettings } from "@/actions/user-actions"
 import { toast } from "sonner"
-import { Loader2, Settings, User, Book, Bell, Shield, Info } from "lucide-react"
+import { Loader2, Settings, User, Book, Bell, Shield, Info, Keyboard, RotateCcw } from "lucide-react"
 import { cn } from "@/lib/utils"
 import {
   Tooltip,
@@ -42,7 +43,6 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-
 interface SettingsDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -117,6 +117,47 @@ const DAILY_WORD_GOALS = [
   { value: 30, label: "30 words/day (Serious)" },
   { value: 50, label: "50 words/day (Extreme)" },
 ]
+
+const SESSION_SIZE_OPTIONS = [
+  { value: 10, label: "10 words" },
+  { value: 20, label: "20 words" },
+  { value: 30, label: "30 words" },
+  { value: 50, label: "50 words (Default)" },
+  { value: 100, label: "100 words" },
+]
+
+// Default keyboard shortcuts
+export const DEFAULT_SHORTCUTS = {
+  // Learn page shortcuts
+  learnPrevWord: 'Shift+ArrowLeft',
+  learnNextWord: 'Shift+ArrowRight',
+  learnPlayAudio: 'Tab',
+  learnDontKnow: 'Ctrl+S',
+  learnToggleDictation: 'Ctrl+D',
+  learnShowHelp: '?',
+  // Practice page shortcuts  
+  practicePrevSentence: 'Shift+ArrowLeft',
+  practiceNextSentence: 'Shift+ArrowRight',
+  practiceReplay: 'Tab',
+  practicePlayPause: 'Ctrl+Space',
+  practiceSubmit: 'Enter',
+}
+
+export type ShortcutKey = keyof typeof DEFAULT_SHORTCUTS
+
+const SHORTCUT_LABELS: Record<ShortcutKey, { label: string; description: string }> = {
+  learnPrevWord: { label: 'Previous Word', description: 'Go to previous word in learn mode' },
+  learnNextWord: { label: 'Next Word', description: 'Go to next word in learn mode' },
+  learnPlayAudio: { label: 'Play Audio', description: 'Play pronunciation or sentence audio' },
+  learnDontKnow: { label: "I Don't Know", description: 'Mark word as unknown' },
+  learnToggleDictation: { label: 'Toggle Dictation', description: 'Toggle dictation mode in typing' },
+  learnShowHelp: { label: 'Show Shortcuts', description: 'Show keyboard shortcuts help' },
+  practicePrevSentence: { label: 'Previous Sentence', description: 'Go to previous sentence' },
+  practiceNextSentence: { label: 'Next Sentence', description: 'Go to next sentence' },
+  practiceReplay: { label: 'Replay', description: 'Replay current sentence audio' },
+  practicePlayPause: { label: 'Play/Pause', description: 'Toggle audio playback' },
+  practiceSubmit: { label: 'Submit Answer', description: 'Submit your answer' },
+}
 
 // Common timezones list
 const TIMEZONES = [
@@ -208,6 +249,70 @@ export function SettingsDialog({
   const whisperComputeType = settings.whisperComputeType || "auto"
   const whisperDevice = settings.whisperDevice || "auto"
 
+  // Keyboard shortcuts with defaults
+  const shortcuts = settings.shortcuts || DEFAULT_SHORTCUTS
+  
+  // State for capturing new shortcut
+  const [capturingShortcut, setCapturingShortcut] = React.useState<ShortcutKey | null>(null)
+
+  // Handle shortcut key capture
+  const handleShortcutCapture = React.useCallback((e: React.KeyboardEvent, shortcutKey: ShortcutKey) => {
+    e.preventDefault()
+    e.stopPropagation()
+    
+    // Build shortcut string
+    const parts: string[] = []
+    if (e.ctrlKey) parts.push('Ctrl')
+    if (e.shiftKey) parts.push('Shift')
+    if (e.altKey) parts.push('Alt')
+    if (e.metaKey) parts.push('Meta')
+    
+    // Get the key (normalize special keys)
+    let key = e.key
+    if (key === ' ') key = 'Space'
+    if (key === 'ArrowLeft') key = 'ArrowLeft'
+    if (key === 'ArrowRight') key = 'ArrowRight'
+    if (key === 'ArrowUp') key = 'ArrowUp'
+    if (key === 'ArrowDown') key = 'ArrowDown'
+    
+    // Skip if only modifier key is pressed
+    if (['Control', 'Shift', 'Alt', 'Meta'].includes(key)) return
+    
+    // Add the key
+    if (!parts.includes(key)) {
+      parts.push(key)
+    }
+    
+    const shortcutString = parts.join('+')
+    
+    setSettings({
+      ...settings,
+      shortcuts: {
+        ...shortcuts,
+        [shortcutKey]: shortcutString
+      }
+    })
+    setCapturingShortcut(null)
+  }, [settings, shortcuts, setSettings])
+
+  // Format shortcut for display
+  const formatShortcut = (shortcut: string) => {
+    return shortcut
+      .replace('ArrowLeft', '←')
+      .replace('ArrowRight', '→')
+      .replace('ArrowUp', '↑')
+      .replace('ArrowDown', '↓')
+  }
+
+  // Reset shortcuts to defaults
+  const resetShortcuts = () => {
+    setSettings({
+      ...settings,
+      shortcuts: { ...DEFAULT_SHORTCUTS }
+    })
+    toast.success('Shortcuts reset to defaults')
+  }
+
   const items = [
     {
       title: "General",
@@ -223,6 +328,11 @@ export function SettingsDialog({
       title: "Vocabulary",
       icon: Book,
       id: "vocabulary",
+    },
+    {
+      title: "Shortcuts",
+      icon: Keyboard,
+      id: "shortcuts",
     },
     {
       title: "Security",
@@ -528,6 +638,30 @@ export function SettingsDialog({
                         Set how many new words you want to learn each day.
                       </p>
                     </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="session-size">Words Per Session</Label>
+                      <Select
+                        value={(settings.sessionSize || 50).toString()}
+                        onValueChange={(value) =>
+                          setSettings({ ...settings, sessionSize: parseInt(value) })
+                        }
+                      >
+                        <SelectTrigger id="session-size">
+                          <SelectValue placeholder="Select session size" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {SESSION_SIZE_OPTIONS.map((option) => (
+                            <SelectItem key={option.value} value={option.value.toString()}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-sm text-muted-foreground">
+                        How many words to practice in each learning session.
+                      </p>
+                    </div>
                   </div>
 
                   <Separator />
@@ -563,6 +697,101 @@ export function SettingsDialog({
                  <div className="space-y-6">
                     <AccountForm user={user} />
                  </div>
+              )}
+
+              {activeTab === "shortcuts" && (
+                <div className="space-y-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-base font-medium">Keyboard Shortcuts</h3>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Customize keyboard shortcuts for learning and practice modes.
+                      </p>
+                    </div>
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      onClick={resetShortcuts}
+                    >
+                      <RotateCcw className="mr-2 h-4 w-4" />
+                      Reset to Defaults
+                    </Button>
+                  </div>
+
+                  <Separator />
+
+                  <div className="space-y-4">
+                    <h4 className="text-sm font-medium text-muted-foreground uppercase tracking-wide">Learn Mode</h4>
+                    
+                    {(['learnPrevWord', 'learnNextWord', 'learnPlayAudio', 'learnDontKnow', 'learnToggleDictation', 'learnShowHelp'] as ShortcutKey[]).map((key) => (
+                      <div key={key} className="flex items-center justify-between">
+                        <div>
+                          <Label>{SHORTCUT_LABELS[key].label}</Label>
+                          <p className="text-xs text-muted-foreground">{SHORTCUT_LABELS[key].description}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {capturingShortcut === key ? (
+                            <Input
+                              className="w-40 text-center font-mono text-sm"
+                              placeholder="Press keys..."
+                              autoFocus
+                              onKeyDown={(e) => handleShortcutCapture(e, key)}
+                              onBlur={() => setCapturingShortcut(null)}
+                            />
+                          ) : (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="w-40 font-mono text-sm"
+                              onClick={() => setCapturingShortcut(key)}
+                            >
+                              {formatShortcut(shortcuts[key] || DEFAULT_SHORTCUTS[key])}
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <Separator />
+
+                  <div className="space-y-4">
+                    <h4 className="text-sm font-medium text-muted-foreground uppercase tracking-wide">Practice Mode</h4>
+                    
+                    {(['practicePrevSentence', 'practiceNextSentence', 'practiceReplay', 'practicePlayPause', 'practiceSubmit'] as ShortcutKey[]).map((key) => (
+                      <div key={key} className="flex items-center justify-between">
+                        <div>
+                          <Label>{SHORTCUT_LABELS[key].label}</Label>
+                          <p className="text-xs text-muted-foreground">{SHORTCUT_LABELS[key].description}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {capturingShortcut === key ? (
+                            <Input
+                              className="w-40 text-center font-mono text-sm"
+                              placeholder="Press keys..."
+                              autoFocus
+                              onKeyDown={(e) => handleShortcutCapture(e, key)}
+                              onBlur={() => setCapturingShortcut(null)}
+                            />
+                          ) : (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="w-40 font-mono text-sm"
+                              onClick={() => setCapturingShortcut(key)}
+                            >
+                              {formatShortcut(shortcuts[key] || DEFAULT_SHORTCUTS[key])}
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <p className="text-xs text-muted-foreground pt-2">
+                    Click on a shortcut button and press your desired key combination to change it.
+                  </p>
+                </div>
               )}
 
               {activeTab === "security" && (

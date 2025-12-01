@@ -226,7 +226,7 @@ export function NotificationsDialog({ open, onOpenChange, timezone }: Notificati
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full sm:max-w-md p-0 flex flex-col gap-0 [&>button]:hidden">
+      <SheetContent side="right" className="w-[420px] sm:max-w-[420px] p-0 flex flex-col gap-0 [&>button]:hidden">
         {/* Header - Compact design */}
         <SheetHeader className="px-4 py-3 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
           <div className="flex items-center gap-2.5">

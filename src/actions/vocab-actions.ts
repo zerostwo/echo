@@ -115,22 +115,30 @@ export async function extractVocabulary(materialId: string) {
     const sentences = (material.sentences || []).filter((s: any) => !s.deleted_at);
     console.log(`[extractVocabulary] Found ${sentences.length} active sentences for material ${materialId}`);
 
-    // 2. Extract raw words from sentences
+    // 2. Extract raw words from sentences with position info for fill-in-blank feature
     const rawWords = new Set<string>();
-    const sentenceWords: { sentenceId: string, rawWord: string }[] = [];
+    const sentenceWords: { sentenceId: string, rawWord: string, startIndex: number, endIndex: number }[] = [];
 
     for (const sentence of sentences) {
-        // Basic tokenization
+        // Use tokenization with positions
         const content = sentence.edited_content ?? sentence.content;
-        const words = content
-            .toLowerCase()
-            .replace(/[.,/#!$%^&*;:{}=\-_`~()?"'\\\[\]|<>@]/g, " ")
-            .split(/\s+/)
-            .filter((w: string) => w.length > 1 && !/^\d+$/.test(w)); 
-
-        for (const w of words) {
-            rawWords.add(w);
-            sentenceWords.push({ sentenceId: sentence.id, rawWord: w });
+        
+        // Match word characters (letters, apostrophes for contractions)
+        const wordRegex = /[a-zA-Z']+/g;
+        let match;
+        
+        while ((match = wordRegex.exec(content)) !== null) {
+            const word = match[0].toLowerCase().replace(/'/g, ''); // Remove apostrophes for lookup
+            // Skip if too short, only digits, or only apostrophes
+            if (word.length > 1 && !/^\d+$/.test(word)) {
+                rawWords.add(word);
+                sentenceWords.push({ 
+                    sentenceId: sentence.id, 
+                    rawWord: word,
+                    startIndex: match.index,
+                    endIndex: match.index + match[0].length,
+                });
+            }
         }
     }
 
@@ -315,17 +323,19 @@ export async function extractVocabulary(materialId: string) {
     
     console.log(`[extractVocabulary] Created ${newWordsCount} new word statuses for user.`);
 
-    // 7. Create Word Occurrences (only for verified word IDs)
+    // 7. Create Word Occurrences (only for verified word IDs) with position info
     const occurrencesData = [];
     
-    for (const { sentenceId, rawWord } of sentenceWords) {
+    for (const { sentenceId, rawWord, startIndex, endIndex } of sentenceWords) {
         const lemma = rawToLemma.get(rawWord);
         if (lemma && lemmaToId.has(lemma)) {
             const wordId = lemmaToId.get(lemma)!;
             occurrencesData.push({
                 id: randomUUID(),
                 word_id: wordId,
-                sentence_id: sentenceId
+                sentence_id: sentenceId,
+                start_index: startIndex,
+                end_index: endIndex,
             });
         }
     }
@@ -481,6 +491,7 @@ export interface VocabFilters {
     collins?: number[];
     oxford?: boolean;
     materialId?: string;
+    materialIds?: string[]; // Multi-select material filter
     minFrequency?: number;
     maxFrequency?: number;
     learningState?: number[]; // FSRS states: 0=New, 1=Learning, 2=Review, 3=Relearning
@@ -570,7 +581,10 @@ export async function getVocabPaginated(
             .eq('user_id', userId)
             .is('deleted_at', null);
 
-        if (filters.materialId) {
+        // Support both single materialId and multiple materialIds
+        if (filters.materialIds && filters.materialIds.length > 0) {
+            materialsQuery = materialsQuery.in('id', filters.materialIds);
+        } else if (filters.materialId) {
             materialsQuery = materialsQuery.eq('id', filters.materialId);
         }
 
