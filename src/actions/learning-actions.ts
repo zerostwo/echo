@@ -24,6 +24,7 @@ export interface LearningWord {
   translation: string | null;
   definition: string | null;
   pos: string | null;
+  exchange: string | null;
   status: string;
   exampleSentence: string | null;
   fsrsState: number;
@@ -127,8 +128,10 @@ export async function getWordsForLearning(limit: number = 20, filters?: Learning
         translation,
         definition,
         pos,
+        exchange,
         oxford,
-        collins
+        collins,
+        deleted_at
       )
     `)
     .eq('user_id', session.user.id)
@@ -175,8 +178,10 @@ export async function getWordsForLearning(limit: number = 20, filters?: Learning
           translation,
           definition,
           pos,
+          exchange,
           oxford,
-          collins
+          collins,
+          deleted_at
         )
       `)
       .eq('user_id', session.user.id)
@@ -202,6 +207,12 @@ export async function getWordsForLearning(limit: number = 20, filters?: Learning
 
   // Filter by oxford/collins/frequency if needed
   let filteredStatuses = allWords;
+  
+  // Filter out deleted words first
+  filteredStatuses = filteredStatuses.filter((ws: any) => {
+    const word = ws.words;
+    return word && !word.deleted_at;
+  });
   
   if (filters?.oxford !== undefined) {
     filteredStatuses = filteredStatuses.filter((ws: any) => {
@@ -232,6 +243,7 @@ export async function getWordsForLearning(limit: number = 20, filters?: Learning
       translation: word?.translation ?? null,
       definition: word?.definition ?? null,
       pos: word?.pos ?? null,
+      exchange: word?.exchange ?? null,
       status: ws.status,
       exampleSentence: null, // Example sentences will be loaded separately if needed
       fsrsState: ws.fsrs_state || 0,
@@ -546,8 +558,10 @@ export async function getWordsForContextListening(
         translation,
         definition,
         pos,
+        exchange,
         oxford,
-        collins
+        collins,
+        deleted_at
       )
     `)
     .eq('user_id', session.user.id)
@@ -571,6 +585,12 @@ export async function getWordsForContextListening(
 
   // Filter by oxford/collins/frequency if needed
   let filteredStatuses = wordStatuses || [];
+  
+  // Filter out deleted words first
+  filteredStatuses = filteredStatuses.filter((ws: any) => {
+    const word = ws.words;
+    return word && !word.deleted_at;
+  });
   
   if (filters?.oxford !== undefined) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -663,6 +683,7 @@ export async function getWordsForContextListening(
       translation: word?.translation ?? null,
       definition: word?.definition ?? null,
       pos: word?.pos ?? null,
+      exchange: word?.exchange ?? null,
       status: ws.status,
       exampleSentence: sentence.content,
       fsrsState: ws.fsrs_state || 0,
@@ -690,4 +711,79 @@ export async function getWordsForContextListening(
   }
 
   return { words: contextWords };
+}
+
+/**
+ * Record learning session duration to daily study stats
+ * This should be called when a learning session ends
+ */
+export async function recordLearningSessionDuration(durationSeconds: number): Promise<{ success: boolean; error?: string }> {
+  const session = await auth();
+  if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
+
+  if (durationSeconds <= 0) {
+    return { success: true }; // Nothing to record
+  }
+
+  const client = supabaseAdmin || supabase;
+  
+  try {
+    // Get today's date at midnight (normalized)
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayStr = today.toISOString();
+
+    // Check if we already have a record for today
+    const { data: existingStat, error: fetchError } = await client
+      .from('daily_study_stats')
+      .select('id, study_duration')
+      .eq('user_id', session.user.id)
+      .eq('date', todayStr)
+      .maybeSingle();
+
+    if (fetchError) {
+      console.error('[recordLearningSessionDuration] Fetch error:', fetchError);
+      return { success: false, error: fetchError.message };
+    }
+
+    if (existingStat) {
+      // Update existing record
+      const { error: updateError } = await client
+        .from('daily_study_stats')
+        .update({
+          study_duration: existingStat.study_duration + durationSeconds,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', existingStat.id);
+
+      if (updateError) {
+        console.error('[recordLearningSessionDuration] Update error:', updateError);
+        return { success: false, error: updateError.message };
+      }
+    } else {
+      // Create new record
+      const { error: insertError } = await client
+        .from('daily_study_stats')
+        .insert({
+          id: randomUUID(),
+          user_id: session.user.id,
+          date: todayStr,
+          study_duration: durationSeconds,
+          words_added: 0,
+          sentences_added: 0,
+          updated_at: new Date().toISOString(),
+        });
+
+      if (insertError) {
+        console.error('[recordLearningSessionDuration] Insert error:', insertError);
+        return { success: false, error: insertError.message };
+      }
+    }
+
+    revalidatePath('/dashboard');
+    return { success: true };
+  } catch (error) {
+    console.error('[recordLearningSessionDuration] Error:', error);
+    return { success: false, error: 'Failed to record learning duration' };
+  }
 }

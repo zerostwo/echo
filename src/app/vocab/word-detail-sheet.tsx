@@ -15,7 +15,7 @@ import { getWordContext } from "@/actions/word-actions"
 import { Loader2, Volume2, Play, Pause, ExternalLink, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import Link from "next/link"
-import { parsePos, parseExchange, parseTags } from "@/lib/vocab-utils"
+import { parsePos, parseExchange, parseTags, getAllWordForms, createWordFormsRegex } from "@/lib/vocab-utils"
 import { useUserSettings } from "@/components/user-settings-provider"
 
 interface WordDetailSheetProps {
@@ -274,7 +274,42 @@ export function WordDetailSheet({ word, open, onOpenChange }: WordDetailSheetPro
                                          </div>
                                      ) : occurrences.length > 0 ? (
                                          <ul className="space-y-4">
-                                             {occurrences.map(occ => (
+                                             {occurrences.map(occ => {
+                                                 // Helper function to highlight the word in sentence
+                                                 const highlightSentence = () => {
+                                                     const content = occ.sentence.content;
+                                                     
+                                                     // First, try to use start_index/end_index if available
+                                                     if (occ.start_index !== undefined && occ.end_index !== undefined &&
+                                                         occ.start_index >= 0 && occ.end_index > occ.start_index &&
+                                                         occ.end_index <= content.length) {
+                                                         const before = content.substring(0, occ.start_index);
+                                                         const wordInSentence = content.substring(occ.start_index, occ.end_index);
+                                                         const after = content.substring(occ.end_index);
+                                                         return (
+                                                             <span>
+                                                                 {before}
+                                                                 <span className="font-bold text-primary bg-primary/10 rounded px-0.5">{wordInSentence}</span>
+                                                                 {after}
+                                                             </span>
+                                                         );
+                                                     }
+                                                     
+                                                     // Fallback: use word forms from exchange field to match
+                                                     const wordForms = getAllWordForms(word.text, word.exchange);
+                                                     const regex = createWordFormsRegex(wordForms);
+                                                     
+                                                     return (
+                                                         <span dangerouslySetInnerHTML={{ 
+                                                             __html: content.replace(
+                                                                 regex, 
+                                                                 '<span class="font-bold text-primary bg-primary/10 rounded px-0.5">$1</span>'
+                                                             ) 
+                                                         }} />
+                                                     );
+                                                 };
+                                                 
+                                                 return (
                                                  <li key={occ.id} 
                                                      className={`relative group rounded-lg border transition-all duration-200 ${playingSentenceId === occ.sentence.id ? 'bg-primary/5 border-primary ring-1 ring-primary' : 'bg-card hover:bg-muted/50'}`}
                                                  >
@@ -286,12 +321,9 @@ export function WordDetailSheet({ word, open, onOpenChange }: WordDetailSheetPro
                                                                  </div>
                                                              </div>
                                                              <div className="flex-1 min-w-0">
-                                                                 <p className="leading-relaxed text-sm" dangerouslySetInnerHTML={{ 
-                                                                     __html: occ.sentence.content.replace(
-                                                                         new RegExp(`\\b(${word.text})\\b`, 'gi'), 
-                                                                         '<span class="font-bold text-primary bg-primary/10 rounded px-0.5">$1</span>'
-                                                                     ) 
-                                                                 }} />
+                                                                 <p className="leading-relaxed text-sm">
+                                                                     {highlightSentence()}
+                                                                 </p>
                                                              </div>
                                                          </div>
                                                      </div>
@@ -306,7 +338,8 @@ export function WordDetailSheet({ word, open, onOpenChange }: WordDetailSheetPro
                                                          </Link>
                                                      </div>
                                                  </li>
-                                             ))}
+                                                 );
+                                             })}
                                          </ul>
                                      ) : (
                                          <div className="text-sm text-muted-foreground italic py-4 text-center bg-muted/20 rounded-lg">

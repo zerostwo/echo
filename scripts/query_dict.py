@@ -15,31 +15,39 @@ from stardict import StarDict, LemmaDB
 STARDICT_DB = os.path.join(script_dir, '../data/stardict.db')
 LEMMA_TXT = os.path.join(script_dir, '../data/lemma.en.txt')
 
+# Words that should keep their original form (not be lemmatized)
+# These are common function words where lemma reverse lookup produces incorrect results
+NO_LEMMATIZE = frozenset([
+    'an', 'the', 'some', 'any', 'this', 'that', 'these', 'those',
+    'my', 'your', 'his', 'her', 'its', 'our', 'their',
+    'i', 'me', 'you', 'he', 'him', 'she', 'we', 'us', 'they', 'them',
+    'who', 'whom', 'whose', 'which', 'what', 'where', 'when', 'why', 'how',
+    'am', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+    'have', 'has', 'had', 'having',
+    'do', 'does', 'did', 'doing', 'done',
+    'will', 'would', 'shall', 'should', 'can', 'could', 'may', 'might', 'must',
+    'a', 'of', 'to', 'in', 'for', 'on', 'with', 'at', 'by', 'from',
+    'as', 'but', 'or', 'and', 'if', 'than', 'so', 'just', 'only', 'also',
+])
+
 def get_word_data(word, sd, lemma):
-    # 1. Always try lemma reverse lookup first to find the base form
-    stems = lemma.get(word, reverse=True)
+    # 1. Skip lemma reverse lookup for words in NO_LEMMATIZE list
+    # These words often have incorrect lemma mappings (e.g., an -> a -> some)
     stem = word
-    if stems:
-        # Use the first stem found
-        stem = stems[0]
+    if word not in NO_LEMMATIZE:
+        stems = lemma.get(word, reverse=True)
+        if stems:
+            # Use the first stem found
+            stem = stems[0]
     
     # 2. Query with the stem (or original word if no stem)
     data = sd.query(stem)
     
-    # 3. If not found with stem, and stem was different from word, try original word?
-    # The requirement emphasizes using the prototype. 
-    # But if prototype is not in dictionary (weird case), maybe fallback?
-    # Let's stick to the requirement: "restored by lemma... then use this prototype to query"
-    
+    # 3. If not found with stem, and stem was different from word, try original word
     if data:
         data['lemma'] = stem
-        # Ensure the returned data indicates the actual word found (which is the lemma)
-        # data['word'] usually contains the word from DB
     else:
         # Fallback: if lemma lookup failed to find a dict entry, try the word itself
-        # This handles cases where lemma.get returns something that isn't in the dict,
-        # or if the word itself is the main entry and lemma logic missed it (unlikely if lemma DB is good).
-        # But for robustness:
         if stem != word:
              data = sd.query(word)
              if data:

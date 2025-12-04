@@ -28,6 +28,11 @@ export interface DashboardStats {
     text: string;
     errorCount: number;
     translation: string | null;
+    phonetic: string | null;
+    pos: string | null;
+    definition: string | null;
+    tag: string | null;
+    exchange: string | null;
   }>;
 
   // Summary stats
@@ -72,12 +77,12 @@ export async function GET() {
         .select('score, duration, created_at')
         .eq('user_id', userId),
 
-      // Daily stats for past 6 months (for heatmap) - this tracks study_duration from daily_study_stats
+      // Daily stats for current year (for heatmap) - this tracks study_duration from daily_study_stats
       client
         .from('daily_study_stats')
         .select('date, study_duration')
         .eq('user_id', userId)
-        .gte('date', new Date(now.getTime() - 180 * 24 * 60 * 60 * 1000).toISOString())
+        .gte('date', new Date(now.getFullYear(), 0, 1).toISOString()) // From Jan 1 of current year
         .order('date', { ascending: true }),
 
       // Today's word reviews with response time
@@ -110,7 +115,12 @@ export async function GET() {
           words:word_id (
             id,
             text,
-            translation
+            translation,
+            phonetic,
+            pos,
+            definition,
+            tag,
+            exchange
           )
         `)
         .eq('user_id', userId)
@@ -172,12 +182,29 @@ export async function GET() {
       .or(`fsrs_due.is.null,fsrs_due.lte.${todayEnd.toISOString()}`);
 
     // Process hardest words
-    const hardestWords = (hardestWordsResult.data || []).map((ws: Record<string, unknown>) => ({
-      id: ws.id as string,
-      text: (ws.words as { text?: string } | null)?.text || '',
-      errorCount: ws.error_count as number || 0,
-      translation: (ws.words as { translation?: string } | null)?.translation || null,
-    }));
+    const hardestWords = (hardestWordsResult.data || []).map((ws: Record<string, unknown>) => {
+      const word = ws.words as { 
+        id?: string; 
+        text?: string; 
+        translation?: string;
+        phonetic?: string;
+        pos?: string;
+        definition?: string;
+        tag?: string;
+        exchange?: string;
+      } | null;
+      return {
+        id: word?.id || (ws.id as string),
+        text: word?.text || '',
+        errorCount: ws.error_count as number || 0,
+        translation: word?.translation || null,
+        phonetic: word?.phonetic || null,
+        pos: word?.pos || null,
+        definition: word?.definition || null,
+        tag: word?.tag || null,
+        exchange: word?.exchange || null,
+      };
+    });
 
     const stats: DashboardStats = {
       heatmapData,

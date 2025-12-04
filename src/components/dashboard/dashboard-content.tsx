@@ -23,6 +23,11 @@ interface DashboardStats {
     text: string;
     errorCount: number;
     translation: string | null;
+    phonetic: string | null;
+    pos: string | null;
+    definition: string | null;
+    tag: string | null;
+    exchange: string | null;
   }>;
   totalMaterials: number;
   totalSentences: number;

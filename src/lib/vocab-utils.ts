@@ -71,3 +71,57 @@ export function parseTags(tagString: string | null | undefined) {
     }));
 }
 
+/**
+ * Get all word forms from exchange string including the lemma itself.
+ * This is useful for highlighting any form of the word in context sentences.
+ * 
+ * @param lemma The base/lemma form of the word (e.g., "spend")
+ * @param exchangeString The exchange field from dictionary (e.g., "d:spent/p:spent/i:spending/3:spends/s:spends")
+ * @returns Array of all word forms including the lemma
+ */
+export function getAllWordForms(lemma: string, exchangeString: string | null | undefined): string[] {
+    const forms = new Set<string>();
+    
+    // Always include the lemma
+    if (lemma) {
+        forms.add(lemma.toLowerCase());
+    }
+    
+    if (exchangeString) {
+        // Format: d:perceived/p:perceived/3:perceives/i:perceiving
+        const parts = exchangeString.split('/');
+        for (const part of parts) {
+            const colonIndex = part.indexOf(':');
+            if (colonIndex > 0) {
+                const word = part.substring(colonIndex + 1).trim();
+                if (word && word.length > 0) {
+                    forms.add(word.toLowerCase());
+                }
+            }
+        }
+    }
+    
+    return Array.from(forms);
+}
+
+/**
+ * Create a regex pattern that matches any form of the word.
+ * Uses word boundaries and case-insensitive matching.
+ * 
+ * @param wordForms Array of word forms to match
+ * @returns RegExp that matches any of the word forms
+ */
+export function createWordFormsRegex(wordForms: string[]): RegExp {
+    if (wordForms.length === 0) return /(?!)/; // Never matches
+    
+    // Sort by length descending to match longer forms first (e.g., "spending" before "spend")
+    const sortedForms = [...wordForms].sort((a, b) => b.length - a.length);
+    
+    // Escape special regex characters and join with |
+    const pattern = sortedForms
+        .map(form => form.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+        .join('|');
+    
+    return new RegExp(`\\b(${pattern})\\b`, 'gi');
+}
+

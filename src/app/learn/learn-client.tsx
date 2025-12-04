@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { LearningWord, recordReview, getRandomWords } from '@/actions/learning-actions';
+import { LearningWord, recordReview, getRandomWords, recordLearningSessionDuration } from '@/actions/learning-actions';
 import { getWordContext } from '@/actions/word-actions';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -39,6 +39,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import { getAllWordForms, createWordFormsRegex } from '@/lib/vocab-utils';
 import { useUserSettings } from '@/components/user-settings-provider';
 import { ScrollArea } from '@/components/ui/scroll-area';
 
@@ -156,6 +157,8 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
   const [contextSentences, setContextSentences] = useState<Map<number, WordOccurrence>>(new Map());
   const [isLoadingContext, setIsLoadingContext] = useState(false);
   const [contextPlayingAudio, setContextPlayingAudio] = useState(false);
+  // Store the target word (actual word form in sentence) for context listening mode
+  const [contextTargetWord, setContextTargetWord] = useState<string>('');
   
   // Track which word indices have been auto-played to avoid replaying on re-renders
   const autoPlayedIndicesRef = useRef<Set<number>>(new Set());
@@ -204,12 +207,18 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
     localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(sessionState));
   }, [currentIndex, mode, sessionStats, words, isComplete]);
 
-  // Clear session on completion
+  // Clear session on completion and record learning duration
   useEffect(() => {
     if (isComplete) {
       localStorage.removeItem(SESSION_STORAGE_KEY);
+      
+      // Record learning session duration (convert ms to seconds)
+      const durationSeconds = Math.round(sessionStats.totalTime / 1000);
+      if (durationSeconds > 0) {
+        recordLearningSessionDuration(durationSeconds).catch(console.error);
+      }
     }
-  }, [isComplete]);
+  }, [isComplete, sessionStats.totalTime]);
 
   // Real-time timer effect
   useEffect(() => {
@@ -463,6 +472,35 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
     }
   }, [mode, currentIndex, contextSentences, isLoadingContext, showResult, playContextSentenceFromOccurrence]);
 
+  // Calculate the target word for context listening mode (the actual word form in the sentence)
+  useEffect(() => {
+    if (mode === 'context_listening' && currentWord) {
+      const ctxOcc = contextSentences.get(currentIndex);
+      if (ctxOcc && ctxOcc.sentence) {
+        const sentenceContent = ctxOcc.sentence.content;
+        let targetWord = currentWord.text;
+        
+        // Use start_index and end_index if available to get the original word form
+        if (ctxOcc.start_index !== undefined && ctxOcc.end_index !== undefined && 
+            ctxOcc.start_index >= 0 && ctxOcc.end_index > ctxOcc.start_index &&
+            ctxOcc.end_index <= sentenceContent.length) {
+          targetWord = sentenceContent.substring(ctxOcc.start_index, ctxOcc.end_index);
+        } else {
+          // Fallback: use all word forms from exchange field to match
+          const wordForms = getAllWordForms(currentWord.text, currentWord.exchange);
+          const wordFormsRegex = createWordFormsRegex(wordForms);
+          const match = sentenceContent.match(wordFormsRegex);
+          if (match) {
+            targetWord = match[0];
+          }
+        }
+        setContextTargetWord(targetWord);
+      } else {
+        setContextTargetWord(currentWord.text);
+      }
+    }
+  }, [mode, currentIndex, currentWord, contextSentences]);
+
   // Load word context (sentences) for incorrect answers
   const loadWordContext = useCallback(async (wordId: string) => {
     setLoadingOccurrences(true);
@@ -551,6 +589,9 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
     }
   }, [mode, currentWord, options.length, loadOptions]);
 
+  // Auto-play pronunciation removed for multiple_choice mode to avoid giving hints
+  // Pronunciation is now played after user makes a selection
+
   // Focus input on mount
   useEffect(() => {
     inputRef.current?.focus();
@@ -562,7 +603,10 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
     if (!currentWord || showResult) return;
 
     const trimmedValue = typedValue.trim().toLowerCase();
-    const correctAnswer = currentWord.text.toLowerCase();
+    // For context listening mode, use the actual word form in the sentence
+    const correctAnswer = (mode === 'context_listening' && contextTargetWord) 
+      ? contextTargetWord.toLowerCase() 
+      : currentWord.text.toLowerCase();
     const correct = trimmedValue === correctAnswer;
     
     setIsCorrect(correct);
@@ -602,7 +646,7 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
       // Load word context for learning (only for non-context-listening modes)
       loadWordContext(currentWord.wordId);
     }
-  }, [currentWord, mode, typedValue, showResult, startTime, errorCount, nextWord, loadWordContext]);
+  }, [currentWord, mode, contextTargetWord, typedValue, showResult, startTime, errorCount, nextWord, loadWordContext]);
 
   // Handle multiple choice selection
   const handleOptionSelect = useCallback(async (optionId: string) => {
@@ -612,6 +656,9 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
     const correct = optionId === currentWord.wordId;
     setIsCorrect(correct);
     setShowResult(true);
+    
+    // Play pronunciation after selection (whether correct or incorrect)
+    playPronunciation(currentWord.text);
 
     const responseTime = Date.now() - startTime;
 
@@ -770,21 +817,26 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
     // In all modes, use currentWord (same words for all modes now)
     if (!currentWord) return;
     
+    // For context listening mode, use the actual word form in the sentence
+    const targetWord = (mode === 'context_listening' && contextTargetWord) 
+      ? contextTargetWord 
+      : currentWord.text;
+    
     // Track errors (wrong characters)
     if (value.length > 0) {
-      const correctPart = currentWord.text.substring(0, value.length).toLowerCase();
+      const correctPart = targetWord.substring(0, value.length).toLowerCase();
       if (value.toLowerCase() !== correctPart) {
         setErrorCount(prev => prev + 1);
       }
     }
     
     // Auto-submit when the word is complete
-    if (value.length === currentWord.text.length) {
+    if (value.length === targetWord.length) {
       // Small delay to show the last character before submitting
       setTimeout(async () => {
         if (!showResult) {
           const trimmedValue = value.trim().toLowerCase();
-          const correctAnswer = currentWord.text.toLowerCase();
+          const correctAnswer = targetWord.toLowerCase();
           const correct = trimmedValue === correctAnswer;
           
           setIsCorrect(correct);
@@ -1036,21 +1088,21 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
       </div>
 
       {/* Word Card with Navigation Arrows */}
-      <div className="flex items-center gap-4 w-full max-w-3xl">
-        {/* Left Arrow */}
+      <div className="flex items-center gap-2 md:gap-4 w-full max-w-3xl">
+        {/* Left Arrow - hidden on small mobile */}
         <Button
           variant="ghost"
           size="icon"
-          className="h-12 w-12 shrink-0"
+          className="h-10 w-10 md:h-12 md:w-12 shrink-0 hidden sm:flex"
           onClick={prevWord}
           disabled={currentIndex <= 0}
           title="Previous word (Shift+←)"
         >
-          <ChevronLeft className="h-6 w-6" />
+          <ChevronLeft className="h-5 w-5 md:h-6 md:w-6" />
         </Button>
 
-        {/* Fixed size card */}
-        <Card className="w-full max-w-2xl min-h-[400px] flex flex-col">
+        {/* Responsive card - smaller on mobile */}
+        <Card className="w-full max-w-2xl min-h-[350px] md:min-h-[400px] flex flex-col">
           <CardContent className="pt-6 flex-1 flex flex-col">
             {/* Context Listening Mode */}
             {mode === 'context_listening' ? (
@@ -1092,19 +1144,22 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
                 let sentenceWithBlank = sentenceContent;
                 
                 if (ctxOcc.start_index !== undefined && ctxOcc.end_index !== undefined && 
-                    ctxOcc.start_index >= 0 && ctxOcc.end_index > ctxOcc.start_index) {
+                    ctxOcc.start_index >= 0 && ctxOcc.end_index > ctxOcc.start_index &&
+                    ctxOcc.end_index <= sentenceContent.length) {
                   // Use the indices to extract the original word form and create blank
                   originalWordInSentence = sentenceContent.substring(ctxOcc.start_index, ctxOcc.end_index);
                   sentenceWithBlank = sentenceContent.substring(0, ctxOcc.start_index) + 
                     '______' + 
                     sentenceContent.substring(ctxOcc.end_index);
                 } else {
-                  // Fallback: try to match the word using regex (case insensitive)
-                  const wordRegex = new RegExp(`\\b${wordText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
-                  const match = sentenceContent.match(wordRegex);
+                  // Fallback: use all word forms from exchange field to match
+                  const wordForms = getAllWordForms(wordText, currentWord.exchange);
+                  const wordFormsRegex = createWordFormsRegex(wordForms);
+                  const match = sentenceContent.match(wordFormsRegex);
                   if (match) {
                     originalWordInSentence = match[0];
-                    sentenceWithBlank = sentenceContent.replace(wordRegex, '______');
+                    // Replace only the first match
+                    sentenceWithBlank = sentenceContent.replace(wordFormsRegex, '______');
                   }
                 }
                 
@@ -1140,7 +1195,8 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
                             (() => {
                               // Highlight the original word in the sentence
                               if (ctxOcc.start_index !== undefined && ctxOcc.end_index !== undefined && 
-                                  ctxOcc.start_index >= 0 && ctxOcc.end_index > ctxOcc.start_index) {
+                                  ctxOcc.start_index >= 0 && ctxOcc.end_index > ctxOcc.start_index &&
+                                  ctxOcc.end_index <= sentenceContent.length) {
                                 const before = sentenceContent.substring(0, ctxOcc.start_index);
                                 const word = sentenceContent.substring(ctxOcc.start_index, ctxOcc.end_index);
                                 const after = sentenceContent.substring(ctxOcc.end_index);
@@ -1152,7 +1208,7 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
                                   </span>
                                 );
                               }
-                              // Fallback: highlight using the originalWordInSentence
+                              // Fallback: highlight using the originalWordInSentence (already found via word forms)
                               const highlightRegex = new RegExp(`\\b${originalWordInSentence.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
                               return (
                                 <span dangerouslySetInnerHTML={{
@@ -1194,7 +1250,8 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
                           onClick={() => inputRef.current?.focus()}
                         >
                           <div className="flex gap-1 flex-wrap justify-center">
-                            {currentWord.text.split('').map((letter, i) => {
+                            {/* Use originalWordInSentence for context mode - spell the actual word form in the sentence */}
+                            {originalWordInSentence.split('').map((letter, i) => {
                               const typedChar = typedValue[i];
                               const isTyped = typedChar !== undefined;
                               const isCorrectChar = typedChar?.toLowerCase() === letter.toLowerCase();
@@ -1324,15 +1381,18 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
                     </div>
                   )}
                   
-                  {/* Translation/Definition - hide in dictation mode */}
+                  {/* Translation/Definition - hide in dictation mode and on mobile in choice mode */}
                   {!isDictationMode ? (
-                    <div className="text-xl md:text-2xl font-medium mb-2 min-h-[60px] flex items-center justify-center">
-                      <ScrollArea className="max-h-[100px]">
+                    <div className={cn(
+                      "text-xl md:text-2xl font-medium mb-2 min-h-[40px] md:min-h-[60px] flex items-center justify-center",
+                      mode === 'multiple_choice' && "hidden md:flex"
+                    )}>
+                      <ScrollArea className="max-h-[80px] md:max-h-[100px]">
                         {currentWord.translation || currentWord.definition || 'No definition'}
                       </ScrollArea>
                     </div>
                   ) : (
-                    <div className="text-xl md:text-2xl font-medium mb-2 min-h-[60px] flex items-center justify-center text-muted-foreground/50">
+                    <div className="text-xl md:text-2xl font-medium mb-2 min-h-[40px] md:min-h-[60px] flex items-center justify-center text-muted-foreground/50">
                       Dictation Mode - Listen and type
                     </div>
                   )}
@@ -1400,9 +1460,9 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
                   )}
                 </div>
               ) : (
-                <div className="space-y-3">
+                <div className="space-y-2 md:space-y-3">
                   {isLoadingOptions ? (
-                    <div className="flex justify-center p-8">
+                    <div className="flex justify-center p-6 md:p-8">
                       <span className="text-muted-foreground">Loading options...</span>
                     </div>
                   ) : (
@@ -1420,7 +1480,7 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
                               : 'outline'
                           }
                           className={cn(
-                            "w-full justify-start text-left h-auto py-3 px-4",
+                            "w-full justify-start text-left h-auto py-2.5 px-3 md:py-3 md:px-4",
                             showResult && option.isCorrect && "bg-green-600 hover:bg-green-600",
                             selectedOption === option.id && !option.isCorrect && "bg-red-600 hover:bg-red-600"
                           )}
@@ -1428,10 +1488,10 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
                           disabled={!!selectedOption}
                           title={`Press ${idx + 1} to select`}
                         >
-                          <span className="w-6 h-6 rounded-full bg-muted/50 flex items-center justify-center mr-3 text-sm">
+                          <span className="w-5 h-5 md:w-6 md:h-6 rounded-full bg-muted/50 flex items-center justify-center mr-2 md:mr-3 text-xs md:text-sm">
                             {idx + 1}
                           </span>
-                          <span className="font-medium">{option.text}</span>
+                          <span className="font-medium text-sm md:text-base">{option.text}</span>
                           {showResult && option.isCorrect && (
                             <Check className="ml-auto h-4 w-4" />
                           )}
@@ -1540,16 +1600,16 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
           </CardContent>
         </Card>
 
-        {/* Right Arrow */}
+        {/* Right Arrow - hidden on small mobile */}
         <Button
           variant="ghost"
           size="icon"
-          className="h-12 w-12 shrink-0"
+          className="h-10 w-10 md:h-12 md:w-12 shrink-0 hidden sm:flex"
           onClick={nextWord}
           disabled={currentIndex >= words.length - 1}
           title="Next word (Shift+→)"
         >
-          <ChevronRight className="h-6 w-6" />
+          <ChevronRight className="h-5 w-5 md:h-6 md:w-6" />
         </Button>
       </div>
 
