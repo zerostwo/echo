@@ -110,12 +110,22 @@ export default async function MaterialDetailPage({ params }: { params: Promise<{
     return <div className="p-8">Error loading sentences: {initialSentences.error}</div>;
   }
 
+  // Get first sentence for Start Practice button
+  const { data: firstSentence } = await client
+    .from('sentences')
+    .select('id')
+    .eq('material_id', id)
+    .is('deleted_at', null)
+    .order('order', { ascending: true })
+    .limit(1)
+    .single();
+
   // Map snake_case to camelCase for material fields
   const materialWithStats = {
     ...material,
     isProcessed: material.is_processed,
     mimeType: material.mime_type,
-    sentences: [], // We don't pass sentences here anymore
+    sentences: firstSentence ? [{ id: firstSentence.id }] : [],
     stats: {
       totalSentences: sentenceCount || 0,
       vocabCount,

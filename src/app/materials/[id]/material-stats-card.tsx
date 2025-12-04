@@ -4,11 +4,10 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Activity, BookOpen, Clock, FileText } from "lucide-react";
+import { Activity, BookOpen, Clock, FileText, GraduationCap, PlayCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MaterialHeaderActions } from "./material-header-actions";
 import Link from "next/link";
-import { PlayCircle } from "lucide-react";
 
 interface MaterialStatsCardProps {
     material: {
@@ -19,6 +18,10 @@ interface MaterialStatsCardProps {
         duration: number | null;
         sentences: { id: string }[];
         mimeType: string | null;
+        stats?: {
+            totalSentences: number;
+            vocabCount: number;
+        };
     };
     vocabCount: number;
     wpm: number;
@@ -27,6 +30,7 @@ interface MaterialStatsCardProps {
 export function MaterialStatsCard({ material, vocabCount, wpm }: MaterialStatsCardProps) {
     const router = useRouter();
     const isVideo = material.mimeType?.startsWith('video/');
+    const sentenceCount = material.stats?.totalSentences ?? material.sentences.length;
 
     useEffect(() => {
         if (material.isProcessed) return;
@@ -46,7 +50,14 @@ export function MaterialStatsCard({ material, vocabCount, wpm }: MaterialStatsCa
                     </div>
                     <div className="flex gap-2">
                         <MaterialHeaderActions materialId={material.id} />
-                         {material.sentences.length > 0 && (
+                        {vocabCount > 0 && (
+                            <Link href={`/learn?materialId=${material.id}`}>
+                                <Button variant="outline" className="gap-2">
+                                    <GraduationCap className="h-4 w-4" /> Learn Vocabulary
+                                </Button>
+                            </Link>
+                        )}
+                        {material.sentences.length > 0 && (
                             <Link href={`/listening/${material.sentences[0].id}`}>
                                 <Button className="gap-2">
                                     <PlayCircle className="h-4 w-4" /> Start Practice
@@ -82,7 +93,7 @@ export function MaterialStatsCard({ material, vocabCount, wpm }: MaterialStatsCa
                         <span className="text-sm text-muted-foreground flex items-center gap-1">
                             <FileText className="h-3 w-3" /> Sentences
                         </span>
-                        <span className="text-2xl font-bold">{material.sentences.length}</span>
+                        <span className="text-2xl font-bold">{sentenceCount}</span>
                     </div>
                 </div>
 

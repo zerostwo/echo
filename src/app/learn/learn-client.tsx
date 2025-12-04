@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { LearningWord, recordReview, getRandomWords, recordLearningSessionDuration } from '@/actions/learning-actions';
+import { LearningWord, recordReview, getRandomWords, recordLearningSessionDuration, markAsMastered } from '@/actions/learning-actions';
 import { getWordContext } from '@/actions/word-actions';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -16,7 +16,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { 
+import {
   Keyboard, 
   ListChecks, 
   Volume2, 
@@ -36,6 +36,7 @@ import {
   Play,
   Pause,
   Headphones,
+  CheckCircle2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -96,6 +97,7 @@ const SHORTCUTS = [
   { key: 'Enter', description: 'Submit answer / Next word' },
   { key: 'Tab', description: 'Play pronunciation / Replay sentence' },
   { key: 'Ctrl + S', description: "Mark as 'I don't know'" },
+  { key: 'Ctrl + M', description: 'Mark as mastered' },
   { key: '1-4', description: 'Select option (Choice mode)' },
   { key: 'Ctrl + D', description: 'Toggle dictation mode (Typing mode)' },
   { key: '?', description: 'Show shortcuts' },
@@ -163,6 +165,9 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
   // Track which word indices have been auto-played to avoid replaying on re-renders
   const autoPlayedIndicesRef = useRef<Set<number>>(new Set());
   
+  // Track if session check has been done (only check once on mount)
+  const sessionCheckedRef = useRef(false);
+  
   // Audio refs
   const youdaoAudioRef = useRef<HTMLAudioElement>(null);
   const sentenceAudioRef = useRef<HTMLAudioElement>(null);
@@ -170,8 +175,12 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
   const currentWord = words[currentIndex];
   const progress = words.length > 0 ? ((currentIndex) / words.length) * 100 : 0;
 
-  // Check for saved session on mount
+  // Check for saved session on mount (only once)
   useEffect(() => {
+    // Only check once on mount
+    if (sessionCheckedRef.current) return;
+    sessionCheckedRef.current = true;
+    
     const saved = localStorage.getItem(SESSION_STORAGE_KEY);
     if (saved) {
       try {
@@ -191,7 +200,8 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
         localStorage.removeItem(SESSION_STORAGE_KEY);
       }
     }
-  }, [initialWords]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Only run once on mount
 
   // Save session state periodically
   useEffect(() => {
@@ -732,6 +742,21 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
     }
   }, [currentWord, showResult, startTime, mode, loadWordContext]);
 
+  // Handle "Mark as Mastered" button
+  const handleMarkMastered = useCallback(async () => {
+    if (!currentWord) return;
+
+    const result = await markAsMastered(currentWord.id);
+
+    if (result.success) {
+      toast.success('Word marked as mastered');
+      // Move to next word
+      nextWord();
+    } else {
+      toast.error(result.error || 'Failed to mark as mastered');
+    }
+  }, [currentWord, nextWord]);
+
   // Handle key press
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     // Don't handle shortcuts when blurred
@@ -767,6 +792,13 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
     if (e.ctrlKey && (e.key === 's' || e.key === 'S') && !showResult) {
       e.preventDefault();
       handleDontKnow();
+      return;
+    }
+    
+    // Ctrl+M for "Mark as mastered"
+    if (e.ctrlKey && (e.key === 'm' || e.key === 'M') && !showResult) {
+      e.preventDefault();
+      handleMarkMastered();
       return;
     }
     
@@ -1293,6 +1325,10 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
                               <SkipForward className="mr-2 h-4 w-4" />
                               I don&apos;t know
                             </Button>
+                            <Button variant="outline" onClick={handleMarkMastered} title="Mark as mastered (Ctrl+M)">
+                              <CheckCircle2 className="mr-2 h-4 w-4" />
+                              Mastered
+                            </Button>
                           </div>
                         )}
                         
@@ -1456,6 +1492,10 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
                         <SkipForward className="mr-2 h-4 w-4" />
                         I don&apos;t know
                       </Button>
+                      <Button variant="outline" onClick={handleMarkMastered} title="Mark as mastered (Ctrl+M)">
+                        <CheckCircle2 className="mr-2 h-4 w-4" />
+                        Mastered
+                      </Button>
                     </div>
                   )}
                 </div>
@@ -1502,14 +1542,25 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
                       ))}
                       
                       {!showResult && (
-                        <Button
-                          variant="ghost"
-                          className="w-full text-muted-foreground"
-                          onClick={handleDontKnow}
-                          title="I don't know (Ctrl+S)"
-                        >
-                          I don&apos;t know
-                        </Button>
+                        <div className="flex gap-2">
+                          <Button
+                            variant="ghost"
+                            className="flex-1 text-muted-foreground"
+                            onClick={handleDontKnow}
+                            title="I don't know (Ctrl+S)"
+                          >
+                            I don&apos;t know
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            className="flex-1 text-muted-foreground"
+                            onClick={handleMarkMastered}
+                            title="Mark as mastered (Ctrl+M)"
+                          >
+                            <CheckCircle2 className="mr-2 h-4 w-4" />
+                            Mastered
+                          </Button>
+                        </div>
                       )}
                     </>
                   )}

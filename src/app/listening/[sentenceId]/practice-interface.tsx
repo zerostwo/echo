@@ -4,6 +4,7 @@ import { useRef, useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { evaluateDictation } from '@/actions/listening-actions';
+import { lookupWordByText } from '@/actions/word-actions';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { Play, RotateCw, Check, ArrowRight, ArrowLeft, Pause, Eye, EyeOff, RefreshCw, Keyboard, X } from 'lucide-react';
@@ -13,6 +14,7 @@ import { Badge } from '@/components/ui/badge';
 import { useRouter } from 'next/navigation';
 import { useBreadcrumb } from '@/context/breadcrumb-context';
 import { HeaderPortal } from '@/components/header-portal';
+import { WordDetailSheet } from '@/app/vocab/word-detail-sheet';
 import {
   Dialog,
   DialogContent,
@@ -39,6 +41,36 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
     const [isLooping, setIsLooping] = useState(false);
     const [showTranscript, setShowTranscript] = useState(false);
     const startTimeRef = useRef<number>(Date.now());
+    
+    // Word detail sheet state
+    const [selectedWord, setSelectedWord] = useState<any>(null);
+    const [wordSheetOpen, setWordSheetOpen] = useState(false);
+    const [loadingWord, setLoadingWord] = useState(false);
+
+    // Handle word click to show word details
+    const handleWordClick = async (wordText: string) => {
+        // Clean the word: remove punctuation and convert to lowercase
+        const cleanWord = wordText.replace(/[^\w']/g, '').toLowerCase();
+        if (!cleanWord || cleanWord.length < 2) return;
+        
+        setLoadingWord(true);
+        try {
+            const result = await lookupWordByText(cleanWord);
+            if (result.word) {
+                setSelectedWord(result.word);
+                setWordSheetOpen(true);
+            } else if (result.error) {
+                toast.error(result.error);
+            } else {
+                toast.info(`No definition found for "${cleanWord}"`);
+            }
+        } catch (e) {
+            console.error('Failed to lookup word:', e);
+            toast.error('Failed to lookup word');
+        } finally {
+            setLoadingWord(false);
+        }
+    };
 
     // Set breadcrumbs
     useEffect(() => {
@@ -310,7 +342,13 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
                                     <Textarea 
                                         placeholder="Type what you hear..." 
                                         value={userText}
-                                        onChange={(e) => setUserText(e.target.value)}
+                                        onChange={(e) => {
+                                            setUserText(e.target.value);
+                                            // Clear feedback when user clears input
+                                            if (!e.target.value.trim() && feedback) {
+                                                setFeedback(null);
+                                            }
+                                        }}
                                         rows={4}
                                         className="text-lg p-4 pr-12 shadow-sm focus-visible:ring-offset-0 min-h-[120px] resize-none w-full whitespace-pre-wrap break-words"
                                         spellCheck={false}
@@ -396,13 +434,13 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
                                 
                                 <div className="w-full">
                                     <div className="text-lg leading-relaxed font-mono">
-                                        {renderDiff(feedback.diff)}
+                                        {renderDiff(feedback.diff, handleWordClick, loadingWord)}
                                     </div>
                                     {feedback.score < 100 && (
                                         <div className="mt-4 pt-4 border-t border-orange-200/50">
                                             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">Correct Answer</p>
                                             <div className="text-lg text-foreground font-medium break-words">
-                                                {feedback.target}
+                                                {renderClickableText(feedback.target, handleWordClick, loadingWord)}
                                             </div>
                                         </div>
                                     )}
@@ -412,11 +450,49 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
                     )}
                 </div>
             </div>
+            
+            {/* Word Detail Sheet */}
+            <WordDetailSheet 
+                word={selectedWord} 
+                open={wordSheetOpen} 
+                onOpenChange={(open) => {
+                    setWordSheetOpen(open);
+                    if (!open) {
+                        setSelectedWord(null);
+                    }
+                }} 
+            />
         </div>
     );
 }
 
-function renderDiff(diff: any[]) {
+function renderDiff(diff: any[], onWordClick: (word: string) => void, isLoading: boolean) {
+    // Helper function to make text clickable word by word
+    const makeClickable = (text: string, baseKey: string | number, className: string) => {
+        // Split by words while preserving spaces and punctuation
+        const parts = text.split(/(\s+)/);
+        return parts.map((part, idx) => {
+            // Check if it's a word (not just whitespace or punctuation)
+            const isWord = /[a-zA-Z]{2,}/.test(part);
+            if (isWord) {
+                return (
+                    <span 
+                        key={`${baseKey}-${idx}`}
+                        className={`${className} cursor-pointer hover:underline hover:decoration-2 transition-all ${isLoading ? 'opacity-50' : ''}`}
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            if (!isLoading) onWordClick(part);
+                        }}
+                        title="Click to see word details"
+                    >
+                        {part}
+                    </span>
+                );
+            }
+            return <span key={`${baseKey}-${idx}`} className={className}>{part}</span>;
+        });
+    };
+
     // Process diff to show inline corrections like: "It's [greate -> great] to see..."
     const result = [];
     let i = 0;
@@ -430,11 +506,11 @@ function renderDiff(diff: any[]) {
             result.push(
                 <span key={i} className="mx-1">
                     <span className="bg-red-100 text-red-700 line-through decoration-red-400/50 px-1 rounded text-base opacity-70">
-                        {next.value}
+                        {makeClickable(next.value, `${i}-wrong`, '')}
                     </span>
                     <span className="mx-0.5 text-muted-foreground text-sm">→</span>
                     <span className="bg-green-100 text-green-700 px-1 rounded font-medium border border-green-200">
-                        {current.value}
+                        {makeClickable(current.value, `${i}-correct`, '')}
                     </span>
                 </span>
             );
@@ -444,7 +520,7 @@ function renderDiff(diff: any[]) {
         else if (current.added) {
              result.push(
                 <span key={i} className="bg-red-100 text-red-700 line-through decoration-red-400/50 px-1 rounded mx-0.5">
-                    {current.value}
+                    {makeClickable(current.value, i, '')}
                 </span>
             );
             i++;
@@ -453,7 +529,7 @@ function renderDiff(diff: any[]) {
         else if (current.removed) {
             result.push(
                 <span key={i} className="bg-green-100 text-green-700 px-1 rounded font-medium border border-green-200 mx-0.5">
-                    {current.value}
+                    {makeClickable(current.value, i, '')}
                 </span>
             );
             i++;
@@ -461,8 +537,8 @@ function renderDiff(diff: any[]) {
         // Unchanged text
         else {
             result.push(
-                <span key={i} className="text-foreground/80">
-                    {current.value}
+                <span key={i}>
+                    {makeClickable(current.value, i, 'text-foreground/80')}
                 </span>
             );
             i++;
@@ -470,6 +546,32 @@ function renderDiff(diff: any[]) {
     }
     
     return result;
+}
+
+// Helper function to render text with clickable words
+function renderClickableText(text: string, onWordClick: (word: string) => void, isLoading: boolean) {
+    // Split by words while preserving spaces and punctuation
+    const parts = text.split(/(\s+)/);
+    return parts.map((part, idx) => {
+        // Check if it's a word (not just whitespace or punctuation)
+        const isWord = /[a-zA-Z]{2,}/.test(part);
+        if (isWord) {
+            return (
+                <span 
+                    key={idx}
+                    className={`cursor-pointer hover:underline hover:decoration-2 hover:text-primary transition-all ${isLoading ? 'opacity-50' : ''}`}
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        if (!isLoading) onWordClick(part);
+                    }}
+                    title="Click to see word details"
+                >
+                    {part}
+                </span>
+            );
+        }
+        return <span key={idx}>{part}</span>;
+    });
 }
 
 function formatTime(seconds: number) {

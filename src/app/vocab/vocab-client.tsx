@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback, useMemo, useTransition } from "react"
+import { useState, useEffect, useCallback, useMemo, useTransition, useRef } from "react"
 import {
   ColumnDef,
   flexRender,
@@ -24,7 +24,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Button } from "@/components/ui/button"
-import { SlidersHorizontal, Loader2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Trash2, ChevronDown, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react"
+import { SlidersHorizontal, Loader2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Trash2, ChevronDown, ArrowUp, ArrowDown, ArrowUpDown, Pencil, Trophy } from "lucide-react"
 import { WordDetailSheet } from "./word-detail-sheet"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
@@ -39,6 +39,22 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Label } from "@/components/ui/label"
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -46,7 +62,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { getVocabPaginated, VocabFilters, PaginatedVocabResult } from "@/actions/vocab-actions"
-import { updateWordsStatus, deleteWords } from "@/actions/word-actions"
+import { updateWordsStatus, deleteWords, editWord } from "@/actions/word-actions"
 import { useDebounce } from "@/hooks/use-debounce"
 import { toast } from "sonner"
 import { VocabFilterDrawer, FilterChips, VocabFilterState } from "./vocab-filter-drawer"
@@ -145,6 +161,11 @@ export function VocabClient({ initialData, materialId, settings, materials = [] 
   
   const [selectedWord, setSelectedWord] = useState<any>(null)
   
+  // Edit word dialog state
+  const [editingWord, setEditingWord] = useState<{ id: string; text: string } | null>(null)
+  const [editWordText, setEditWordText] = useState("")
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
+  
   const debouncedSearch = useDebounce(search, 300)
 
   // Max frequency for slider - only use when data is loaded
@@ -154,8 +175,27 @@ export function VocabClient({ initialData, materialId, settings, materials = [] 
     return Math.ceil(max / 10) * 10 // Round up to nearest 10
   }, [data])
 
-  // Sync state with initialData when materialId changes
+  // Track previous materialId to detect real changes
+  const prevMaterialIdRef = useRef<string | undefined>(materialId)
+
+  // Initialize data from initialData on first render only
   useEffect(() => {
+    setData(initialData.data || [])
+    setTotal(initialData.total)
+    setStats(initialData.stats)
+    setPage(initialData.page)
+    setTotalPages(initialData.totalPages)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []) // Only run once on mount
+
+  // Reset filters and state only when materialId actually changes
+  useEffect(() => {
+    // Skip if materialId hasn't actually changed
+    if (prevMaterialIdRef.current === materialId) return
+    
+    prevMaterialIdRef.current = materialId
+    
+    // materialId changed, reset state
     setData(initialData.data || [])
     setTotal(initialData.total)
     setStats(initialData.stats)
@@ -372,6 +412,73 @@ export function VocabClient({ initialData, materialId, settings, materials = [] 
     })
   }
 
+  // Handle context menu - delete single word
+  const handleContextDelete = async (wordId: string) => {
+    startTransition(async () => {
+      try {
+        const result = await deleteWords([wordId])
+        if (result?.error) {
+          toast.error(result.error)
+          return
+        }
+        toast.success('Word deleted')
+        fetchData(page)
+      } catch (error) {
+        toast.error('Failed to delete word')
+      }
+    })
+  }
+
+  // Handle context menu - mark as mastered
+  const handleContextMaster = async (wordId: string) => {
+    startTransition(async () => {
+      try {
+        const result = await updateWordsStatus([wordId], 'MASTERED')
+        if (result?.error) {
+          toast.error(result.error)
+          return
+        }
+        toast.success('Word marked as mastered')
+        fetchData(page)
+      } catch (error) {
+        toast.error('Failed to update word status')
+      }
+    })
+  }
+
+  // Handle context menu - open edit dialog
+  const handleContextEdit = (word: { id: string; text: string }) => {
+    setEditingWord(word)
+    setEditWordText(word.text)
+    setIsEditDialogOpen(true)
+  }
+
+  // Handle edit word submit
+  const handleEditWordSubmit = async () => {
+    if (!editingWord || !editWordText.trim()) return
+
+    startTransition(async () => {
+      try {
+        const result = await editWord(editingWord.id, editWordText.trim())
+        if (result?.error) {
+          toast.error(result.error)
+          return
+        }
+        if (result?.merged) {
+          toast.success(`Word merged: "${editingWord.text}" → "${editWordText.trim()}" (context sentences combined)`)
+        } else {
+          toast.success(`Word updated to "${editWordText.trim()}"`)
+        }
+        setIsEditDialogOpen(false)
+        setEditingWord(null)
+        setEditWordText("")
+        fetchData(page)
+      } catch (error) {
+        toast.error('Failed to edit word')
+      }
+    })
+  }
+
   // Handle column visibility change with persistence
   const handleColumnVisibilityChange = async (columnId: string, isVisible: boolean) => {
     setColumnVisibility(prev => {
@@ -552,17 +659,54 @@ export function VocabClient({ initialData, materialId, settings, materials = [] 
             <TableBody>
               {table.getRowModel().rows?.length ? (
                 table.getRowModel().rows.map((row) => (
-                  <TableRow
-                    key={row.id}
-                    className="cursor-pointer hover:bg-muted/50"
-                    onClick={() => setSelectedWord(row.original)}
-                  >
-                    {row.getVisibleCells().map((cell) => (
-                      <TableCell key={cell.id}>
-                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                      </TableCell>
-                    ))}
-                  </TableRow>
+                  <ContextMenu key={row.id}>
+                    <ContextMenuTrigger asChild>
+                      <TableRow
+                        className="cursor-pointer hover:bg-muted/50"
+                        onClick={() => setSelectedWord(row.original)}
+                      >
+                        {row.getVisibleCells().map((cell) => (
+                          <TableCell key={cell.id}>
+                            {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                          </TableCell>
+                        ))}
+                      </TableRow>
+                    </ContextMenuTrigger>
+                    <ContextMenuContent className="w-48">
+                      <ContextMenuItem
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleContextEdit({ id: row.original.id, text: row.original.text })
+                        }}
+                        disabled={isPending}
+                      >
+                        <Pencil className="mr-2 h-4 w-4" />
+                        Edit Word
+                      </ContextMenuItem>
+                      <ContextMenuItem
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleContextMaster(row.original.id)
+                        }}
+                        disabled={isPending || row.original.status === 'MASTERED'}
+                      >
+                        <Trophy className="mr-2 h-4 w-4" />
+                        Mark as Mastered
+                      </ContextMenuItem>
+                      <ContextMenuSeparator />
+                      <ContextMenuItem
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleContextDelete(row.original.id)
+                        }}
+                        disabled={isPending}
+                        className="text-destructive focus:text-destructive"
+                      >
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        Delete Word
+                      </ContextMenuItem>
+                    </ContextMenuContent>
+                  </ContextMenu>
                 ))
               ) : (
                 <TableRow>
@@ -646,6 +790,69 @@ export function VocabClient({ initialData, materialId, settings, materials = [] 
               onOpenChange={(open) => !open && setSelectedWord(null)} 
           />
       )}
+
+      {/* Edit Word Dialog */}
+      <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Edit Word</DialogTitle>
+            <DialogDescription>
+              Correct the word spelling. The dictionary data will be automatically updated based on the new word.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="original-word" className="text-right">
+                Original
+              </Label>
+              <div className="col-span-3 text-muted-foreground">
+                {editingWord?.text}
+              </div>
+            </div>
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="new-word" className="text-right">
+                New Word
+              </Label>
+              <Input
+                id="new-word"
+                value={editWordText}
+                onChange={(e) => setEditWordText(e.target.value)}
+                className="col-span-3"
+                placeholder="Enter the correct word"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    handleEditWordSubmit()
+                  }
+                }}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsEditDialogOpen(false)
+                setEditingWord(null)
+                setEditWordText("")
+              }}
+              disabled={isPending}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleEditWordSubmit} disabled={isPending || !editWordText.trim()}>
+              {isPending ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Updating...
+                </>
+              ) : (
+                'Save Changes'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

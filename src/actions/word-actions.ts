@@ -4,6 +4,67 @@ import { auth } from '@/auth';
 import { supabase, supabaseAdmin } from '@/lib/supabase';
 import { revalidatePath } from 'next/cache';
 import { invalidateVocabCache } from '@/lib/redis';
+import { queryDictionary } from '@/actions/vocab-actions';
+
+/**
+ * Lookup word details by text.
+ * First tries to find the word in the database, then falls back to dictionary lookup.
+ */
+export async function lookupWordByText(wordText: string) {
+    if (!wordText || typeof wordText !== 'string') {
+        return { error: 'Invalid word text' };
+    }
+
+    const normalizedWord = wordText.toLowerCase().trim();
+    if (!normalizedWord) {
+        return { error: 'Empty word text' };
+    }
+
+    const client = supabaseAdmin || supabase;
+
+    // Try to find the word in the database first
+    const { data: existingWord, error: dbError } = await client
+        .from('words')
+        .select('*')
+        .eq('text', normalizedWord)
+        .is('deleted_at', null)
+        .single();
+
+    if (existingWord && !dbError) {
+        return { word: existingWord };
+    }
+
+    // Fall back to dictionary lookup
+    try {
+        const dictResults = await queryDictionary([normalizedWord]);
+        const dictData = dictResults[normalizedWord];
+
+        if (dictData) {
+            return {
+                word: {
+                    id: null, // Not in database
+                    text: dictData.word || normalizedWord,
+                    phonetic: dictData.phonetic || null,
+                    definition: dictData.definition || null,
+                    translation: dictData.translation || null,
+                    pos: dictData.pos || null,
+                    collins: dictData.collins ? Number(dictData.collins) : null,
+                    oxford: dictData.oxford ? Number(dictData.oxford) : null,
+                    tag: dictData.tag || null,
+                    bnc: dictData.bnc ? Number(dictData.bnc) : null,
+                    frq: dictData.frq ? Number(dictData.frq) : null,
+                    exchange: dictData.exchange || null,
+                    audio: dictData.audio || null,
+                }
+            };
+        }
+
+        return { word: null };
+    } catch (e) {
+        console.error('[lookupWordByText] Dictionary lookup failed:', e);
+        return { error: 'Dictionary lookup failed' };
+    }
+}
 
 export async function getWordContext(wordId: string) {
     const session = await auth();
@@ -279,5 +340,195 @@ export async function deleteWords(wordIds: string[]) {
     } catch (e) {
         console.error('Failed to delete words:', e);
         return { error: 'Failed to delete words' };
+    }
+}
+
+/**
+ * Edit a word - update the word text and refresh dictionary data
+ * This directly queries the dictionary for the new word without going through lemma reverse lookup
+ * 
+ * If the target word already exists, this will merge the two words:
+ * - Move all word_occurrences from the old word to the existing word
+ * - Delete the old word's user_word_status
+ * - Soft delete the old word
+ */
+export async function editWord(wordId: string, newWordText: string) {
+    const session = await auth();
+    if (!session?.user?.id) return { error: 'Unauthorized' };
+
+    const client = supabaseAdmin || supabase;
+    const normalizedWord = newWordText.toLowerCase().trim();
+
+    if (!normalizedWord) {
+        return { error: 'Word cannot be empty' };
+    }
+
+    try {
+        // Check if user has access to this word
+        const { data: userStatus, error: checkError } = await client
+            .from('user_word_statuses')
+            .select('word_id, status')
+            .eq('user_id', session.user.id)
+            .eq('word_id', wordId)
+            .single();
+
+        if (checkError || !userStatus) {
+            return { error: 'Word not found or access denied' };
+        }
+
+        // Get the current word text
+        const { data: currentWord } = await client
+            .from('words')
+            .select('text')
+            .eq('id', wordId)
+            .single();
+
+        // If the word text hasn't changed, no need to do anything
+        if (currentWord?.text === normalizedWord) {
+            return { success: true, word: { id: wordId, text: normalizedWord } };
+        }
+
+        // Check if a word with the new text already exists
+        const { data: existingWord } = await client
+            .from('words')
+            .select('id')
+            .eq('text', normalizedWord)
+            .is('deleted_at', null)
+            .neq('id', wordId)
+            .single();
+
+        if (existingWord) {
+            // Merge: the target word already exists
+            // 1. Move all word_occurrences from old word to existing word
+            const { error: moveOccurrencesError } = await client
+                .from('word_occurrences')
+                .update({ word_id: existingWord.id })
+                .eq('word_id', wordId);
+
+            if (moveOccurrencesError) {
+                console.error('Failed to move word occurrences:', moveOccurrencesError);
+                return { error: 'Failed to merge words' };
+            }
+
+            // 2. Check if user has status for the existing word
+            const { data: existingStatus } = await client
+                .from('user_word_statuses')
+                .select('id')
+                .eq('user_id', session.user.id)
+                .eq('word_id', existingWord.id)
+                .single();
+
+            if (!existingStatus) {
+                // User doesn't have status for existing word, move the status
+                const { error: moveStatusError } = await client
+                    .from('user_word_statuses')
+                    .update({ word_id: existingWord.id })
+                    .eq('user_id', session.user.id)
+                    .eq('word_id', wordId);
+
+                if (moveStatusError) {
+                    console.error('Failed to move word status:', moveStatusError);
+                }
+            } else {
+                // User already has status for existing word, delete the old status
+                const { error: deleteStatusError } = await client
+                    .from('user_word_statuses')
+                    .delete()
+                    .eq('user_id', session.user.id)
+                    .eq('word_id', wordId);
+
+                if (deleteStatusError) {
+                    console.error('Failed to delete old word status:', deleteStatusError);
+                }
+            }
+
+            // 3. Soft delete the old word (it's now orphaned for this user)
+            // Check if any other users have this word
+            const { count: otherUsersCount } = await client
+                .from('user_word_statuses')
+                .select('id', { count: 'exact', head: true })
+                .eq('word_id', wordId);
+
+            if ((otherUsersCount ?? 0) === 0) {
+                // No other users have this word, soft delete it
+                const { error: deleteWordError } = await client
+                    .from('words')
+                    .update({ deleted_at: new Date().toISOString() })
+                    .eq('id', wordId);
+
+                if (deleteWordError) {
+                    console.error('Failed to soft delete old word:', deleteWordError);
+                }
+            }
+
+            // Invalidate vocab cache
+            await invalidateVocabCache(session.user.id);
+
+            revalidatePath('/vocab');
+
+            return {
+                success: true,
+                merged: true,
+                word: {
+                    id: existingWord.id,
+                    text: normalizedWord,
+                }
+            };
+        }
+
+        // No existing word, just update the current word
+        // Query dictionary directly for the new word (skip lemma reverse lookup)
+        const dictResults = await queryDictionary([normalizedWord]);
+        const dictData = dictResults[normalizedWord];
+
+        // Prepare update data
+        const updateData: Record<string, any> = {
+            text: normalizedWord,
+            updated_at: new Date().toISOString(),
+        };
+
+        // If dictionary data is found, update all word metadata
+        if (dictData) {
+            updateData.phonetic = dictData.phonetic || null;
+            updateData.definition = dictData.definition || null;
+            updateData.translation = dictData.translation || null;
+            updateData.pos = dictData.pos || null;
+            updateData.collins = dictData.collins ? Number(dictData.collins) : null;
+            updateData.oxford = dictData.oxford ? Number(dictData.oxford) : null;
+            updateData.tag = dictData.tag || null;
+            updateData.bnc = dictData.bnc ? Number(dictData.bnc) : null;
+            updateData.frq = dictData.frq ? Number(dictData.frq) : null;
+            updateData.exchange = dictData.exchange || null;
+            updateData.audio = dictData.audio || null;
+            updateData.detail = dictData.detail ? JSON.stringify(dictData.detail) : null;
+        }
+
+        // Update the word
+        const { error: updateError } = await client
+            .from('words')
+            .update(updateData)
+            .eq('id', wordId);
+
+        if (updateError) {
+            console.error('Failed to update word:', updateError);
+            return { error: 'Failed to update word' };
+        }
+
+        // Invalidate vocab cache
+        await invalidateVocabCache(session.user.id);
+
+        revalidatePath('/vocab');
+        
+        return { 
+            success: true, 
+            word: {
+                id: wordId,
+                text: normalizedWord,
+                ...updateData
+            }
+        };
+    } catch (e) {
+        console.error('Failed to edit word:', e);
+        return { error: 'Failed to edit word' };
     }
 }
