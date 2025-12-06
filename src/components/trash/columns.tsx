@@ -7,7 +7,7 @@ import { formatInTimeZone } from "@/lib/time"
 
 export type TrashItem = {
   id: string
-  type: 'material' | 'sentence' | 'word'
+  type: 'material' | 'sentence' | 'word' | 'dictionary'
   title: string
   deleted_at: string | null
   size?: number | null
@@ -46,6 +46,7 @@ export const buildTrashColumns = (timezone: string): ColumnDef<TrashItem>[] => {
       const type = row.getValue("type") as string;
       if (type === 'material') return 'Material';
       if (type === 'sentence') return 'Sentence';
+      if (type === 'dictionary') return 'Dictionary';
       return 'Word';
     },
   },

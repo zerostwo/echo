@@ -9,13 +9,18 @@ import { VocabFilterState } from './vocab-filter-drawer'
 interface VocabHeaderProps {
   materialId?: string
   materialTitle?: string
+  dictionaryId?: string
   filters?: VocabFilterState
 }
 
-export function VocabHeader({ materialId, materialTitle, filters }: VocabHeaderProps) {
+export function VocabHeader({ materialId, materialTitle, dictionaryId, filters }: VocabHeaderProps) {
   // Build learning URL with filters
   const buildLearningUrl = () => {
     const params = new URLSearchParams()
+    
+    if (dictionaryId) {
+      params.set('dictionaryId', dictionaryId)
+    }
     
     if (materialId || filters?.materialFilter) {
       params.set('materialId', materialId || filters?.materialFilter || '')

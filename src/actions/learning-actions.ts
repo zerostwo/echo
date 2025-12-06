@@ -2,6 +2,7 @@
 
 import { auth } from '@/auth';
 import { supabaseAdmin, supabase } from '@/lib/supabase';
+import { prisma } from "@/lib/prisma"
 import { revalidatePath } from 'next/cache';
 import { randomUUID } from 'crypto';
 import { 
@@ -59,6 +60,7 @@ export interface ReviewResult {
 
 export interface LearningFilters {
   materialId?: string;
+  dictionaryId?: string;
   oxford?: boolean;
   collins?: number[];
   minFrequency?: number;
@@ -82,6 +84,11 @@ export async function getWordsForLearning(limit: number = 20, filters?: Learning
   // Special handling for material filter - get all words from material
   if (filters?.materialId) {
     return getWordsFromMaterial(client, session.user.id, filters.materialId, limit, filters);
+  }
+
+  // Special handling for dictionary filter
+  if (filters?.dictionaryId) {
+    return getWordsFromDictionary(client, session.user.id, filters.dictionaryId, limit, filters);
   }
   
   // Normal flow: get words from user's vocabulary that need learning
@@ -226,6 +233,176 @@ export async function getWordsForLearning(limit: number = 20, filters?: Learning
 
   return { words };
 }
+async function getWordsFromDictionary(
+  client: typeof supabase,
+  userId: string,
+  dictionaryId: string,
+  limit: number,
+  filters?: LearningFilters
+): Promise<{ words: LearningWord[], error?: string }> {
+  // Get all word IDs from this dictionary
+  const dictionaryWords = await prisma.dictionaryWord.findMany({
+    where: { dictionaryId },
+    select: { wordId: true }
+  })
+  
+  const wordIdArray = dictionaryWords.map(dw => dw.wordId)
+
+  if (wordIdArray.length === 0) {
+    return { words: [], error: 'No words found in this dictionary' };
+  }
+
+  // Get words with their info in batches
+  const BATCH_SIZE = 50;
+  const wordsData: any[] = [];
+  
+  for (let i = 0; i < wordIdArray.length && wordsData.length < limit * 2; i += BATCH_SIZE) {
+    const batch = wordIdArray.slice(i, i + BATCH_SIZE);
+    const { data: batchWords, error: batchError } = await client
+      .from('words')
+      .select('id, text, phonetic, translation, definition, pos, exchange, oxford, collins, deleted_at')
+      .in('id', batch)
+      .is('deleted_at', null);
+    
+    if (batchError) {
+      console.error('[getWordsFromDictionary] Error fetching words batch:', batchError);
+      continue;
+    }
+    
+    if (batchWords) {
+      wordsData.push(...batchWords);
+    }
+  }
+
+  if (wordsData.length === 0) {
+    return { words: [], error: 'Failed to fetch word details' };
+  }
+
+  // Get existing user word statuses for these words in batches
+  const wordIdsToCheck = wordsData.map(w => w.id);
+  const existingStatuses: any[] = [];
+  
+  for (let i = 0; i < wordIdsToCheck.length; i += BATCH_SIZE) {
+    const batch = wordIdsToCheck.slice(i, i + BATCH_SIZE);
+    const { data: batchStatuses } = await client
+      .from('user_word_statuses')
+      .select('*')
+      .eq('user_id', userId)
+      .in('word_id', batch);
+    
+    if (batchStatuses) {
+      existingStatuses.push(...batchStatuses);
+    }
+  }
+
+  const statusMap = new Map<string, any>();
+  for (const status of existingStatuses) {
+    statusMap.set(status.word_id, status);
+  }
+
+  // Apply filters and build result
+  let filteredWords = wordsData.filter(word => {
+    // Filter by oxford
+    if (filters?.oxford !== undefined) {
+      if (filters.oxford && word.oxford !== 1) return false;
+      if (!filters.oxford && word.oxford === 1) return false;
+    }
+    // Filter by collins
+    if (filters?.collins && filters.collins.length > 0) {
+      if (!filters.collins.includes(word.collins)) return false;
+    }
+    return true;
+  });
+
+  // Sort logic (same as getWordsFromMaterial)
+  const now = new Date().toISOString();
+  
+  filteredWords.sort((a, b) => {
+    const statusA = statusMap.get(a.id);
+    const statusB = statusMap.get(b.id);
+    
+    // 1. Never seen (no status)
+    if (!statusA && statusB) return -1;
+    if (statusA && !statusB) return 1;
+    if (!statusA && !statusB) return 0;
+    
+    // 2. New (reps = 0)
+    if (statusA.status === 'NEW' && statusA.fsrs_reps === 0 && (statusB.status !== 'NEW' || statusB.fsrs_reps > 0)) return -1;
+    if ((statusA.status !== 'NEW' || statusA.fsrs_reps > 0) && statusB.status === 'NEW' && statusB.fsrs_reps === 0) return 1;
+    
+    // 3. New (reps > 0)
+    if (statusA.status === 'NEW' && statusB.status !== 'NEW') return -1;
+    if (statusA.status !== 'NEW' && statusB.status === 'NEW') return 1;
+    
+    // 4. Learning
+    if (statusA.status === 'LEARNING' && statusB.status !== 'LEARNING') return -1;
+    if (statusA.status !== 'LEARNING' && statusB.status === 'LEARNING') return 1;
+    
+    // 5. Due
+    const dueA = statusA.fsrs_due ? new Date(statusA.fsrs_due).getTime() : Infinity;
+    const dueB = statusB.fsrs_due ? new Date(statusB.fsrs_due).getTime() : Infinity;
+    const nowTime = new Date().getTime();
+    
+    if (dueA <= nowTime && dueB > nowTime) return -1;
+    if (dueA > nowTime && dueB <= nowTime) return 1;
+    
+    return 0;
+  });
+
+  // Take top N
+  const selectedWords = filteredWords.slice(0, limit);
+  
+  // Map to LearningWord
+  const result: LearningWord[] = selectedWords.map(word => {
+    const status = statusMap.get(word.id);
+    return {
+      id: status?.id || randomUUID(), // Temporary ID if no status
+      wordId: word.id,
+      text: word.text,
+      phonetic: word.phonetic,
+      translation: word.translation,
+      definition: word.definition,
+      pos: word.pos,
+      exchange: word.exchange,
+      status: status?.status || 'NEW',
+      exampleSentence: null,
+      fsrsState: status?.fsrs_state || State.New,
+      fsrsDue: status?.fsrs_due || null,
+      fsrsStability: status?.fsrs_stability || null,
+      fsrsDifficulty: status?.fsrs_difficulty || null,
+      fsrsReps: status?.fsrs_reps || 0,
+      fsrsLapses: status?.fsrs_lapses || 0,
+      errorCount: status?.error_count || 0,
+    };
+  });
+  
+  // Create missing statuses
+  const wordsWithoutStatus = result.filter(w => !statusMap.has(w.wordId));
+  if (wordsWithoutStatus.length > 0) {
+    const newStatuses = wordsWithoutStatus.map(w => ({
+      id: randomUUID(),
+      user_id: userId,
+      word_id: w.wordId,
+      status: 'NEW',
+      fsrs_state: State.New,
+      fsrs_reps: 0,
+      fsrs_lapses: 0,
+      error_count: 0,
+      updated_at: new Date().toISOString()
+    }));
+    
+    const { error: insertError } = await client
+      .from('user_word_statuses')
+      .upsert(newStatuses, { onConflict: 'user_id,word_id' });
+      
+    if (insertError) {
+      console.error('[getWordsFromDictionary] Error creating statuses:', insertError);
+    }
+  }
+  
+  return { words: result };
+}
+
 
 /**
  * Get words from a specific material for learning.

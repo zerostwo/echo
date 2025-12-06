@@ -5,6 +5,7 @@ import { supabase, supabaseAdmin } from '@/lib/supabase';
 import { permanentlyDeleteMaterial } from './material-actions';
 import { permanentlyDeleteSentence } from './sentence-actions';
 import { permanentlyDeleteWord } from './word-actions';
+import { permanentlyDeleteDictionary } from './dictionary-actions';
 import { revalidatePath } from 'next/cache';
 
 export async function getTrashItems() {
@@ -32,6 +33,13 @@ export async function getTrashItems() {
         .select('word_id, word:words(id, text, translation, deleted_at)')
         .eq('user_id', session.user.id);
 
+    const { data: dictionaries } = await client
+        .from('dictionaries')
+        .select('id, name, deleted_at')
+        .eq('user_id', session.user.id)
+        .not('deleted_at', 'is', null)
+        .order('deleted_at', { ascending: false });
+
     const items = [
         ...(materials || []).map((m: any) => ({
             id: m.id,
@@ -40,6 +48,14 @@ export async function getTrashItems() {
             deleted_at: m.deleted_at,
             size: m.size,
             location: m.folder?.name || 'Root'
+        })),
+        ...(dictionaries || []).map((d: any) => ({
+            id: d.id,
+            type: 'dictionary' as const,
+            title: d.name,
+            deleted_at: d.deleted_at,
+            size: null,
+            location: 'Dictionaries'
         })),
         ...(sentences || []).map((s: any) => ({
             id: s.id,
@@ -100,9 +116,21 @@ export async function emptyTrash() {
             .select('word_id, word:words(id, deleted_at)')
             .eq('user_id', session.user.id);
 
+        const { data: dictionaries } = await client
+            .from('dictionaries')
+            .select('id')
+            .eq('user_id', session.user.id)
+            .not('deleted_at', 'is', null);
+
         if (materials) {
             for (const m of materials) {
                 await permanentlyDeleteMaterial(m.id);
+            }
+        }
+
+        if (dictionaries) {
+            for (const d of dictionaries) {
+                await permanentlyDeleteDictionary(d.id);
             }
         }
 

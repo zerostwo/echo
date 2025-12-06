@@ -25,6 +25,7 @@ import { toast } from "sonner"
 import { restoreMaterial, permanentlyDeleteMaterial } from "@/actions/material-actions"
 import { restoreSentence, permanentlyDeleteSentence } from "@/actions/sentence-actions"
 import { restoreWord, permanentlyDeleteWord } from "@/actions/word-actions"
+import { restoreDictionary, permanentlyDeleteDictionary } from "@/actions/dictionary-actions"
 import { useRouter } from "next/navigation"
 import {
     AlertDialog,
@@ -51,7 +52,7 @@ export function TrashDataTable({
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [isRestoring, setIsRestoring] = useState(false)
-  const [typeFilter, setTypeFilter] = useState<'all' | 'material' | 'sentence' | 'word'>('all')
+  const [typeFilter, setTypeFilter] = useState<'all' | 'material' | 'sentence' | 'word' | 'dictionary'>('all')
   const router = useRouter()
   const { timezone } = useUserSettings()
 
@@ -94,7 +95,9 @@ export function TrashDataTable({
         ? await restoreMaterial(item.id)
         : item.type === 'sentence'
           ? await restoreSentence(item.id)
-          : await restoreWord(item.id)
+          : item.type === 'dictionary'
+            ? await restoreDictionary(item.id)
+            : await restoreWord(item.id)
       if (res.success) successCount++
     }
     
@@ -119,7 +122,9 @@ export function TrashDataTable({
         ? await permanentlyDeleteMaterial(item.id)
         : item.type === 'sentence'
           ? await permanentlyDeleteSentence(item.id)
-          : await permanentlyDeleteWord(item.id)
+          : item.type === 'dictionary'
+            ? await permanentlyDeleteDictionary(item.id)
+            : await permanentlyDeleteWord(item.id)
       if (res.success) successCount++
     }
     
@@ -140,7 +145,7 @@ export function TrashDataTable({
         <div className="flex items-center gap-2">
           <span className="text-sm text-muted-foreground">Filter by:</span>
           <div className="flex items-center gap-2">
-            {(['all', 'material', 'sentence', 'word'] as const).map((type) => (
+            {(['all', 'material', 'sentence', 'word', 'dictionary'] as const).map((type) => (
               <Button
                 key={type}
                 variant={typeFilter === type ? "default" : "outline"}

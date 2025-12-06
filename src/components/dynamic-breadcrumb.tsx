@@ -26,7 +26,8 @@ export function DynamicBreadcrumb({ folders }: DynamicBreadcrumbProps) {
     // Only use context items for pages that explicitly set them via SetBreadcrumbs
     // This prevents stale breadcrumbs from persisting across navigations
     const shouldUseContextItems = pathname.match(/^\/materials\/[^/]+/) || // /materials/[id]
-                                  pathname.match(/^\/listening\//)  // listening pages
+                                  pathname.match(/^\/listening\//) || // listening pages
+                                  pathname.startsWith("/dictionaries") // /dictionaries and /dictionaries/[id]
     
     if (shouldUseContextItems && contextItems && contextItems.length > 0) {
         return contextItems;

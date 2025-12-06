@@ -492,6 +492,7 @@ export interface VocabFilters {
     oxford?: boolean;
     materialId?: string;
     materialIds?: string[]; // Multi-select material filter
+    dictionaryId?: string; // Filter by dictionary
     minFrequency?: number;
     maxFrequency?: number;
     learningState?: number[]; // FSRS states: 0=New, 1=Learning, 2=Review, 3=Relearning
@@ -571,121 +572,114 @@ export async function getVocabPaginated(
         return cached;
     }
 
-    console.log('[getVocabPaginated] Cache miss, fetching from database');
+        console.log('[getVocabPaginated] Cache miss, fetching from database');
 
     try {
-        // Step 1: Get user's material IDs first
-        let materialsQuery = client
-            .from('materials')
-            .select('id')
-            .eq('user_id', userId)
-            .is('deleted_at', null);
-
-        // Support both single materialId and multiple materialIds
-        if (filters.materialIds && filters.materialIds.length > 0) {
-            materialsQuery = materialsQuery.in('id', filters.materialIds);
-        } else if (filters.materialId) {
-            materialsQuery = materialsQuery.eq('id', filters.materialId);
-        }
-
-        const { data: materials, error: materialsError } = await materialsQuery;
-        
-        console.log('[getVocabPaginated] Materials found:', materials?.length, 'Error:', materialsError);
-        
-        const materialIds = (materials || []).map((m: any) => m.id);
-
-        if (materialIds.length === 0) {
-            console.log('[getVocabPaginated] No materials found, returning empty');
-            const emptyResult: PaginatedVocabResult = {
-                data: [],
-                total: 0,
-                page,
-                pageSize,
-                totalPages: 0,
-                stats: { totalWords: 0, masteredWords: 0, learningWords: 0, newWords: 0, newWords24h: 0, masteredWords24h: 0, dueToday: 0, overdueWords: 0, averageRetention: 0 }
-            };
-            await setCached(cacheKey, emptyResult, 60);
-            return emptyResult;
-        }
-
-        // Step 2: Get sentences for these materials - use larger batch size
-        const MATERIAL_BATCH_SIZE = 100;
-        const sentencePromises = [];
-        
-        for (let i = 0; i < materialIds.length; i += MATERIAL_BATCH_SIZE) {
-            const batchMaterialIds = materialIds.slice(i, i + MATERIAL_BATCH_SIZE);
-            sentencePromises.push(
-                client
-                    .from('sentences')
-                    .select('id')
-                    .in('material_id', batchMaterialIds)
-                    .is('deleted_at', null)
-            );
-        }
-
-        const sentenceResults = await Promise.all(sentencePromises);
-        const allSentences = sentenceResults.flatMap(r => r.data || []);
-        const sentenceIds = allSentences.map((s: any) => s.id);
-
-        console.log('[getVocabPaginated] Sentences found:', sentenceIds.length);
-
-        if (sentenceIds.length === 0) {
-            console.log('[getVocabPaginated] No sentences found, returning empty');
-            const emptyResult: PaginatedVocabResult = {
-                data: [],
-                total: 0,
-                page,
-                pageSize,
-                totalPages: 0,
-                stats: { totalWords: 0, masteredWords: 0, learningWords: 0, newWords: 0, newWords24h: 0, masteredWords24h: 0, dueToday: 0, overdueWords: 0, averageRetention: 0 }
-            };
-            await setCached(cacheKey, emptyResult, 60);
-            return emptyResult;
-        }
-
-        // Step 3: Get word occurrences - use larger batch size and parallel requests
-        const BATCH_SIZE = 200;
-        const occurrencePromises = [];
-        
-        for (let i = 0; i < sentenceIds.length; i += BATCH_SIZE) {
-            const batchIds = sentenceIds.slice(i, i + BATCH_SIZE);
-            occurrencePromises.push(
-                client
-                    .from('word_occurrences')
-                    .select('word_id, sentence_id')
-                    .in('sentence_id', batchIds)
-            );
-        }
-
-        const occurrenceResults = await Promise.all(occurrencePromises);
-        const allOccurrences = occurrenceResults.flatMap(r => r.data || []);
-
-        console.log('[getVocabPaginated] Occurrences found:', allOccurrences.length);
-
-        if (allOccurrences.length === 0) {
-            console.log('[getVocabPaginated] No occurrences found, returning empty');
-            const emptyResult: PaginatedVocabResult = {
-                data: [],
-                total: 0,
-                page,
-                pageSize,
-                totalPages: 0,
-                stats: { totalWords: 0, masteredWords: 0, learningWords: 0, newWords: 0, newWords24h: 0, masteredWords24h: 0, dueToday: 0, overdueWords: 0, averageRetention: 0 }
-            };
-            await setCached(cacheKey, emptyResult, 60);
-            return emptyResult;
-        }
-
-        // Group by word and count frequencies
         const wordFrequencyMap = new Map<string, { frequency: number; sentenceIds: string[] }>();
-        allOccurrences.forEach((occ) => {
-            const wordId = occ.word_id;
-            if (!wordFrequencyMap.has(wordId)) {
-                wordFrequencyMap.set(wordId, { frequency: 0, sentenceIds: [] });
+
+        // Step 1: Get words from Materials (if not filtering by dictionary only)
+        if (!filters.dictionaryId) {
+            // Get user's material IDs first
+            let materialsQuery = client
+                .from('materials')
+                .select('id')
+                .eq('user_id', userId)
+                .is('deleted_at', null);
+
+            // Support both single materialId and multiple materialIds
+            if (filters.materialIds && filters.materialIds.length > 0) {
+                materialsQuery = materialsQuery.in('id', filters.materialIds);
+            } else if (filters.materialId) {
+                materialsQuery = materialsQuery.eq('id', filters.materialId);
             }
-            const entry = wordFrequencyMap.get(wordId)!;
-            entry.frequency++;
-            entry.sentenceIds.push(occ.sentence_id);
+
+            const { data: materials, error: materialsError } = await materialsQuery;
+            
+            const materialIds = (materials || []).map((m: any) => m.id);
+
+            if (materialIds.length > 0) {
+                // Get sentences for these materials - use larger batch size
+                const MATERIAL_BATCH_SIZE = 100;
+                const sentencePromises = [];
+                
+                for (let i = 0; i < materialIds.length; i += MATERIAL_BATCH_SIZE) {
+                    const batchMaterialIds = materialIds.slice(i, i + MATERIAL_BATCH_SIZE);
+                    sentencePromises.push(
+                        client
+                            .from('sentences')
+                            .select('id')
+                            .in('material_id', batchMaterialIds)
+                            .is('deleted_at', null)
+                    );
+                }
+
+                const sentenceResults = await Promise.all(sentencePromises);
+                const allSentences = sentenceResults.flatMap(r => r.data || []);
+                const sentenceIds = allSentences.map((s: any) => s.id);
+
+                if (sentenceIds.length > 0) {
+                    // Get word occurrences - use larger batch size and parallel requests
+                    const BATCH_SIZE = 200;
+                    const occurrencePromises = [];
+                    
+                    for (let i = 0; i < sentenceIds.length; i += BATCH_SIZE) {
+                        const batchIds = sentenceIds.slice(i, i + BATCH_SIZE);
+                        occurrencePromises.push(
+                            client
+                                .from('word_occurrences')
+                                .select('word_id, sentence_id')
+                                .in('sentence_id', batchIds)
+                        );
+                    }
+
+                    const occurrenceResults = await Promise.all(occurrencePromises);
+                    const allOccurrences = occurrenceResults.flatMap(r => r.data || []);
+
+                    // Group by word and count frequencies
+                    allOccurrences.forEach((occ) => {
+                        const wordId = occ.word_id;
+                        if (!wordFrequencyMap.has(wordId)) {
+                            wordFrequencyMap.set(wordId, { frequency: 0, sentenceIds: [] });
+                        }
+                        const entry = wordFrequencyMap.get(wordId)!;
+                        entry.frequency++;
+                        entry.sentenceIds.push(occ.sentence_id);
+                    });
+                }
+            }
+        }
+
+        // Step 2: Get words from Dictionaries
+        let dictionaryWordIds: string[] = [];
+        if (filters.dictionaryId) {
+            // Fetch words from specific dictionary
+            const { data: dictWords } = await client
+                .from('dictionary_words')
+                .select('word_id')
+                .eq('dictionary_id', filters.dictionaryId);
+            dictionaryWordIds = dictWords?.map(dw => dw.word_id) || [];
+        } else {
+            // Fetch words from ALL user dictionaries to include in global vocab
+            const { data: userDicts } = await client
+                .from('dictionaries')
+                .select('id')
+                .eq('user_id', userId);
+                
+            if (userDicts && userDicts.length > 0) {
+                 const dictIds = userDicts.map(d => d.id);
+                 const { data: dictWords } = await client
+                    .from('dictionary_words')
+                    .select('word_id')
+                    .in('dictionary_id', dictIds);
+                 dictionaryWordIds = dictWords?.map(dw => dw.word_id) || [];
+            }
+        }
+
+        // Merge Dictionary Words into Map
+        dictionaryWordIds.forEach(wid => {
+            if (!wordFrequencyMap.has(wid)) {
+                wordFrequencyMap.set(wid, { frequency: 0, sentenceIds: [] });
+            }
         });
 
         const wordIds = Array.from(wordFrequencyMap.keys());
@@ -704,6 +698,9 @@ export async function getVocabPaginated(
         }
 
         // Step 4 & 5: Get word details and user statuses in parallel
+        const BATCH_SIZE = 200;
+
+
         const wordPromises = [];
         const statusPromises = [];
         

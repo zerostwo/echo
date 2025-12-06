@@ -45,8 +45,40 @@ model User {
   dailyStats    DailyStudyStat[]
   notifications Notification[]
   learningSessions LearningSession[]
+  dictionaries  Dictionary[]
 
   @@map("users")
+}
+
+model Dictionary {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  userId      String   @map("user_id")
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  isSystem    Boolean  @default(false) @map("is_system") // If true, it's a system recommended dictionary
+  filter      String?  // JSON string storing the filter criteria if it's a dynamic dictionary
+  
+  words       DictionaryWord[]
+  
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz
+
+  @@map("dictionaries")
+}
+
+model DictionaryWord {
+  dictionaryId String   @map("dictionary_id")
+  dictionary   Dictionary @relation(fields: [dictionaryId], references: [id], onDelete: Cascade)
+  wordId       String   @map("word_id")
+  word         Word     @relation(fields: [wordId], references: [id], onDelete: Cascade)
+  
+  addedAt      DateTime @default(now()) @map("added_at") @db.Timestamptz
+
+  @@id([dictionaryId, wordId])
+  @@map("dictionary_words")
 }
 
 model Folder {
@@ -141,6 +173,7 @@ model Word {
 
   occurrences WordOccurrence[]
   statuses    UserWordStatus[]
+  dictionaries DictionaryWord[]
 
   @@map("words")
 }

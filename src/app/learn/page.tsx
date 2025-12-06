@@ -12,6 +12,7 @@ export default async function LearnPage({
 }: { 
   searchParams: Promise<{ 
     materialId?: string
+    dictionaryId?: string
     oxford?: string
     collins?: string
   }> 
@@ -44,6 +45,10 @@ export default async function LearnPage({
   
   if (params.materialId) {
     filters.materialId = params.materialId;
+  }
+
+  if (params.dictionaryId) {
+    filters.dictionaryId = params.dictionaryId;
   }
   
   if (params.oxford === 'true') {

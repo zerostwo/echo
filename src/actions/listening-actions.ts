@@ -350,6 +350,7 @@ async function updateWordStatusOnDictationError(
         fsrs_last_review: now.toISOString(),
         error_count: 1,
         last_error_at: now.toISOString(),
+        updated_at: now.toISOString(),
       });
   }
 }

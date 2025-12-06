@@ -66,11 +66,13 @@ import { updateWordsStatus, deleteWords, editWord } from "@/actions/word-actions
 import { useDebounce } from "@/hooks/use-debounce"
 import { toast } from "sonner"
 import { VocabFilterDrawer, FilterChips, VocabFilterState } from "./vocab-filter-drawer"
+import { SaveAsDictionaryDialog } from "@/components/dictionaries/save-as-dictionary-dialog"
 import { useUserSettings } from "@/components/user-settings-provider"
 
 interface VocabClientProps {
   initialData: PaginatedVocabResult
   materialId?: string
+  dictionaryId?: string
   settings?: {
     vocabColumns?: string[]
     vocabSortBy?: string
@@ -121,7 +123,7 @@ function SortableColumnHeader({
   )
 }
 
-export function VocabClient({ initialData, materialId, settings, materials = [] }: VocabClientProps) {
+export function VocabClient({ initialData, materialId, dictionaryId, settings, materials = [] }: VocabClientProps) {
   const { updateSettings } = useUserSettings()
   
   const [data, setData] = useState(initialData.data || [])
@@ -186,7 +188,7 @@ export function VocabClient({ initialData, materialId, settings, materials = [] 
     setPage(initialData.page)
     setTotalPages(initialData.totalPages)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []) // Only run once on mount
+  }, [initialData]) // Update when initialData changes (e.g. after adding a word)
 
   // Reset filters and state only when materialId actually changes
   useEffect(() => {
@@ -241,6 +243,7 @@ export function VocabClient({ initialData, materialId, settings, materials = [] 
       }
       
       const apiFilters: VocabFilters = {
+        dictionaryId: dictionaryId,
         materialId: materialIds && materialIds.length === 1 ? materialIds[0] : undefined,
         materialIds: materialIds && materialIds.length > 1 ? materialIds : undefined,
         search: debouncedSearch || undefined,
@@ -583,6 +586,7 @@ export function VocabClient({ initialData, materialId, settings, materials = [] 
           )}
         </div>
         <div className="flex gap-2 h-9">
+          <SaveAsDictionaryDialog filters={currentFilters} />
           <VocabFilterDrawer
             filters={filters}
             onFiltersChange={setFilters}
