@@ -546,7 +546,7 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
   // Get initial column visibility based on settings
   const getInitialColumnVisibility = () => {
     const defaultVisible = ["select", "text", "phonetic", "status", "frequency", "oxford", "fsrsReps", "fsrsDue"]
-    const visibleCols = settings?.vocabColumns || defaultVisible
+    const visibleCols = Array.isArray(settings?.vocabColumns) ? settings!.vocabColumns! : defaultVisible
     const visibility: Record<string, boolean> = {}
     
     columns.forEach((col: any) => {

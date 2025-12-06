@@ -406,7 +406,7 @@ export function TrashClient({
   }, [sortBy, sortOrder, timezone])
 
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(() => {
-    if (!settings.trashColumns) return {}
+    if (!Array.isArray(settings.trashColumns)) return {}
     const visibility: VisibilityState = {}
     columns.forEach((col: any) => {
       const colId = col.id || col.accessorKey

@@ -416,7 +416,7 @@ export function DictionariesClient({
   ], [sortBy, sortOrder])
 
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(() => {
-    if (!settings.dictionaryColumns) return {}
+    if (!Array.isArray(settings.dictionaryColumns)) return {}
     const visibility: VisibilityState = {}
     columns.forEach((col: any) => {
       const colId = col.id || col.accessorKey

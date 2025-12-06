@@ -520,7 +520,7 @@ export function PaginatedDataTable({
   }, [sortBy, sortOrder, timezone])
 
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(() => {
-    if (!settings.materialsColumns) return {}
+    if (!Array.isArray(settings.materialsColumns)) return {}
     const visibility: VisibilityState = {}
     columns.forEach((col: any) => {
       const colId = col.id || col.accessorKey
