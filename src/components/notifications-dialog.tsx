@@ -116,18 +116,18 @@ function getInlineActions(notification: Notification): Array<{
         href: `/materials/${notification.relatedId}`
       })
       actions.push({
-        label: "Review Vocabulary",
+        label: "Review Words",
         icon: BookMarked,
-        href: `/materials/${notification.relatedId}/vocab`
+        href: `/words?materialId=${notification.relatedId}`
       })
     }
   }
 
   if (notification.type === 'VOCAB_EXTRACTED' && notification.relatedId) {
     actions.push({
-      label: "Review Vocabulary",
+      label: "Review Words",
       icon: BookMarked,
-      href: `/vocab`
+      href: `/words?materialId=${notification.relatedId}`
     })
   }
 

@@ -325,7 +325,7 @@ export function SettingsDialog({
       id: "account",
     },
     {
-      title: "Vocabulary",
+      title: "Words",
       icon: Book,
       id: "vocabulary",
     },

@@ -79,12 +79,12 @@ export const columns = (folders: any[], timezone: string): ColumnDef<Material>[]
   {
     id: "vocab",
     accessorFn: (row) => row.stats.vocabCount,
-    header: "Vocabulary",
+    header: "Words",
     enableSorting: false,
     cell: ({ row }) => {
         const count = row.original.stats.vocabCount
         return (
-            <Link href={`/vocab?materialId=${row.original.id}`} className="text-sm font-medium text-blue-600 hover:underline">
+            <Link href={`/words?materialId=${row.original.id}`} className="text-sm font-medium text-blue-600 hover:underline">
                 {count}
             </Link>
         )

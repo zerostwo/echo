@@ -42,14 +42,14 @@ export function ContinueLearningCard({
               <BookOpen className="h-4 w-4 text-blue-500" />
             </div>
             <div className="flex flex-col">
-              <span className="text-sm font-medium">Vocabulary</span>
+              <span className="text-sm font-medium">Words</span>
               <span className="text-xs text-muted-foreground">
                 {wordsDueToday > 0 ? `${wordsDueToday} words due` : 'All caught up!'}
               </span>
             </div>
           </div>
           <Button asChild size="sm" variant="ghost" className="h-8 px-2">
-            <Link href={lastWord?.materialId ? `/learn?materialId=${lastWord.materialId}` : '/learn'}>
+            <Link href={lastWord?.materialId ? `/study/words?materialId=${lastWord.materialId}` : '/study/words'}>
               <ArrowRight className="h-4 w-4" />
             </Link>
           </Button>
@@ -62,14 +62,14 @@ export function ContinueLearningCard({
               <AudioLines className="h-4 w-4 text-purple-500" />
             </div>
             <div className="flex flex-col">
-              <span className="text-sm font-medium">Listening</span>
+              <span className="text-sm font-medium">Sentences</span>
               <span className="text-xs text-muted-foreground truncate max-w-[120px]">
                 {lastSentence?.materialTitle || 'Start practicing'}
               </span>
             </div>
           </div>
           <Button asChild size="sm" variant="ghost" className="h-8 px-2">
-            <Link href={lastSentence ? `/listening/${lastSentence.id}` : '/materials'}>
+            <Link href={lastSentence ? `/study/sentences/${lastSentence.id}` : '/materials'}>
               <ArrowRight className="h-4 w-4" />
             </Link>
           </Button>

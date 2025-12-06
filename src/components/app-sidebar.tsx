@@ -65,8 +65,8 @@ export function AppSidebar({ user, settings, folders = [], materials = [], ...pr
       icon: Library,
     },
     {
-      title: "Vocabulary",
-      url: "/vocab",
+      title: "Words",
+      url: "/words",
       icon: WholeWord,
     },
     {

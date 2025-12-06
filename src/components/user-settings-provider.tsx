@@ -9,23 +9,23 @@ type Settings = {
   timezone?: string;
   pronunciationAccent?: PronunciationAccent;
   // Vocabulary page settings
-  vocabColumns?: Record<string, boolean>;
+  vocabColumns?: string[];
   vocabPageSize?: number;
   vocabSortBy?: string;
   vocabSortOrder?: 'asc' | 'desc';
   vocabShowMastered?: boolean;
   // Materials page settings
-  materialsColumns?: Record<string, boolean>;
+  materialsColumns?: string[];
   materialsPageSize?: number;
   materialsSortBy?: string;
   materialsSortOrder?: 'asc' | 'desc';
   // Dictionary page settings
-  dictionaryColumns?: Record<string, boolean>;
+  dictionaryColumns?: string[];
   dictionaryPageSize?: number;
   dictionarySortBy?: string;
   dictionarySortOrder?: 'asc' | 'desc';
   // Trash page settings
-  trashColumns?: Record<string, boolean>;
+  trashColumns?: string[];
   trashPageSize?: number;
   trashSortBy?: string;
   trashSortOrder?: 'asc' | 'desc';

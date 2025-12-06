@@ -70,10 +70,10 @@ export default async function LearnPage({
         <div className="text-center">
           <h2 className="text-xl font-semibold text-destructive">Error loading words</h2>
           <p className="text-muted-foreground mt-2">{error}</p>
-          <Link href="/vocab">
+          <Link href="/words">
             <Button variant="outline" className="mt-4">
               <ArrowLeft className="mr-2 h-4 w-4" />
-              Back to Vocabulary
+              Back to Words
             </Button>
           </Link>
         </div>
@@ -89,10 +89,10 @@ export default async function LearnPage({
           <p className="text-muted-foreground mt-2">
             You don&apos;t have any new or learning words. Add some words to your vocabulary first!
           </p>
-          <Link href="/vocab">
+          <Link href="/words">
             <Button variant="outline" className="mt-4">
               <ArrowLeft className="mr-2 h-4 w-4" />
-              Back to Vocabulary
+              Back to Words
             </Button>
           </Link>
         </div>

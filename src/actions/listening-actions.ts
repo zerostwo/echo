@@ -257,8 +257,8 @@ export async function evaluateDictation(sentenceId: string, userText: string, du
   }
   
   revalidatePath('/materials'); // Revalidate materials list to show updated practice stats
-  revalidatePath(`/listening/${sentenceId}`); // Revalidate current page just in case
-  revalidatePath('/vocab'); // Revalidate vocab page for updated word statuses
+  revalidatePath(`/study/sentences/${sentenceId}`); // Revalidate current page just in case
+  revalidatePath('/words'); // Revalidate vocab page for updated word statuses
 
   return {
       success: true,

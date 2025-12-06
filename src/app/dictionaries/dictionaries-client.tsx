@@ -415,17 +415,37 @@ export function DictionariesClient({
     }
   ], [sortBy, sortOrder])
 
-  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(settings.dictionaryColumns || {})
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(() => {
+    if (!settings.dictionaryColumns) return {}
+    const visibility: VisibilityState = {}
+    columns.forEach((col: any) => {
+      const colId = col.id || col.accessorKey
+      if (colId && !settings.dictionaryColumns!.includes(colId)) {
+        visibility[colId] = false
+      }
+    })
+    return visibility
+  })
 
   // Save column visibility
   useEffect(() => {
       const timer = setTimeout(() => {
-          if (JSON.stringify(settings.dictionaryColumns) !== JSON.stringify(columnVisibility)) {
-              updateSettings({ dictionaryColumns: columnVisibility })
+          const currentVisibleCols = columns
+              .map((col: any) => col.id || col.accessorKey)
+              .filter(id => columnVisibility[id] !== false)
+          
+          const settingsCols = settings.dictionaryColumns
+          
+          const isDifferent = !settingsCols || 
+              settingsCols.length !== currentVisibleCols.length ||
+              !settingsCols.every(c => currentVisibleCols.includes(c))
+
+          if (isDifferent) {
+              updateSettings({ dictionaryColumns: currentVisibleCols })
           }
       }, 1000);
       return () => clearTimeout(timer);
-  }, [columnVisibility, updateSettings, settings.dictionaryColumns])
+  }, [columnVisibility, updateSettings, settings.dictionaryColumns, columns])
 
   const table = useReactTable({
     data,
@@ -541,7 +561,7 @@ export function DictionariesClient({
                     </ContextMenuTrigger>
                     <ContextMenuContent className="w-48">
                         <ContextMenuItem asChild>
-                            <Link href={`/learn?dictionaryId=${row.original.id}`}>
+                            <Link href={`/study/words?dictionaryId=${row.original.id}`}>
                                 <Play className="mr-2 h-4 w-4" />
                                 Start Learning
                             </Link>

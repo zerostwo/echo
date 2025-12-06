@@ -14,7 +14,7 @@ import { Badge } from '@/components/ui/badge';
 import { useRouter } from 'next/navigation';
 import { useBreadcrumb } from '@/context/breadcrumb-context';
 import { HeaderPortal } from '@/components/header-portal';
-import { WordDetailSheet } from '@/app/vocab/word-detail-sheet';
+import { WordDetailSheet } from '@/app/words/word-detail-sheet';
 import {
   Dialog,
   DialogContent,
@@ -189,12 +189,12 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
             // Shift + Arrows for navigation
             if (e.shiftKey && e.key === 'ArrowRight') {
                 e.preventDefault();
-                if (nextId) router.push(`/listening/${nextId}`);
+                if (nextId) router.push(`/study/sentences/${nextId}`);
                 return;
             }
             if (e.shiftKey && e.key === 'ArrowLeft') {
                 e.preventDefault();
-                if (prevId) router.push(`/listening/${prevId}`);
+                if (prevId) router.push(`/study/sentences/${prevId}`);
                 return;
             }
 
@@ -239,7 +239,7 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
                 <div className="flex items-center gap-2">
                     {prevId ? (
                         <Button variant="outline" size="sm" asChild>
-                            <Link href={`/listening/${prevId}`}>
+                            <Link href={`/study/sentences/${prevId}`}>
                                 <ArrowLeft className="mr-2 h-4 w-4" /> Previous
                             </Link>
                         </Button>
@@ -251,7 +251,7 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
 
                     {nextId ? (
                         <Button variant="outline" size="sm" asChild>
-                            <Link href={`/listening/${nextId}`}>
+                            <Link href={`/study/sentences/${nextId}`}>
                                 Next <ArrowRight className="ml-2 h-4 w-4" />
                             </Link>
                         </Button>

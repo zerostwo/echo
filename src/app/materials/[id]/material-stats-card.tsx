@@ -51,14 +51,14 @@ export function MaterialStatsCard({ material, vocabCount, wpm }: MaterialStatsCa
                     <div className="flex gap-2">
                         <MaterialHeaderActions materialId={material.id} />
                         {vocabCount > 0 && (
-                            <Link href={`/learn?materialId=${material.id}`}>
+                            <Link href={`/study/words?materialId=${material.id}`}>
                                 <Button variant="outline" className="gap-2">
-                                    <GraduationCap className="h-4 w-4" /> Learn Vocabulary
+                                    <GraduationCap className="h-4 w-4" /> Learn Words
                                 </Button>
                             </Link>
                         )}
                         {material.sentences.length > 0 && (
-                            <Link href={`/listening/${material.sentences[0].id}`}>
+                            <Link href={`/study/sentences/${material.sentences[0].id}`}>
                                 <Button className="gap-2">
                                     <PlayCircle className="h-4 w-4" /> Start Practice
                                 </Button>

@@ -361,7 +361,7 @@ export function PaginatedSentencesTable({ materialId, initialData }: PaginatedSe
           <div className="flex justify-end items-center gap-2">
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Link href={`/listening/${row.original.id}`}>
+                  <Link href={`/study/sentences/${row.original.id}`}>
                     <Button size="icon" variant="ghost" className="h-8 w-8">
                         <PlayCircle className="h-4 w-4" />
                     </Button>

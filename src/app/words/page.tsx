@@ -77,7 +77,7 @@ export default async function VocabPage({ searchParams }: { searchParams: Promis
   const { stats, data } = initialResult;
   
   // Build learning URL with material filter
-  const learnUrl = materialId ? `/learn?materialId=${materialId}` : '/learn';
+  const learnUrl = materialId ? `/study/words?materialId=${materialId}` : '/study/words';
 
   return (
     <div className="flex-1 space-y-8 p-8">
@@ -89,7 +89,7 @@ export default async function VocabPage({ searchParams }: { searchParams: Promis
                         <BookOpen className="h-3.5 w-3.5" />
                         Filtered by: {filteredMaterialTitle || 'Material'}
                     </Badge>
-                    <Link href="/vocab">
+                    <Link href="/words">
                         <Button variant="ghost" size="icon" className="h-8 w-8">
                             <X className="h-4 w-4" />
                         </Button>

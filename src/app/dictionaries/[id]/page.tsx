@@ -5,7 +5,7 @@ import Link from "next/link"
 import { notFound, redirect } from "next/navigation"
 import { AddWordDialog } from "@/components/dictionaries/add-word-dialog"
 import { DeleteDictionaryButton } from "@/components/dictionaries/delete-dictionary-button"
-import { VocabClient } from "@/app/vocab/vocab-client"
+import { VocabClient } from "@/app/words/vocab-client"
 import { HeaderPortal } from "@/components/header-portal"
 import { SetBreadcrumbs } from "@/components/set-breadcrumbs"
 import { auth } from "@/auth"
@@ -64,7 +64,7 @@ export default async function DictionaryPage({ params }: { params: Promise<{ id:
 
       <HeaderPortal>
         <div className="flex items-center gap-2">
-            <Link href={`/learn?dictionaryId=${dictionary.id}`}>
+            <Link href={`/study/words?dictionaryId=${dictionary.id}`}>
               <Button size="sm">
                 <GraduationCap className="mr-2 h-4 w-4" />
                 Start Learning

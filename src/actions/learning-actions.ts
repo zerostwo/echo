@@ -798,8 +798,8 @@ export async function recordReview(params: {
     // Non-critical, continue
   }
 
-  revalidatePath('/vocab');
-  revalidatePath('/learn');
+  revalidatePath('/words');
+  revalidatePath('/study/words');
 
   return {
     success: true,
@@ -848,8 +848,8 @@ export async function markAsMastered(userWordStatusId: string): Promise<ReviewRe
     return { success: false, error: updateError.message };
   }
 
-  revalidatePath('/vocab');
-  revalidatePath('/learn');
+  revalidatePath('/words');
+  revalidatePath('/study/words');
 
   return {
     success: true,

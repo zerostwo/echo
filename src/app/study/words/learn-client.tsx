@@ -738,11 +738,14 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
       wordsReviewed: prev.wordsReviewed + 1,
     }));
     
+    // Play pronunciation
+    playPronunciation(currentWord.text);
+    
     // Load word context for learning (don't auto-advance) - only for non-context-listening modes
     if (mode !== 'context_listening') {
       loadWordContext(currentWord.wordId);
     }
-  }, [currentWord, showResult, startTime, mode, loadWordContext]);
+  }, [currentWord, showResult, startTime, mode, loadWordContext, playPronunciation]);
 
   // Handle "Mark as Mastered" button
   const handleMarkMastered = useCallback(async () => {
@@ -996,8 +999,8 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
               </div>
 
               <div className="flex gap-3 justify-center">
-                <Button variant="outline" onClick={() => window.location.href = '/vocab'}>
-                  Back to Vocabulary
+                <Button variant="outline" onClick={() => window.location.href = '/words'}>
+                  Back to Words
                 </Button>
                 <Button onClick={() => window.location.reload()}>
                   <Sparkles className="mr-2 h-4 w-4" />

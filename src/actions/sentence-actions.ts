@@ -245,9 +245,9 @@ export async function updateSentence(sentenceId: string, payload: SentenceUpdate
 
     revalidatePath('/materials');
     revalidatePath(`/materials/${sentence.material_id}`);
-    revalidatePath(`/listening/${sentenceId}`);
-    revalidatePath('/vocab');
-    revalidatePath('/vocab');
+    revalidatePath(`/study/sentences/${sentenceId}`);
+    revalidatePath('/words');
+    revalidatePath('/words');
 
     return {
         success: true,
@@ -328,7 +328,7 @@ export async function deleteSentence(sentenceId: string) {
 
     revalidatePath('/materials');
     revalidatePath(`/materials/${sentence.material_id}`);
-    revalidatePath(`/listening/${sentenceId}`);
+    revalidatePath(`/study/sentences/${sentenceId}`);
     revalidatePath('/trash');
 
     return { success: true };
@@ -372,7 +372,7 @@ export async function restoreSentence(sentenceId: string) {
 
     revalidatePath('/materials');
     revalidatePath(`/materials/${sentence.material_id}`);
-    revalidatePath(`/listening/${sentenceId}`);
+    revalidatePath(`/study/sentences/${sentenceId}`);
     revalidatePath('/trash');
 
     return { success: true };
@@ -426,7 +426,7 @@ export async function permanentlyDeleteSentence(sentenceId: string) {
 
     revalidatePath('/materials');
     revalidatePath(`/materials/${sentence.material_id}`);
-    revalidatePath(`/listening/${sentenceId}`);
+    revalidatePath(`/study/sentences/${sentenceId}`);
     revalidatePath('/trash');
 
     return { success: true };

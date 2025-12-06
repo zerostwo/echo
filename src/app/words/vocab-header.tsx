@@ -37,7 +37,7 @@ export function VocabHeader({ materialId, materialTitle, dictionaryId, filters }
     }
     
     const queryString = params.toString()
-    return queryString ? `/learn?${queryString}` : '/learn'
+    return queryString ? `/study/words?${queryString}` : '/study/words'
   }
 
   return (
@@ -48,7 +48,7 @@ export function VocabHeader({ materialId, materialTitle, dictionaryId, filters }
             <BookOpen className="h-3.5 w-3.5" />
             Filtered by: {materialTitle || 'Material'}
           </Badge>
-          <Link href="/vocab">
+          <Link href="/words">
             <Button variant="ghost" size="icon" className="h-8 w-8">
               <X className="h-4 w-4" />
             </Button>

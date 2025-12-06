@@ -405,17 +405,37 @@ export function TrashClient({
   ]
   }, [sortBy, sortOrder, timezone])
 
-  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(settings.trashColumns || {})
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(() => {
+    if (!settings.trashColumns) return {}
+    const visibility: VisibilityState = {}
+    columns.forEach((col: any) => {
+      const colId = col.id || col.accessorKey
+      if (colId && !settings.trashColumns!.includes(colId)) {
+        visibility[colId] = false
+      }
+    })
+    return visibility
+  })
 
   // Save column visibility
   useEffect(() => {
       const timer = setTimeout(() => {
-          if (JSON.stringify(settings.trashColumns) !== JSON.stringify(columnVisibility)) {
-              updateSettings({ trashColumns: columnVisibility })
+          const currentVisibleCols = columns
+              .map((col: any) => col.id || col.accessorKey)
+              .filter(id => columnVisibility[id] !== false)
+          
+          const settingsCols = settings.trashColumns
+          
+          const isDifferent = !settingsCols || 
+              settingsCols.length !== currentVisibleCols.length ||
+              !settingsCols.every(c => currentVisibleCols.includes(c))
+
+          if (isDifferent) {
+              updateSettings({ trashColumns: currentVisibleCols })
           }
       }, 1000);
       return () => clearTimeout(timer);
-  }, [columnVisibility, updateSettings, settings.trashColumns])
+  }, [columnVisibility, updateSettings, settings.trashColumns, columns])
 
   const table = useReactTable({
     data,

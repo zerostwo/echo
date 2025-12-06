@@ -163,7 +163,7 @@ export function PaginatedDataTable({
   const [search, setSearch] = useState("")
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
   const [sorting, setSorting] = useState<SortingState>([])
-  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(settings.materialsColumns || {})
+
   
   // Server-side sorting state
   const [sortBy, setSortBy] = useState<string>(initialSortBy)
@@ -182,15 +182,7 @@ export function PaginatedDataTable({
     setRowSelection({})
   }, [folderId, initialData])
 
-  // Save column visibility when it changes
-  useEffect(() => {
-      const timer = setTimeout(() => {
-          if (JSON.stringify(settings.materialsColumns) !== JSON.stringify(columnVisibility)) {
-              updateSettings({ materialsColumns: columnVisibility })
-          }
-      }, 1000);
-      return () => clearTimeout(timer);
-  }, [columnVisibility, updateSettings, settings.materialsColumns])
+
 
   const fetchData = useCallback(async (newPage?: number, newPageSize?: number, newSortBy?: string, newSortOrder?: 'asc' | 'desc') => {
     setLoading(true)
@@ -411,7 +403,7 @@ export function PaginatedDataTable({
         header: () => (
           <SortableColumnHeader 
             column="vocab" 
-            label="Vocabulary" 
+            label="Words" 
             sortBy={sortBy} 
             sortOrder={sortOrder} 
             onSort={handleSort} 
@@ -420,7 +412,7 @@ export function PaginatedDataTable({
         cell: ({ row }) => {
             const count = row.original.stats.vocabCount
             return (
-                <Link href={`/vocab?materialId=${row.original.id}`} className="text-sm font-medium text-blue-600 hover:underline pl-4 block">
+                <Link href={`/words?materialId=${row.original.id}`} className="text-sm font-medium text-blue-600 hover:underline pl-4 block">
                     {count}
                 </Link>
             )
@@ -526,6 +518,38 @@ export function PaginatedDataTable({
       }
     ]
   }, [sortBy, sortOrder, timezone])
+
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(() => {
+    if (!settings.materialsColumns) return {}
+    const visibility: VisibilityState = {}
+    columns.forEach((col: any) => {
+      const colId = col.id || col.accessorKey
+      if (colId && !settings.materialsColumns!.includes(colId)) {
+        visibility[colId] = false
+      }
+    })
+    return visibility
+  })
+
+  // Save column visibility when it changes
+  useEffect(() => {
+      const timer = setTimeout(() => {
+          const currentVisibleCols = columns
+              .map((col: any) => col.id || col.accessorKey)
+              .filter(id => columnVisibility[id] !== false)
+          
+          const settingsCols = settings.materialsColumns
+          
+          const isDifferent = !settingsCols || 
+              settingsCols.length !== currentVisibleCols.length ||
+              !settingsCols.every(c => currentVisibleCols.includes(c))
+
+          if (isDifferent) {
+              updateSettings({ materialsColumns: currentVisibleCols })
+          }
+      }, 1000);
+      return () => clearTimeout(timer);
+  }, [columnVisibility, updateSettings, settings.materialsColumns, columns])
 
   const table = useReactTable({
     data,

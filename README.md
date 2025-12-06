@@ -1,174 +1,136 @@
-# Echo - Language Learning Platform
+# Echo
 
-A Next.js-based language learning platform with audio/video transcription, vocabulary extraction, and practice features.
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![Next.js](https://img.shields.io/badge/Next.js-16.0-black)
+![React](https://img.shields.io/badge/React-19.0-blue)
+![Tailwind CSS](https://img.shields.io/badge/Tailwind-4.0-38bdf8)
+![Prisma](https://img.shields.io/badge/Prisma-5.22-2d3748)
 
-## Features
+**Echo** is a sophisticated language learning platform designed to help you master foreign languages through "Deep Listening". It combines state-of-the-art AI transcription with a powerful vocabulary management system and spaced repetition learning.
 
-- **Audio/Video Material Upload**: Upload audio or video files for transcription
-- **Whisper Transcription**: Supports both Faster-Whisper and OpenAI Whisper engines
-  - VAD (Voice Activity Detection) filter to remove silence
-  - Automatic sentence segmentation with punctuation-based splitting
-  - Short sentence merging to avoid fragments
-- **Vocabulary Extraction**: Automatically extract and look up vocabulary from transcribed content
-- **Vocabulary Management**: Track learning progress, mark words as mastered
-- **Listening Practice**: Practice listening comprehension with sentences from your materials
+## 🚀 Features
 
-## Getting Started
+### 🎧 Smart Media Processing
+- **AI Transcription**: Leverages **Faster-Whisper** and **OpenAI Whisper** for high-accuracy audio/video transcription.
+- **Intelligent Segmentation**: Automatically splits content into natural sentences using VAD (Voice Activity Detection) and punctuation logic.
+- **Format Support**: Handles various audio and video formats with ease.
+
+### 📚 Advanced Words System
+- **Contextual Learning**: Words are extracted directly from your media, preserving the context in which they were used.
+- **Global Dictionary**: Efficiently manages words across all users and materials to minimize redundancy.
+- **Smart Extraction**: Automatically identifies and looks up new words from transcribed content.
+
+### 🧠 Spaced Repetition System (SRS)
+- **FSRS Algorithm**: Implements the Free Spaced Repetition Scheduler (`ts-fsrs`) for optimal review scheduling.
+- **Review Modes**: Multiple ways to practice, including typing and multiple-choice.
+- **Progress Tracking**: Detailed statistics on your learning stability, difficulty, and retention.
+
+### 📂 Organization & Management
+- **Folder System**: Organize your learning materials with a nested folder structure.
+- **Drag & Drop**: Intuitive UI for managing files and folders.
+- **Dashboard**: Comprehensive overview of your daily progress, streaks, and recent activities.
+
+### 🔒 Security & Platform
+- **Authentication**: Secure login via NextAuth v5 with 2FA support.
+- **Performance**: Redis caching for lightning-fast data retrieval.
+- **Modern UI**: Built with Radix UI and Tailwind CSS v4 for a polished, accessible experience.
+
+## 🛠️ Tech Stack
+
+- **Framework**: [Next.js 16](https://nextjs.org/) (App Router)
+- **Language**: TypeScript, Python (for AI processing)
+- **Database**: PostgreSQL (via Supabase), Prisma ORM
+- **Styling**: Tailwind CSS v4, Radix UI, Lucide Icons
+- **AI/ML**: Faster-Whisper, OpenAI Whisper, Natural (NLP)
+- **Auth**: NextAuth.js v5
+- **State/Cache**: Redis, TanStack Query (implied), Zustand (implied)
+
+## 🏁 Getting Started
 
 ### Prerequisites
 
-- Node.js 18+
-- Python 3.8+
-- PostgreSQL (or Supabase)
-- Optional: NVIDIA GPU with CUDA for faster transcription
+- **Node.js**: v18.17 or higher (v20+ recommended)
+- **Python**: v3.8+ (for transcription scripts)
+- **PostgreSQL**: Local instance or cloud provider (e.g., Supabase)
+- **Redis**: (Optional) For caching performance
 
 ### Installation
 
-1. Clone the repository:
-```bash
-git clone <repository-url>
-cd Echo
-```
+1.  **Clone the repository**
+    ```bash
+    git clone https://github.com/zerostwo/echo.git
+    cd echo
+    ```
 
-2. Install Node.js dependencies:
-```bash
-npm install
-```
+2.  **Install Node.js dependencies**
+    ```bash
+    npm install
+    ```
 
-3. Install Python dependencies:
-```bash
-pip install -r scripts/requirements.txt
-```
+3.  **Install Python dependencies**
+    ```bash
+    pip install -r scripts/requirements.txt
+    ```
 
-4. Set up environment variables:
-```bash
-cp .env.example .env
-# Edit .env with your configuration
-```
+4.  **Environment Setup**
+    Create a `.env` file in the root directory based on `.env.example`:
+    ```env
+    DATABASE_URL="postgresql://..."
+    DIRECT_URL="postgresql://..."
+    NEXTAUTH_SECRET="your-secret"
+    # ... other vars
+    ```
 
-5. Set up the database:
-```bash
-npx prisma migrate deploy
-```
+5.  **Database Setup**
+    ```bash
+    npx prisma migrate deploy
+    ```
 
-6. Run the development server:
-```bash
-npm run dev
-```
+6.  **Run Development Server**
+    ```bash
+    npm run dev
+    ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser.
+    Visit [http://localhost:3000](http://localhost:3000) to see the app.
 
-## Transcription Settings
-
-### Whisper Engine Selection
-
-The application supports two Whisper implementations:
-
-- **Faster-Whisper** (Recommended): Faster inference with CTranslate2 optimization and VAD filter support
-- **OpenAI Whisper**: Original OpenAI implementation
-
-### Available Models
-
-| Model | VRAM | Speed | Accuracy |
-|-------|------|-------|----------|
-| tiny | ~1GB | Fastest | Low |
-| base | ~1GB | Fast | Balanced |
-| small | ~2GB | Medium | Good |
-| medium | ~5GB | Slow | Better |
-| large-v2 | ~10GB | Slowest | Best |
-| large-v3 | ~10GB | Slowest | Best |
-
-### Configuration
-
-Settings can be configured in the Settings dialog under "General":
-
-- **Transcription Engine**: Choose between Faster-Whisper or OpenAI Whisper
-- **Whisper Model**: Select model size based on your hardware and accuracy needs
-- **Language**: Auto-detect or specify the audio language
-- **VAD Filter** (Faster-Whisper only): Filter out silent segments
-- **Compute Type**: float16 (GPU), int8 (CPU), or auto
-- **Device**: CUDA GPU, CPU, or auto-detect
-
-### Environment Variables
-
-```bash
-# Python command for running transcription scripts
-PYTHON_CMD=python3
-
-# Custom directory for Whisper model downloads
-WHISPER_MODEL_DIR=/path/to/your/whisper/models
-
-# Redis (Optional - for caching to improve performance)
-# If not set, the app works without caching
-REDIS_URL=redis://localhost:6379
-```
-
-## Performance Optimization
-
-### Redis Caching (Optional)
-
-The app includes an optional Redis caching layer to significantly improve page load times:
-
-- **Vocabulary Page**: Cached for 2 minutes
-- **Materials Page**: Cached for 2 minutes
-- Cache is automatically invalidated when data changes
-
-To enable caching:
-
-1. Install Redis locally or use a cloud service (e.g., Upstash, Redis Cloud)
-2. Set the `REDIS_URL` environment variable
-
-Without Redis, the app still works but may be slower for large datasets.
-
-## Vocabulary System
-
-### Word Reuse Optimization
-
-The vocabulary system is optimized to reuse existing words across materials:
-
-- Words are stored globally and shared across all users
-- When a new material is transcribed, the system:
-  1. Checks if words already exist in the database
-  2. Only queries the dictionary for new words
-  3. Links words to sentences via occurrences
-- When a material is deleted:
-  - Word occurrences are removed
-  - Words themselves remain in the database for reuse
-  - User's word status remains intact
-
-### Sentence Segmentation
-
-Transcribed text is automatically segmented into sentences:
-
-- Split on strong punctuation: `.` `?` `!` (English) / `。` `！` `？` (Chinese)
-- Handle combination punctuation like `?!` and `!?`
-- Merge short sentences (< 3 words) with adjacent ones if gap is small
-- Preserve accurate word-level timestamps
-
-## Project Structure
+## 🧩 Project Structure
 
 ```
 Echo/
-├── prisma/           # Database schema and migrations
-├── scripts/          # Python scripts for transcription and dictionary
-│   ├── transcribe.py # Whisper transcription with sentence splitting
-│   ├── query_dict.py # Dictionary lookup for vocabulary
-│   └── stardict.py   # StarDict database interface
+├── prisma/                 # Database schema and migrations
+├── public/                 # Static assets
+├── scripts/                # Python AI & Utility scripts
+│   ├── transcribe.py       # Whisper transcription logic
+│   ├── query_dict.py       # Dictionary lookup service
+│   └── ...
 ├── src/
-│   ├── actions/      # Server actions
-│   ├── app/          # Next.js app router pages
-│   ├── components/   # React components
-│   ├── lib/          # Utility libraries
-│   └── services/     # Service layer
-└── data/             # Dictionary databases
+│   ├── actions/            # Server Actions (Next.js)
+│   ├── app/                # App Router pages & layouts
+│   │   ├── (auth)/         # Authentication routes
+│   │   ├── admin/          # Admin dashboard
+│   │   ├── dashboard/      # User dashboard
+│   │   ├── study/          # Study & Review interface
+│   │   │   ├── words/      # Word learning
+│   │   │   └── sentences/  # Sentence practice
+│   │   ├── words/          # Word management
+│   │   └── ...
+│   ├── components/         # React UI components
+│   ├── lib/                # Core utilities (DB, Auth, etc.)
+│   └── services/           # Business logic services
+└── ...
 ```
 
-## Learn More
+## ⚙️ Configuration
 
-- [Next.js Documentation](https://nextjs.org/docs)
-- [Faster-Whisper](https://github.com/SYSTRAN/faster-whisper)
-- [OpenAI Whisper](https://github.com/openai/whisper)
+### Transcription Settings
+Configure your preferred transcription engine in the app settings:
+- **Engine**: Faster-Whisper (Recommended for speed) or OpenAI Whisper.
+- **Model Size**: Tiny to Large-v3 (Trade-off between speed and accuracy).
+- **Compute**: GPU (CUDA) or CPU.
 
-## License
+### Caching
+To enable Redis caching for improved performance, set the `REDIS_URL` environment variable.
 
-MIT
+## 📄 License
+
+This project is licensed under the MIT License.

@@ -286,7 +286,7 @@ export async function emptyTrash() {
 
         revalidatePath('/trash');
         revalidatePath('/materials');
-        revalidatePath('/vocab');
+        revalidatePath('/words');
         return { success: true };
     } catch (e) {
         return { error: 'Failed to empty trash' };

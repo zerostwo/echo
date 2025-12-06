@@ -403,7 +403,7 @@ export async function extractVocabulary(materialId: string) {
     await invalidateVocabCache(session.user.id);
 
     await revalidateInBackground([
-        '/vocab',
+        '/words',
         '/materials',
         `/materials/${materialId}`
     ]);

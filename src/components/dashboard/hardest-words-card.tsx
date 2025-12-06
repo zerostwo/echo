@@ -3,7 +3,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { AlertTriangle } from 'lucide-react';
 import { useState } from 'react';
-import { WordDetailSheet } from '@/app/vocab/word-detail-sheet';
+import { WordDetailSheet } from '@/app/words/word-detail-sheet';
 
 interface HardWord {
   id: string;

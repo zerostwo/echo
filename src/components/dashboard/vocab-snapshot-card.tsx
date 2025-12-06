@@ -21,7 +21,7 @@ export function VocabSnapshotCard({ newCount, learningCount, masteredCount }: Vo
   return (
     <Card className="h-full flex flex-col">
       <CardHeader className="flex flex-row items-center justify-between py-3 pb-2">
-        <CardTitle className="text-sm font-medium">Vocabulary Snapshot</CardTitle>
+        <CardTitle className="text-sm font-medium">Words Snapshot</CardTitle>
         <PieChart className="h-4 w-4 text-muted-foreground" />
       </CardHeader>
       <CardContent className="pb-3 flex-1 flex flex-col justify-center">
