@@ -1,12 +1,15 @@
-import { getDictionaries } from "@/actions/dictionary-actions"
+import { getDictionariesPaginated } from "@/actions/dictionary-actions"
 import { CreateDictionaryDialog } from "@/components/dictionaries/create-dictionary-dialog"
-import { DictionariesTable } from "@/components/dictionaries/dictionaries-table"
-import { columns } from "@/components/dictionaries/columns"
+import { DictionariesClient } from "./dictionaries-client"
 import { HeaderPortal } from "@/components/header-portal"
 import { SetBreadcrumbs } from "@/components/set-breadcrumbs"
 
 export default async function DictionariesPage() {
-  const dictionaries = await getDictionaries()
+  const initialData = await getDictionariesPaginated(1, 10)
+  
+  if ('error' in initialData) {
+      return <div>Error loading dictionaries</div>
+  }
 
   return (
     <div className="p-8 h-full">
@@ -17,7 +20,7 @@ export default async function DictionariesPage() {
         <CreateDictionaryDialog />
       </HeaderPortal>
 
-      <DictionariesTable columns={columns} data={dictionaries} />
+      <DictionariesClient initialData={initialData} />
     </div>
   )
 }

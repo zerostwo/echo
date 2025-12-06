@@ -150,8 +150,7 @@ export async function updateUser(prevState: any, formData: FormData) {
       throw updateError
     }
 
-    revalidatePath("/account")
-    revalidatePath("/")
+    revalidatePath("/", "layout")
     return { success: "Profile updated successfully." + emailChangeMessage }
   } catch (error) {
     console.error("Failed to update user:", error)
@@ -225,11 +224,23 @@ export async function uploadAvatar(formData: FormData) {
       .from(BUCKET_NAME)
       .getPublicUrl(filename)
 
+    // Ensure we use the configured public URL from env if available, 
+    // to avoid internal docker/localhost URLs if running in a container
+    let finalUrl = publicUrl;
+    if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
+      const relativePath = publicUrl.split('/storage/v1/object/public/')[1];
+      if (relativePath) {
+        // Remove trailing slash from base if present
+        const baseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL.replace(/\/$/, '');
+        finalUrl = `${baseUrl}/storage/v1/object/public/${relativePath}`;
+      }
+    }
+
     // Update user record
     const { error: updateError } = await client
       .from("users")
       .update({ 
-        image: publicUrl,
+        image: finalUrl,
         updated_at: new Date().toISOString()
       })
       .eq("id", session.user.id)
@@ -238,8 +249,8 @@ export async function uploadAvatar(formData: FormData) {
       throw updateError
     }
 
-    revalidatePath("/")
-    return { success: true, url: publicUrl }
+    revalidatePath("/", "layout")
+    return { success: true, url: finalUrl }
   } catch (error) {
     console.error("Avatar upload error:", error)
     return { error: "Failed to upload avatar" }
@@ -268,7 +279,7 @@ export async function updateSettings(settings: any) {
         throw updateError;
       }
 
-      revalidatePath('/settings');
+      revalidatePath('/', 'layout');
       return { success: true };
   } catch (error) {
       console.error("Failed to update settings:", error);

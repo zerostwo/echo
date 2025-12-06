@@ -126,12 +126,4 @@ export const columns: ColumnDef<DictionaryWithStats>[] = [
         )
     },
   },
-  {
-    id: "actions",
-    cell: ({ row }) => {
-      const dictionary = row.original
- 
-      return <DictionaryActionsMenu dictionary={dictionary} />
-    },
-  },
 ]

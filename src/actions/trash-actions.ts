@@ -2,94 +2,217 @@
 
 import { auth } from '@/auth';
 import { supabase, supabaseAdmin } from '@/lib/supabase';
-import { permanentlyDeleteMaterial } from './material-actions';
+import { prisma } from '@/lib/prisma';
+import { permanentlyDeleteMaterial, restoreMaterial } from './material-actions';
 import { permanentlyDeleteSentence } from './sentence-actions';
 import { permanentlyDeleteWord } from './word-actions';
-import { permanentlyDeleteDictionary } from './dictionary-actions';
+import { permanentlyDeleteDictionary, restoreDictionary } from './dictionary-actions';
 import { revalidatePath } from 'next/cache';
 
-export async function getTrashItems() {
+export interface TrashItem {
+    id: string;
+    type: 'material' | 'dictionary' | 'sentence' | 'word';
+    title: string;
+    deleted_at: string;
+    size: string | null;
+    location: string | null;
+}
+
+export interface PaginatedTrashResult {
+    data: TrashItem[];
+    total: number;
+    page: number;
+    pageSize: number;
+    totalPages: number;
+}
+
+export async function getTrashItemsPaginated(
+    page: number = 1,
+    pageSize: number = 10,
+    search: string = '',
+    sortBy: string = 'deleted_at',
+    sortOrder: 'asc' | 'desc' = 'desc'
+): Promise<PaginatedTrashResult | { error: string }> {
     const session = await auth();
-    if (!session?.user?.id) return { items: [] };
+    if (!session?.user?.id) return { error: 'Unauthorized' };
 
-    const client = supabaseAdmin || supabase;
+    const userId = session.user.id;
+    const offset = (page - 1) * pageSize;
+    const searchPattern = search ? `%${search}%` : '%';
 
-    const { data: materials } = await client
-        .from('materials')
-        .select('*, folder:folders(name)')
-        .eq('user_id', session.user.id)
-        .not('deleted_at', 'is', null)
-        .order('deleted_at', { ascending: false });
+    try {
+        // We use a raw query to UNION all trash items and paginate them efficiently
+        // Note: Prisma raw queries return dates as strings or Date objects depending on driver, usually Date objects.
+        // We cast to text to be safe or handle Date objects.
+        
+        const items: any[] = await prisma.$queryRaw`
+            SELECT * FROM (
+                -- Materials
+                SELECT 
+                    m.id, 
+                    m.title, 
+                    'material' as type, 
+                    m.deleted_at, 
+                    m.size::text as size, 
+                    COALESCE(f.name, 'Root') as location 
+                FROM materials m
+                LEFT JOIN folders f ON m.folder_id = f.id
+                WHERE m.user_id = ${userId} AND m.deleted_at IS NOT NULL AND m.title ILIKE ${searchPattern}
 
-    const { data: sentences } = await client
-        .from('sentences')
-        .select('id, content, edited_content, deleted_at, material:materials!inner(id, title, user_id)')
-        .not('deleted_at', 'is', null)
-        .eq('material.user_id', session.user.id)
-        .order('deleted_at', { ascending: false });
+                UNION ALL
 
-    const { data: wordStatuses } = await client
-        .from('user_word_statuses')
-        .select('word_id, word:words(id, text, translation, deleted_at)')
-        .eq('user_id', session.user.id);
+                -- Dictionaries
+                SELECT 
+                    id, 
+                    name as title, 
+                    'dictionary' as type, 
+                    deleted_at, 
+                    NULL as size, 
+                    'Dictionaries' as location 
+                FROM dictionaries 
+                WHERE user_id = ${userId} AND deleted_at IS NOT NULL AND name ILIKE ${searchPattern}
 
-    const { data: dictionaries } = await client
-        .from('dictionaries')
-        .select('id, name, deleted_at')
-        .eq('user_id', session.user.id)
-        .not('deleted_at', 'is', null)
-        .order('deleted_at', { ascending: false });
+                UNION ALL
 
-    const items = [
-        ...(materials || []).map((m: any) => ({
-            id: m.id,
-            type: 'material' as const,
-            title: m.title,
-            deleted_at: m.deleted_at,
-            size: m.size,
-            location: m.folder?.name || 'Root'
-        })),
-        ...(dictionaries || []).map((d: any) => ({
-            id: d.id,
-            type: 'dictionary' as const,
-            title: d.name,
-            deleted_at: d.deleted_at,
-            size: null,
-            location: 'Dictionaries'
-        })),
-        ...(sentences || []).map((s: any) => ({
-            id: s.id,
-            type: 'sentence' as const,
-            title: s.edited_content ?? s.content,
-            deleted_at: s.deleted_at,
-            size: null,
-            location: s.material?.title || 'Unknown material'
-        })),
-        ...(wordStatuses || [])
-            .filter((ws: any) => ws.word?.deleted_at)
-            .reduce((acc: any[], ws: any) => {
-                const word = ws.word;
-                if (!word) return acc;
-                if (acc.find((i) => i.id === word.id)) return acc;
-                acc.push({
-                    id: word.id,
-                    type: 'word' as const,
-                    title: word.text,
-                    deleted_at: word.deleted_at,
-                    size: null,
-                    location: word.translation ? `Translation: ${word.translation}` : 'Vocabulary'
+                -- Sentences
+                SELECT 
+                    s.id, 
+                    COALESCE(s.edited_content, s.content) as title, 
+                    'sentence' as type, 
+                    s.deleted_at, 
+                    NULL as size, 
+                    m.title as location 
+                FROM sentences s 
+                JOIN materials m ON s.material_id = m.id 
+                WHERE m.user_id = ${userId} AND s.deleted_at IS NOT NULL AND COALESCE(s.edited_content, s.content) ILIKE ${searchPattern}
+
+                UNION ALL
+
+                -- Words
+                SELECT 
+                    w.id, 
+                    w.text as title, 
+                    'word' as type, 
+                    w.deleted_at, 
+                    NULL as size, 
+                    COALESCE(w.translation, 'Vocabulary') as location 
+                FROM words w 
+                JOIN user_word_statuses uws ON w.id = uws.word_id 
+                WHERE uws.user_id = ${userId} AND w.deleted_at IS NOT NULL AND w.text ILIKE ${searchPattern}
+            ) as all_items
+            ORDER BY 
+                CASE WHEN ${sortOrder} = 'asc' THEN 
+                    CASE WHEN ${sortBy} = 'title' THEN title END
+                END ASC,
+                CASE WHEN ${sortOrder} = 'desc' THEN 
+                    CASE WHEN ${sortBy} = 'title' THEN title END
+                END DESC,
+                CASE WHEN ${sortOrder} = 'asc' THEN 
+                    CASE WHEN ${sortBy} = 'deleted_at' THEN deleted_at END
+                END ASC,
+                CASE WHEN ${sortOrder} = 'desc' THEN 
+                    CASE WHEN ${sortBy} = 'deleted_at' THEN deleted_at END
+                END DESC
+            LIMIT ${pageSize} OFFSET ${offset}
+        `;
+
+        // Get total count for pagination
+        const countResult: any[] = await prisma.$queryRaw`
+            SELECT COUNT(*)::int as total FROM (
+                SELECT m.id FROM materials m WHERE m.user_id = ${userId} AND m.deleted_at IS NOT NULL AND m.title ILIKE ${searchPattern}
+                UNION ALL
+                SELECT d.id FROM dictionaries d WHERE d.user_id = ${userId} AND d.deleted_at IS NOT NULL AND d.name ILIKE ${searchPattern}
+                UNION ALL
+                SELECT s.id FROM sentences s JOIN materials m ON s.material_id = m.id WHERE m.user_id = ${userId} AND s.deleted_at IS NOT NULL AND COALESCE(s.edited_content, s.content) ILIKE ${searchPattern}
+                UNION ALL
+                SELECT w.id FROM words w JOIN user_word_statuses uws ON w.id = uws.word_id WHERE uws.user_id = ${userId} AND w.deleted_at IS NOT NULL AND w.text ILIKE ${searchPattern}
+            ) as all_items
+        `;
+
+        const total = countResult[0]?.total || 0;
+
+        return {
+            data: items.map(item => ({
+                ...item,
+                deleted_at: item.deleted_at.toISOString(), // Ensure ISO string
+            })),
+            total,
+            page,
+            pageSize,
+            totalPages: Math.ceil(total / pageSize),
+        };
+
+    } catch (error) {
+        console.error("Failed to fetch trash items:", error);
+        return { error: "Failed to fetch trash items" };
+    }
+}
+
+export async function restoreItem(id: string, type: string) {
+    const session = await auth();
+    if (!session?.user?.id) return { error: 'Unauthorized' };
+
+    try {
+        switch (type) {
+            case 'material':
+                return await restoreMaterial(id);
+            case 'dictionary':
+                return await restoreDictionary(id);
+            case 'sentence':
+                // Need to implement restoreSentence in sentence-actions
+                // For now, direct DB update
+                await prisma.sentence.update({
+                    where: { id },
+                    data: { deletedAt: null }
                 });
-                return acc;
-            }, [])
-    ];
+                revalidatePath('/trash');
+                return { success: true };
+            case 'word':
+                // Need to implement restoreWord in word-actions
+                // For now, direct DB update
+                await prisma.word.update({
+                    where: { id },
+                    data: { deletedAt: null }
+                });
+                revalidatePath('/trash');
+                return { success: true };
+            default:
+                return { error: 'Unknown item type' };
+        }
+    } catch (e) {
+        console.error("Restore error:", e);
+        return { error: 'Failed to restore item' };
+    }
+}
 
-    items.sort((a, b) => {
-        const aTime = a.deleted_at ? new Date(a.deleted_at).getTime() : 0;
-        const bTime = b.deleted_at ? new Date(b.deleted_at).getTime() : 0;
-        return bTime - aTime;
-    });
+export async function permanentlyDeleteItem(id: string, type: string) {
+    const session = await auth();
+    if (!session?.user?.id) return { error: 'Unauthorized' };
 
-    return { items };
+    try {
+        switch (type) {
+            case 'material':
+                return await permanentlyDeleteMaterial(id);
+            case 'dictionary':
+                return await permanentlyDeleteDictionary(id);
+            case 'sentence':
+                return await permanentlyDeleteSentence(id);
+            case 'word':
+                return await permanentlyDeleteWord(id);
+            default:
+                return { error: 'Unknown item type' };
+        }
+    } catch (e) {
+        console.error("Delete error:", e);
+        return { error: 'Failed to delete item' };
+    }
+}
+
+export async function getTrashItems() {
+    // Legacy function, keeping for compatibility if needed, but redirecting to paginated
+    const result = await getTrashItemsPaginated(1, 1000);
+    if ('error' in result) return { items: [] };
+    return { items: result.data };
 }
 
 export async function emptyTrash() {

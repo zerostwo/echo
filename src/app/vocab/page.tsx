@@ -38,8 +38,14 @@ export default async function VocabPage({ searchParams }: { searchParams: Promis
   const pageSize = userSettings.vocabPageSize || 10;
   const sortBy = userSettings.vocabSortBy || 'updated_at';
   const sortOrder = userSettings.vocabSortOrder || 'desc';
+  const showMastered = userSettings.vocabShowMastered ?? false;
   
-  const initialResult = await getVocabPaginated(1, pageSize, { materialId }, sortBy, sortOrder);
+  const filters: any = { materialId };
+  if (!showMastered) {
+    filters.status = ['NEW', 'LEARNING'];
+  }
+  
+  const initialResult = await getVocabPaginated(1, pageSize, filters, sortBy, sortOrder);
   
   if ('error' in initialResult) {
     return <div className="p-8">Error loading vocabulary: {initialResult.error}</div>;

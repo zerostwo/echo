@@ -36,6 +36,13 @@ export function UserSettingsProvider({ initialSettings, children }: { initialSet
   const timezone = settings?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   const pronunciationAccent: PronunciationAccent = settings?.pronunciationAccent || 'us';
 
+  // Sync with initialSettings when it changes (e.g. after server revalidation)
+  React.useEffect(() => {
+    if (initialSettings) {
+      setSettings(initialSettings);
+    }
+  }, [initialSettings]);
+
   // Update settings and persist to database
   const updateSettings = useCallback(async (partialSettings: Partial<Settings>) => {
     const newSettings = { ...settings, ...partialSettings };

@@ -668,7 +668,9 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
     setShowResult(true);
     
     // Play pronunciation after selection (whether correct or incorrect)
-    playPronunciation(currentWord.text);
+    setTimeout(() => {
+      playPronunciation(currentWord.text);
+    }, 100);
 
     const responseTime = Date.now() - startTime;
 

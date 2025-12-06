@@ -511,3 +511,134 @@ export async function updateDictionary(id: string, data: { name?: string; descri
   revalidatePath(`/dictionaries/${id}`)
   return dictionary
 }
+
+export interface DictionaryFilters {
+    search?: string;
+}
+
+export interface PaginatedDictionaryResult {
+    data: any[];
+    total: number;
+    page: number;
+    pageSize: number;
+    totalPages: number;
+}
+
+export async function getDictionariesPaginated(
+    page: number = 1,
+    pageSize: number = 10,
+    filters: DictionaryFilters = {},
+    sortBy: string = 'createdAt',
+    sortOrder: 'asc' | 'desc' = 'desc'
+): Promise<PaginatedDictionaryResult | { error: string }> {
+    const session = await auth()
+    if (!session?.user?.id) {
+        return { error: "Unauthorized" }
+    }
+
+    const skip = (page - 1) * pageSize;
+
+    try {
+        const where: any = {
+            userId: session.user.id,
+            deletedAt: null,
+        };
+
+        if (filters.search) {
+            where.name = {
+                contains: filters.search,
+                mode: 'insensitive',
+            };
+        }
+
+        const [total, dictionaries] = await Promise.all([
+            prisma.dictionary.count({ where }),
+            prisma.dictionary.findMany({
+                where,
+                skip,
+                take: pageSize,
+                orderBy: {
+                    [sortBy]: sortOrder,
+                },
+                include: {
+                    _count: {
+                        select: { words: true },
+                    },
+                    words: {
+                        select: {
+                            wordId: true
+                        }
+                    }
+                },
+            })
+        ]);
+
+        // Fetch stats only for the fetched dictionaries
+        // We need all word IDs from these dictionaries to fetch statuses
+        const allWordIds = new Set<string>();
+        dictionaries.forEach(d => {
+            d.words.forEach(w => allWordIds.add(w.wordId));
+        });
+
+        const userWordStatuses = await prisma.userWordStatus.findMany({
+            where: {
+                userId: session.user.id,
+                wordId: {
+                    in: Array.from(allWordIds)
+                }
+            },
+            select: {
+                wordId: true,
+                status: true,
+                fsrsReps: true,
+                errorCount: true
+            }
+        });
+
+        const statusMap = new Map(userWordStatuses.map(s => [s.wordId, s]));
+
+        const data = dictionaries.map(dict => {
+            const wordIds = dict.words.map(w => w.wordId);
+            const totalWords = wordIds.length;
+            
+            let learnedWords = 0;
+            let totalReps = 0;
+            let totalErrors = 0;
+
+            wordIds.forEach(wordId => {
+                const status = statusMap.get(wordId);
+                if (status) {
+                    if (status.status !== 'NEW' && status.status !== 'UNKNOWN') {
+                        learnedWords++;
+                    }
+                    totalReps += status.fsrsReps;
+                    totalErrors += status.errorCount;
+                }
+            });
+
+            const learningProgress = totalWords > 0 ? (learnedWords / totalWords) * 100 : 0;
+            const totalAttempts = totalReps + totalErrors;
+            const accuracy = totalAttempts > 0 ? (totalReps / totalAttempts) * 100 : 0;
+
+            const { words, ...rest } = dict;
+            return {
+                ...rest,
+                wordCount: totalWords,
+                learningProgress,
+                accuracy
+            };
+        });
+
+        return {
+            data,
+            total,
+            page,
+            pageSize,
+            totalPages: Math.ceil(total / pageSize),
+        };
+
+    } catch (error) {
+        console.error("Failed to fetch dictionaries:", error);
+        return { error: "Failed to fetch dictionaries" };
+    }
+}

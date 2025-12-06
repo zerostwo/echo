@@ -53,6 +53,7 @@ export default async function RootLayout({
   let twoFactorEnabled = false;
   let displayName: string | null = null;
   let username: string | null = null;
+  let userImage: string | null = null;
   let quota: number = 10737418240; // 10GB default
   let usedSpace: number = 0;
   let materials: { id: string; title: string; folderId: string | null; mimeType?: string }[] = [];
@@ -61,7 +62,7 @@ export default async function RootLayout({
     const client = supabaseAdmin || supabase;
     const { data: user } = await client
       .from('users')
-      .select('settings, two_factor_enabled, display_name, username, quota, used_space')
+      .select('settings, two_factor_enabled, display_name, username, quota, used_space, image')
       .eq('id', session.user.id)
       .single();
 
@@ -69,6 +70,7 @@ export default async function RootLayout({
       twoFactorEnabled = user.two_factor_enabled || false;
       displayName = user.display_name;
       username = user.username;
+      userImage = user.image;
       quota = Number(user.quota) || 10737418240;
       usedSpace = Number(user.used_space) || 0;
       if (user.settings) {
@@ -120,7 +122,15 @@ export default async function RootLayout({
           {showSidebar ? (
               <SidebarProvider>
                   <AppSidebar 
-                    user={{ ...session.user, twoFactorEnabled, displayName, username, quota, usedSpace } as any} 
+                    user={{ 
+                        ...session.user, 
+                        image: userImage || session.user.image,
+                        twoFactorEnabled, 
+                        displayName, 
+                        username, 
+                        quota, 
+                        usedSpace 
+                    } as any} 
                     settings={userSettings}
                     folders={folders}
                     materials={materials}
