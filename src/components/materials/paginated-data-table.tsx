@@ -95,6 +95,8 @@ interface PaginatedDataTableProps {
   initialData: PaginatedMaterialResult
   folders: any[]
   folderId?: string | null
+  initialSortBy?: string
+  initialSortOrder?: 'asc' | 'desc'
 }
 
 // Column header with sort dropdown
@@ -145,8 +147,10 @@ export function PaginatedDataTable({
   initialData,
   folders = [],
   folderId,
+  initialSortBy = 'title',
+  initialSortOrder = 'asc'
 }: PaginatedDataTableProps) {
-  const { timezone } = useUserSettings()
+  const { timezone, settings, updateSettings } = useUserSettings()
   
   const [data, setData] = useState(initialData.data)
   const [total, setTotal] = useState(initialData.total)
@@ -159,11 +163,11 @@ export function PaginatedDataTable({
   const [search, setSearch] = useState("")
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
   const [sorting, setSorting] = useState<SortingState>([])
-  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(settings.materialsColumns || {})
   
   // Server-side sorting state
-  const [sortBy, setSortBy] = useState<string>('title')
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc')
+  const [sortBy, setSortBy] = useState<string>(initialSortBy)
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>(initialSortOrder)
 
   const router = useRouter()
   const debouncedSearch = useDebounce(search, 300)
@@ -177,6 +181,16 @@ export function PaginatedDataTable({
     setSearch("")
     setRowSelection({})
   }, [folderId, initialData])
+
+  // Save column visibility when it changes
+  useEffect(() => {
+      const timer = setTimeout(() => {
+          if (JSON.stringify(settings.materialsColumns) !== JSON.stringify(columnVisibility)) {
+              updateSettings({ materialsColumns: columnVisibility })
+          }
+      }, 1000);
+      return () => clearTimeout(timer);
+  }, [columnVisibility, updateSettings, settings.materialsColumns])
 
   const fetchData = useCallback(async (newPage?: number, newPageSize?: number, newSortBy?: string, newSortOrder?: 'asc' | 'desc') => {
     setLoading(true)
@@ -222,12 +236,14 @@ export function PaginatedDataTable({
 
   const handlePageSizeChange = (newSize: number) => {
     setPageSize(newSize)
+    updateSettings({ materialsPageSize: newSize })
     fetchData(1, newSize)
   }
 
   const handleSort = (column: string, order: 'asc' | 'desc') => {
     setSortBy(column)
     setSortOrder(order)
+    updateSettings({ materialsSortBy: column, materialsSortOrder: order })
     fetchData(1, undefined, column, order)
   }
 
@@ -538,7 +554,7 @@ export function PaginatedDataTable({
             <div className="relative max-w-sm">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
-                placeholder="Search materials..."
+                placeholder="Search material..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 className="pl-9 h-9"
@@ -677,7 +693,7 @@ export function PaginatedDataTable({
       {/* Pagination */}
       <div className="flex items-center justify-between py-4">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <span>{total} material(s)</span>
+          <span>{total} Material</span>
           <span>•</span>
           <span>Page {page} of {totalPages || 1}</span>
         </div>

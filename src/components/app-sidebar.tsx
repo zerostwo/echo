@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Book, ChevronRight, LayoutDashboard, Library, Mic2, Settings, Trash2 } from "lucide-react"
+import { Book, ChevronRight, LayoutDashboard, Library, WholeWord, Settings, Trash2 } from "lucide-react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 
@@ -60,14 +60,14 @@ export function AppSidebar({ user, settings, folders = [], materials = [], ...pr
       icon: LayoutDashboard,
     },
     {
-      title: "Materials",
+      title: "Material",
       url: "/materials",
       icon: Library,
     },
     {
       title: "Vocabulary",
       url: "/vocab",
-      icon: Mic2,
+      icon: WholeWord,
     },
     {
       title: "Dictionary",
@@ -152,7 +152,7 @@ function Tree({ item, pathname }: { item: any, pathname: string }) {
     <SidebarMenuItem>
       <Collapsible
         className="group/collapsible [&[data-state=open]>button>svg:first-child]:rotate-90"
-        defaultOpen={items.some((i: any) => i.url === pathname) || title === "Materials"}
+        defaultOpen={items.some((i: any) => i.url === pathname) || title === "Material"}
       >
         <CollapsibleTrigger asChild>
           <SidebarMenuButton>

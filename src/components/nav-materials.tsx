@@ -105,7 +105,7 @@ export function NavMaterials({
       if (res.error) {
           toast.error(res.error)
       } else {
-          toast.success("Folder deleted, materials moved to Unfiled")
+          toast.success("Folder deleted, material moved to Unfiled")
           setDeleteId(null)
           router.refresh()
       }
@@ -324,7 +324,7 @@ export function NavMaterials({
             <DialogHeader>
                 <DialogTitle>Delete Folder</DialogTitle>
                 <DialogDescription>
-                    Are you sure you want to delete this folder? Materials inside will be moved to "Unfiled" (visible in All Materials).
+                    Are you sure you want to delete this folder? Material inside will be moved to "Unfiled" (visible in All Material).
                 </DialogDescription>
             </DialogHeader>
             <DialogFooter>

@@ -380,7 +380,7 @@ export function SidebarFolderTree({ folders, materials = [] }: SidebarFolderTree
           <AlertDialogHeader>
             <AlertDialogTitle>Delete folder?</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete "{folderToDelete?.name}"? Materials inside will be moved to unfiled.
+              Are you sure you want to delete "{folderToDelete?.name}"? Material inside will be moved to unfiled.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

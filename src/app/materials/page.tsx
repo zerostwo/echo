@@ -16,6 +16,26 @@ export default async function MaterialsPage({ searchParams }: { searchParams: Pr
 
   const client = supabaseAdmin || supabase;
 
+  // Fetch user settings
+  const { data: userData } = await client
+    .from('users')
+    .select('settings')
+    .eq('id', session.user.id)
+    .single();
+
+  let userSettings: any = {};
+  if (userData?.settings) {
+    try {
+      userSettings = JSON.parse(userData.settings);
+    } catch (e) {
+      console.error("Failed to parse user settings", e);
+    }
+  }
+
+  const pageSize = userSettings.materialsPageSize || 10;
+  const sortBy = userSettings.materialsSortBy || 'created_at';
+  const sortOrder = userSettings.materialsSortOrder || 'desc';
+
   // Fetch folders for the "Move to" action
   const { data: folders } = await client
     .from('folders')
@@ -27,14 +47,14 @@ export default async function MaterialsPage({ searchParams }: { searchParams: Pr
   // Get initial paginated data
   const initialResult = await getMaterialsPaginated(
     1, 
-    10, 
+    pageSize, 
     { folderId: currentFolderId === 'unfiled' ? 'unfiled' : currentFolderId || undefined },
-    'title',
-    'asc'
+    sortBy,
+    sortOrder
   );
 
   if ('error' in initialResult) {
-    return <div className="p-8">Error loading materials: {initialResult.error}</div>;
+    return <div className="p-8">Error loading material: {initialResult.error}</div>;
   }
 
   // Trigger client-side auto refresh while recent items are still processing/empty
@@ -58,6 +78,8 @@ export default async function MaterialsPage({ searchParams }: { searchParams: Pr
         initialData={initialResult} 
         folders={folders || []} 
         folderId={currentFolderId === 'unfiled' ? 'unfiled' : currentFolderId || undefined}
+        initialSortBy={sortBy}
+        initialSortOrder={sortOrder}
       />
     </div>
   );

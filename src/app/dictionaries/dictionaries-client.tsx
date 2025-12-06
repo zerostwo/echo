@@ -33,7 +33,8 @@ import {
   ArrowUp, 
   ArrowDown,
   SlidersHorizontal,
-  Pencil
+  Pencil,
+  Play
 } from "lucide-react"
 import {
   DropdownMenu,
@@ -88,9 +89,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { useUserSettings } from "@/components/user-settings-provider"
 
 interface DictionariesClientProps {
   initialData: PaginatedDictionaryResult
+  initialSortBy?: string
+  initialSortOrder?: 'asc' | 'desc'
 }
 
 // Column header with sort dropdown
@@ -133,7 +137,12 @@ function SortableColumnHeader({
   )
 }
 
-export function DictionariesClient({ initialData }: DictionariesClientProps) {
+export function DictionariesClient({ 
+  initialData,
+  initialSortBy = 'createdAt',
+  initialSortOrder = 'desc'
+}: DictionariesClientProps) {
+  const { settings, updateSettings } = useUserSettings()
   const [data, setData] = useState(initialData.data || [])
   const [total, setTotal] = useState(initialData.total)
   const [page, setPage] = useState(initialData.page)
@@ -150,8 +159,8 @@ export function DictionariesClient({ initialData }: DictionariesClientProps) {
   const debouncedSearch = useDebounce(search, 300)
   
   // Sorting
-  const [sortBy, setSortBy] = useState<string>('createdAt')
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
+  const [sortBy, setSortBy] = useState<string>(initialSortBy)
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>(initialSortOrder)
   
   // Delete dialog state
   const [isDeleteOpen, setIsDeleteOpen] = useState(false)
@@ -211,12 +220,14 @@ export function DictionariesClient({ initialData }: DictionariesClientProps) {
 
   const handlePageSizeChange = (newSize: number) => {
     setPageSize(newSize)
+    updateSettings({ dictionaryPageSize: newSize })
     fetchData(1, newSize)
   }
 
   const handleSort = (column: string, order: 'asc' | 'desc') => {
     setSortBy(column)
     setSortOrder(order)
+    updateSettings({ dictionarySortBy: column, dictionarySortOrder: order })
     fetchData(1, undefined, column, order)
   }
 
@@ -404,7 +415,17 @@ export function DictionariesClient({ initialData }: DictionariesClientProps) {
     }
   ], [sortBy, sortOrder])
 
-  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(settings.dictionaryColumns || {})
+
+  // Save column visibility
+  useEffect(() => {
+      const timer = setTimeout(() => {
+          if (JSON.stringify(settings.dictionaryColumns) !== JSON.stringify(columnVisibility)) {
+              updateSettings({ dictionaryColumns: columnVisibility })
+          }
+      }, 1000);
+      return () => clearTimeout(timer);
+  }, [columnVisibility, updateSettings, settings.dictionaryColumns])
 
   const table = useReactTable({
     data,
@@ -520,9 +541,9 @@ export function DictionariesClient({ initialData }: DictionariesClientProps) {
                     </ContextMenuTrigger>
                     <ContextMenuContent className="w-48">
                         <ContextMenuItem asChild>
-                            <Link href={`/dictionaries/${row.original.id}`}>
-                                <Pencil className="mr-2 h-4 w-4" />
-                                Open Dictionary
+                            <Link href={`/learn?dictionaryId=${row.original.id}`}>
+                                <Play className="mr-2 h-4 w-4" />
+                                Start Learning
                             </Link>
                         </ContextMenuItem>
                         <ContextMenuItem onClick={() => openRename(row.original)}>

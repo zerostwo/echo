@@ -63,11 +63,13 @@ import {
 } from "@/components/ui/select"
 import { getVocabPaginated, VocabFilters, PaginatedVocabResult } from "@/actions/vocab-actions"
 import { updateWordsStatus, deleteWords, editWord } from "@/actions/word-actions"
+import { addWordToDictionaryByText, getDictionaries } from "@/actions/dictionary-actions"
 import { useDebounce } from "@/hooks/use-debounce"
 import { toast } from "sonner"
 import { VocabFilterDrawer, FilterChips, VocabFilterState } from "./vocab-filter-drawer"
 import { SaveAsDictionaryDialog } from "@/components/dictionaries/save-as-dictionary-dialog"
 import { useUserSettings } from "@/components/user-settings-provider"
+import { BookPlus } from "lucide-react"
 
 interface VocabClientProps {
   initialData: PaginatedVocabResult
@@ -167,6 +169,12 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
   const [editingWord, setEditingWord] = useState<{ id: string; text: string } | null>(null)
   const [editWordText, setEditWordText] = useState("")
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
+
+  // Add to dictionary dialog state
+  const [addToDictionaryWord, setAddToDictionaryWord] = useState<{ id: string; text: string } | null>(null)
+  const [isAddToDictionaryOpen, setIsAddToDictionaryOpen] = useState(false)
+  const [availableDictionaries, setAvailableDictionaries] = useState<{ id: string; name: string }[]>([])
+  const [selectedDictionaryId, setSelectedDictionaryId] = useState<string>("")
   
   const debouncedSearch = useDebounce(search, 300)
 
@@ -482,6 +490,43 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
     })
   }
 
+  // Handle context menu - open add to dictionary dialog
+  const handleContextAddToDictionary = async (word: { id: string; text: string }) => {
+    setAddToDictionaryWord(word)
+    setIsAddToDictionaryOpen(true)
+    
+    // Fetch dictionaries if not already loaded
+    if (availableDictionaries.length === 0) {
+      try {
+        const dicts = await getDictionaries()
+        setAvailableDictionaries(dicts.map(d => ({ id: d.id, name: d.name })))
+        if (dicts.length > 0) {
+          setSelectedDictionaryId(dicts[0].id)
+        }
+      } catch (error) {
+        console.error("Failed to fetch dictionaries", error)
+        toast.error("Failed to load dictionaries")
+      }
+    }
+  }
+
+  // Handle add to dictionary submit
+  const handleAddToDictionarySubmit = async () => {
+    if (!addToDictionaryWord || !selectedDictionaryId) return
+
+    startTransition(async () => {
+      try {
+        await addWordToDictionaryByText(selectedDictionaryId, addToDictionaryWord.text)
+        toast.success(`Added "${addToDictionaryWord.text}" to dictionary`)
+        setIsAddToDictionaryOpen(false)
+        setAddToDictionaryWord(null)
+      } catch (error) {
+        console.error("Failed to add word to dictionary", error)
+        toast.error("Failed to add word to dictionary")
+      }
+    })
+  }
+
   // Handle column visibility change with persistence
   const handleColumnVisibilityChange = async (columnId: string, isVisible: boolean) => {
     setColumnVisibility(prev => {
@@ -690,6 +735,16 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
                       <ContextMenuItem
                         onClick={(e) => {
                           e.stopPropagation()
+                          handleContextAddToDictionary({ id: row.original.id, text: row.original.text })
+                        }}
+                        disabled={isPending}
+                      >
+                        <BookPlus className="mr-2 h-4 w-4" />
+                        Add to Dictionary
+                      </ContextMenuItem>
+                      <ContextMenuItem
+                        onClick={(e) => {
+                          e.stopPropagation()
                           handleContextMaster(row.original.id)
                         }}
                         disabled={isPending || row.original.status === 'MASTERED'}
@@ -852,6 +907,71 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
                 </>
               ) : (
                 'Save Changes'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add to Dictionary Dialog */}
+      <Dialog open={isAddToDictionaryOpen} onOpenChange={setIsAddToDictionaryOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Add to Dictionary</DialogTitle>
+            <DialogDescription>
+              Select a dictionary to add "{addToDictionaryWord?.text}" to.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="dictionary-select" className="text-right">
+                Dictionary
+              </Label>
+              <div className="col-span-3">
+                <Select
+                  value={selectedDictionaryId}
+                  onValueChange={setSelectedDictionaryId}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a dictionary" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableDictionaries.length === 0 ? (
+                      <SelectItem value="none" disabled>No dictionaries found</SelectItem>
+                    ) : (
+                      availableDictionaries.map((dict) => (
+                        <SelectItem key={dict.id} value={dict.id}>
+                          {dict.name}
+                        </SelectItem>
+                      ))
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsAddToDictionaryOpen(false)
+                setAddToDictionaryWord(null)
+              }}
+              disabled={isPending}
+            >
+              Cancel
+            </Button>
+            <Button 
+              onClick={handleAddToDictionarySubmit} 
+              disabled={isPending || !selectedDictionaryId || availableDictionaries.length === 0}
+            >
+              {isPending ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Adding...
+                </>
+              ) : (
+                'Add'
               )}
             </Button>
           </DialogFooter>

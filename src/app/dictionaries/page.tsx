@@ -3,9 +3,36 @@ import { CreateDictionaryDialog } from "@/components/dictionaries/create-diction
 import { DictionariesClient } from "./dictionaries-client"
 import { HeaderPortal } from "@/components/header-portal"
 import { SetBreadcrumbs } from "@/components/set-breadcrumbs"
+import { auth } from "@/auth"
+import { supabaseAdmin, supabase } from "@/lib/supabase"
 
 export default async function DictionariesPage() {
-  const initialData = await getDictionariesPaginated(1, 10)
+  const session = await auth();
+  const client = supabaseAdmin || supabase;
+
+  // Fetch user settings
+  let userSettings: any = {};
+  if (session?.user?.id) {
+    const { data: user } = await client
+      .from('users')
+      .select('settings')
+      .eq('id', session.user.id)
+      .single();
+
+    if (user?.settings) {
+      try {
+        userSettings = JSON.parse(user.settings);
+      } catch (e) {
+        console.error("Failed to parse user settings", e);
+      }
+    }
+  }
+
+  const pageSize = userSettings.dictionaryPageSize || 10;
+  const sortBy = userSettings.dictionarySortBy || 'createdAt';
+  const sortOrder = userSettings.dictionarySortOrder || 'desc';
+
+  const initialData = await getDictionariesPaginated(1, pageSize, undefined, sortBy, sortOrder)
   
   if ('error' in initialData) {
       return <div>Error loading dictionaries</div>
@@ -20,7 +47,11 @@ export default async function DictionariesPage() {
         <CreateDictionaryDialog />
       </HeaderPortal>
 
-      <DictionariesClient initialData={initialData} />
+      <DictionariesClient 
+        initialData={initialData} 
+        initialSortBy={sortBy}
+        initialSortOrder={sortOrder}
+      />
     </div>
   )
 }

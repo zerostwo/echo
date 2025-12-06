@@ -87,9 +87,12 @@ import {
 import { formatBytes } from "@/lib/utils"
 import { formatInTimeZone } from "@/lib/time"
 import { useUserSettings } from "@/components/user-settings-provider"
+import { HeaderPortal } from "@/components/header-portal"
 
 interface TrashClientProps {
   initialData: PaginatedTrashResult
+  initialSortBy?: string
+  initialSortOrder?: 'asc' | 'desc'
 }
 
 // Column header with sort dropdown
@@ -132,8 +135,12 @@ function SortableColumnHeader({
   )
 }
 
-export function TrashClient({ initialData }: TrashClientProps) {
-  const { timezone } = useUserSettings()
+export function TrashClient({ 
+  initialData,
+  initialSortBy = 'deleted_at',
+  initialSortOrder = 'desc'
+}: TrashClientProps) {
+  const { timezone, settings, updateSettings } = useUserSettings()
   const [data, setData] = useState<TrashItem[]>(initialData.data || [])
   const [total, setTotal] = useState(initialData.total)
   const [page, setPage] = useState(initialData.page)
@@ -149,8 +156,8 @@ export function TrashClient({ initialData }: TrashClientProps) {
   const debouncedSearch = useDebounce(search, 300)
   
   // Sorting
-  const [sortBy, setSortBy] = useState<string>('deleted_at')
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
+  const [sortBy, setSortBy] = useState<string>(initialSortBy)
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>(initialSortOrder)
   
   // Dialog states
   const [isDeleteOpen, setIsDeleteOpen] = useState(false)
@@ -202,12 +209,14 @@ export function TrashClient({ initialData }: TrashClientProps) {
 
   const handlePageSizeChange = (newSize: number) => {
     setPageSize(newSize)
+    updateSettings({ trashPageSize: newSize })
     fetchData(1, newSize)
   }
 
   const handleSort = (column: string, order: 'asc' | 'desc') => {
     setSortBy(column)
     setSortOrder(order)
+    updateSettings({ trashSortBy: column, trashSortOrder: order })
     fetchData(1, undefined, column, order)
   }
 
@@ -312,7 +321,15 @@ export function TrashClient({ initialData }: TrashClientProps) {
     },
     {
       accessorKey: "type",
-      header: "Type",
+      header: () => (
+        <SortableColumnHeader 
+          column="type" 
+          label="Type" 
+          sortBy={sortBy} 
+          sortOrder={sortOrder} 
+          onSort={handleSort} 
+        />
+      ),
       cell: ({ row }) => {
           const type = row.original.type
           switch (type) {
@@ -343,12 +360,28 @@ export function TrashClient({ initialData }: TrashClientProps) {
     },
     {
       accessorKey: "location",
-      header: "Location",
+      header: () => (
+        <SortableColumnHeader 
+          column="location" 
+          label="Location" 
+          sortBy={sortBy} 
+          sortOrder={sortOrder} 
+          onSort={handleSort} 
+        />
+      ),
       cell: ({ row }) => <div className="text-muted-foreground text-sm">{row.getValue("location")}</div>,
     },
     {
       accessorKey: "size",
-      header: "Size",
+      header: () => (
+        <SortableColumnHeader 
+          column="size" 
+          label="Size" 
+          sortBy={sortBy} 
+          sortOrder={sortOrder} 
+          onSort={handleSort} 
+        />
+      ),
       cell: ({ row }) => {
           const size = row.getValue("size") as string | null
           return <div className="text-muted-foreground text-sm">{size ? formatBytes(parseInt(size)) : '-'}</div>
@@ -372,7 +405,17 @@ export function TrashClient({ initialData }: TrashClientProps) {
   ]
   }, [sortBy, sortOrder, timezone])
 
-  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(settings.trashColumns || {})
+
+  // Save column visibility
+  useEffect(() => {
+      const timer = setTimeout(() => {
+          if (JSON.stringify(settings.trashColumns) !== JSON.stringify(columnVisibility)) {
+              updateSettings({ trashColumns: columnVisibility })
+          }
+      }, 1000);
+      return () => clearTimeout(timer);
+  }, [columnVisibility, updateSettings, settings.trashColumns])
 
   const table = useReactTable({
     data,
@@ -393,6 +436,17 @@ export function TrashClient({ initialData }: TrashClientProps) {
 
   return (
     <div className="space-y-4">
+      <HeaderPortal>
+        <Button 
+            variant="outline" 
+            className="text-destructive hover:text-destructive"
+            onClick={() => setIsEmptyTrashOpen(true)}
+        >
+            <Trash2 className="mr-2 h-4 w-4" />
+            Empty Trash
+        </Button>
+      </HeaderPortal>
+
       <div className="flex items-center justify-between py-4">
         <div className="flex items-center gap-2">
             <Input
@@ -424,14 +478,6 @@ export function TrashClient({ initialData }: TrashClientProps) {
         </div>
         
         <div className="flex items-center gap-2">
-            <Button 
-                variant="outline" 
-                className="text-destructive hover:text-destructive"
-                onClick={() => setIsEmptyTrashOpen(true)}
-            >
-                <Trash2 className="mr-2 h-4 w-4" />
-                Empty Trash
-            </Button>
             <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                 <Button variant="outline" className="ml-auto">

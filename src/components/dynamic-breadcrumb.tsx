@@ -67,7 +67,7 @@ export function DynamicBreadcrumb({ folders }: DynamicBreadcrumbProps) {
               const folderPath = getFolderPath(folders, folderId)
               
               const items: { title: string; href?: string }[] = [
-                  { title: "Materials", href: "/materials" },
+                  { title: "Material", href: "/materials" },
               ]
               
               // Add each folder in the path
@@ -85,7 +85,7 @@ export function DynamicBreadcrumb({ folders }: DynamicBreadcrumbProps) {
               
               return items
           }
-          return [{ title: "Materials" }]
+          return [{ title: "Material" }]
       }
       
       // Handle /materials/[id] -> Material Detail
@@ -93,7 +93,7 @@ export function DynamicBreadcrumb({ folders }: DynamicBreadcrumbProps) {
       // fallback to simple "Material Details" or let the page set it.
       // We return minimal fallback here, but SetBreadcrumbs in page should override.
       return [
-          { title: "Materials", href: "/materials" },
+          { title: "Material", href: "/materials" },
           { title: "Details" } 
       ]
     }

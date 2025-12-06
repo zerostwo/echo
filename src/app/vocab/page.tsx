@@ -80,7 +80,7 @@ export default async function VocabPage({ searchParams }: { searchParams: Promis
   const learnUrl = materialId ? `/learn?materialId=${materialId}` : '/learn';
 
   return (
-    <div className="flex-1 space-y-8 p-8 pt-6">
+    <div className="flex-1 space-y-8 p-8">
       <HeaderPortal>
         <div className="flex items-center gap-2">
             {materialId && (

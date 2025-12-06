@@ -9,11 +9,26 @@ type Settings = {
   timezone?: string;
   pronunciationAccent?: PronunciationAccent;
   // Vocabulary page settings
-  vocabColumns?: string[];
+  vocabColumns?: Record<string, boolean>;
   vocabPageSize?: number;
   vocabSortBy?: string;
   vocabSortOrder?: 'asc' | 'desc';
   vocabShowMastered?: boolean;
+  // Materials page settings
+  materialsColumns?: Record<string, boolean>;
+  materialsPageSize?: number;
+  materialsSortBy?: string;
+  materialsSortOrder?: 'asc' | 'desc';
+  // Dictionary page settings
+  dictionaryColumns?: Record<string, boolean>;
+  dictionaryPageSize?: number;
+  dictionarySortBy?: string;
+  dictionarySortOrder?: 'asc' | 'desc';
+  // Trash page settings
+  trashColumns?: Record<string, boolean>;
+  trashPageSize?: number;
+  trashSortBy?: string;
+  trashSortOrder?: 'asc' | 'desc';
   // Learning settings
   dailyWordGoal?: number;
   sessionSize?: number;
