@@ -5,7 +5,7 @@ import { auth } from '@/auth';
 import { supabaseAdmin, supabase } from '@/lib/supabase';
 
 export interface DashboardStats {
-  // Heatmap data (past 6 months of daily study duration - combined sentence practice + word learning)
+  // Heatmap data (past year of daily study duration - combined sentence practice + word learning)
   heatmapData: Array<{
     date: string;
     duration: number; // seconds
@@ -19,6 +19,13 @@ export interface DashboardStats {
   vocabSnapshot: {
     new: number;
     learning: number;
+    mastered: number;
+  };
+
+  // Sentence snapshot
+  sentenceSnapshot: {
+    new: number;
+    practiced: number;
     mastered: number;
   };
 
@@ -40,6 +47,20 @@ export interface DashboardStats {
   totalSentences: number;
   totalPractices: number;
   averageScore: number;
+
+  // Last learning positions for "continue where you left off"
+  lastWord?: {
+    id: string;
+    text: string;
+    materialId?: string;
+    materialTitle?: string;
+  } | null;
+  lastSentence?: {
+    id: string;
+    content: string;
+    materialId: string;
+    materialTitle: string;
+  } | null;
 }
 
 export async function GET() {
@@ -206,16 +227,122 @@ export async function GET() {
       };
     });
 
+    // Get sentence snapshot - count sentences by practice status
+    const [allSentencesResult, practicedSentencesResult] = await Promise.all([
+      // Total sentences for user
+      client
+        .from('sentences')
+        .select('id, material:materials!inner(user_id)', { count: 'exact', head: true })
+        .eq('material.user_id', userId)
+        .is('deleted_at', null),
+      
+      // Practiced sentences with scores
+      client
+        .from('practice_progress')
+        .select('id, score')
+        .eq('user_id', userId),
+    ]);
+
+    const totalUserSentences = allSentencesResult.count || 0;
+    const practicedSentences = practicedSentencesResult.data || [];
+    const masteredSentences = practicedSentences.filter(p => p.score >= 90).length;
+    const inProgressSentences = practicedSentences.filter(p => p.score < 90).length;
+    const newSentences = totalUserSentences - practicedSentences.length;
+
+    const sentenceSnapshot = {
+      new: Math.max(0, newSentences),
+      practiced: inProgressSentences,
+      mastered: masteredSentences,
+    };
+
+    // Get last learning positions
+    // Last word reviewed
+    const { data: lastWordReview } = await client
+      .from('word_reviews')
+      .select(`
+        id,
+        created_at,
+        user_word_status:user_word_status_id (
+          user_id,
+          words:word_id (
+            id,
+            text
+          )
+        )
+      `)
+      .order('created_at', { ascending: false })
+      .limit(20);
+
+    const userLastWordReview = (lastWordReview || []).find(
+      (r: Record<string, unknown>) => 
+        (r.user_word_status as { user_id?: string } | null)?.user_id === userId
+    );
+    
+    let lastWord = null;
+    if (userLastWordReview) {
+      const uws = userLastWordReview.user_word_status as { words?: { id: string; text: string } } | null;
+      if (uws?.words) {
+        lastWord = {
+          id: uws.words.id,
+          text: uws.words.text,
+        };
+      }
+    }
+
+    // Last sentence practiced
+    const { data: lastPractice } = await client
+      .from('practice_progress')
+      .select(`
+        sentence_id,
+        updated_at,
+        sentences:sentence_id (
+          id,
+          content,
+          material_id,
+          materials:material_id (
+            id,
+            title
+          )
+        )
+      `)
+      .eq('user_id', userId)
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    let lastSentence = null;
+    if (lastPractice?.sentences) {
+      const sentenceData = lastPractice.sentences as unknown;
+      // Handle both array and single object cases from Supabase
+      const sentence = Array.isArray(sentenceData) 
+        ? sentenceData[0] as { id: string; content: string; material_id: string; materials?: { id: string; title: string }[] | { id: string; title: string } }
+        : sentenceData as { id: string; content: string; material_id: string; materials?: { id: string; title: string }[] | { id: string; title: string } };
+      
+      if (sentence) {
+        const materialsData = sentence.materials;
+        const material = Array.isArray(materialsData) ? materialsData[0] : materialsData;
+        lastSentence = {
+          id: sentence.id,
+          content: sentence.content.substring(0, 50) + (sentence.content.length > 50 ? '...' : ''),
+          materialId: sentence.material_id,
+          materialTitle: material?.title || 'Unknown',
+        };
+      }
+    }
+
     const stats: DashboardStats = {
       heatmapData,
       wordsDueToday: wordsDueToday || 0,
       wordsReviewedTodayCount: wordsReviewedToday,
       vocabSnapshot,
+      sentenceSnapshot,
       hardestWords,
       totalMaterials,
       totalSentences,
       totalPractices,
       averageScore,
+      lastWord,
+      lastSentence,
     };
 
     return NextResponse.json(stats);

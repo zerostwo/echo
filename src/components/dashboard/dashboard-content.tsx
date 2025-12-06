@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import { ActivityHeatmap } from './activity-heatmap';
 import { TodayTasksCard } from './today-tasks-card';
 import { VocabSnapshotCard } from './vocab-snapshot-card';
+import { SentenceSnapshotCard } from './sentence-snapshot-card';
+import { ContinueLearningCard } from './continue-learning-card';
 import { HardestWordsCard } from './hardest-words-card';
 import { SummaryRow } from './summary-row';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -16,6 +18,11 @@ interface DashboardStats {
   vocabSnapshot: {
     new: number;
     learning: number;
+    mastered: number;
+  };
+  sentenceSnapshot: {
+    new: number;
+    practiced: number;
     mastered: number;
   };
   hardestWords: Array<{
@@ -33,11 +40,23 @@ interface DashboardStats {
   totalSentences: number;
   totalPractices: number;
   averageScore: number;
+  lastWord?: {
+    id: string;
+    text: string;
+    materialId?: string;
+    materialTitle?: string;
+  } | null;
+  lastSentence?: {
+    id: string;
+    content: string;
+    materialId: string;
+    materialTitle: string;
+  } | null;
 }
 
 function DashboardSkeleton() {
   return (
-    <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
+    <div className="flex flex-1 flex-col gap-3 p-4 pt-0">
       {/* Summary Row skeleton */}
       <Skeleton className="h-14 w-full rounded-lg" />
 
@@ -52,8 +71,8 @@ function DashboardSkeleton() {
       </Card>
 
       {/* Lower cards skeleton */}
-      <div className="grid gap-4 md:grid-cols-3">
-        {[...Array(3)].map((_, i) => (
+      <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+        {[...Array(6)].map((_, i) => (
           <Card key={i}>
             <CardHeader className="py-3">
               <Skeleton className="h-4 w-24" />
@@ -107,8 +126,8 @@ export function DashboardContent() {
   }
 
   return (
-    <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
-      {/* Summary Row - full width */}
+    <div className="flex flex-1 flex-col gap-3 p-4 pt-0">
+      {/* Summary Row - full width, compact */}
       <SummaryRow
         totalMaterials={stats.totalMaterials}
         totalSentences={stats.totalSentences}
@@ -116,21 +135,35 @@ export function DashboardContent() {
         averageScore={stats.averageScore}
       />
 
-      {/* Activity Heatmap - full width */}
+      {/* Activity Heatmap - full width with year tabs */}
       <ActivityHeatmap data={stats.heatmapData} />
 
-      {/* Bottom cards row */}
-      <div className="grid gap-4 md:grid-cols-3">
+      {/* Main content grid - 2x3 layout on large screens */}
+      <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+        {/* Row 1 */}
+        <ContinueLearningCard
+          lastWord={stats.lastWord}
+          lastSentence={stats.lastSentence}
+          wordsDueToday={stats.wordsDueToday}
+          sentencesDueToday={stats.sentenceSnapshot.new}
+        />
         <TodayTasksCard
           wordsDueToday={stats.wordsDueToday}
           wordsReviewed={stats.wordsReviewedTodayCount}
         />
+        <HardestWordsCard words={stats.hardestWords} />
+        
+        {/* Row 2 */}
         <VocabSnapshotCard
           newCount={stats.vocabSnapshot.new}
           learningCount={stats.vocabSnapshot.learning}
           masteredCount={stats.vocabSnapshot.mastered}
         />
-        <HardestWordsCard words={stats.hardestWords} />
+        <SentenceSnapshotCard
+          newCount={stats.sentenceSnapshot.new}
+          practicedCount={stats.sentenceSnapshot.practiced}
+          masteredCount={stats.sentenceSnapshot.mastered}
+        />
       </div>
     </div>
   );

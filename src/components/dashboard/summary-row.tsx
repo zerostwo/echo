@@ -39,12 +39,12 @@ export function SummaryRow({
   ];
 
   return (
-    <div className="grid grid-cols-2 gap-3 rounded-lg border bg-muted/30 p-3 sm:grid-cols-4">
+    <div className="grid grid-cols-4 gap-2 rounded-lg border bg-muted/30 p-2">
       {stats.map((stat) => (
-        <div key={stat.label} className="flex items-center gap-2">
-          <stat.icon className="h-4 w-4 text-muted-foreground" />
-          <div>
-            <p className="text-xs text-muted-foreground">{stat.label}</p>
+        <div key={stat.label} className="flex items-center gap-2 px-2 py-1">
+          <stat.icon className="h-4 w-4 text-muted-foreground shrink-0" />
+          <div className="min-w-0">
+            <p className="text-xs text-muted-foreground truncate">{stat.label}</p>
             <p className="text-sm font-semibold">{stat.value}</p>
           </div>
         </div>

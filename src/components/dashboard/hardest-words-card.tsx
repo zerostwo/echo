@@ -32,12 +32,12 @@ export function HardestWordsCard({ words }: HardestWordsCardProps) {
 
   return (
     <>
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between py-3">
+      <Card className="h-full flex flex-col">
+        <CardHeader className="flex flex-row items-center justify-between py-3 pb-2">
           <CardTitle className="text-sm font-medium">Hardest Words</CardTitle>
           <AlertTriangle className="h-4 w-4 text-amber-500" />
         </CardHeader>
-        <CardContent className="pb-3">
+        <CardContent className="pb-3 flex-1 flex flex-col justify-center">
           {words.length === 0 ? (
             <p className="text-xs text-muted-foreground py-2 text-center">
               No difficult words yet. Keep practicing!

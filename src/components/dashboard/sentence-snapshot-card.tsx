@@ -1,28 +1,28 @@
 'use client';
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { PieChart } from 'lucide-react';
+import { AudioLines } from 'lucide-react';
 
-interface VocabSnapshotCardProps {
+interface SentenceSnapshotCardProps {
   newCount: number;
-  learningCount: number;
+  practicedCount: number;
   masteredCount: number;
 }
 
-export function VocabSnapshotCard({ newCount, learningCount, masteredCount }: VocabSnapshotCardProps) {
-  const total = newCount + learningCount + masteredCount;
+export function SentenceSnapshotCard({ newCount, practicedCount, masteredCount }: SentenceSnapshotCardProps) {
+  const total = newCount + practicedCount + masteredCount;
   
   const segments = [
-    { label: 'New', count: newCount, color: 'bg-blue-500', textColor: 'text-blue-500' },
-    { label: 'Learning', count: learningCount, color: 'bg-amber-500', textColor: 'text-amber-500' },
+    { label: 'New', count: newCount, color: 'bg-purple-500', textColor: 'text-purple-500' },
+    { label: 'Practiced', count: practicedCount, color: 'bg-amber-500', textColor: 'text-amber-500' },
     { label: 'Mastered', count: masteredCount, color: 'bg-green-500', textColor: 'text-green-500' },
   ];
 
   return (
     <Card className="h-full flex flex-col">
       <CardHeader className="flex flex-row items-center justify-between py-3 pb-2">
-        <CardTitle className="text-sm font-medium">Vocabulary Snapshot</CardTitle>
-        <PieChart className="h-4 w-4 text-muted-foreground" />
+        <CardTitle className="text-sm font-medium">Sentence Progress</CardTitle>
+        <AudioLines className="h-4 w-4 text-muted-foreground" />
       </CardHeader>
       <CardContent className="pb-3 flex-1 flex flex-col justify-center">
         {/* Progress bar visualization */}
@@ -56,7 +56,7 @@ export function VocabSnapshotCard({ newCount, learningCount, masteredCount }: Vo
 
         {/* Total */}
         <div className="border-t pt-2 mt-2 text-center text-xs text-muted-foreground">
-          {total} total words
+          {total} total sentences
         </div>
       </CardContent>
     </Card>

@@ -44,6 +44,7 @@ model User {
   practices     PracticeProgress[]
   dailyStats    DailyStudyStat[]
   notifications Notification[]
+  learningSessions LearningSession[]
 
   @@map("users")
 }
@@ -268,4 +269,34 @@ model Notification {
   @@index([userId, isRead])
   @@index([userId, createdAt])
   @@map("notifications")
+}
+
+// Learning session tracking - records each learning session with timestamps
+model LearningSession {
+  id          String   @id @default(cuid())
+  userId      String   @map("user_id")
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  sessionType String   @map("session_type") // "WORD" or "SENTENCE"
+  startedAt   DateTime @map("started_at") @db.Timestamptz
+  endedAt     DateTime? @map("ended_at") @db.Timestamptz
+  
+  // What was being studied
+  materialId  String?  @map("material_id") // Optional - the material being studied
+  
+  // Progress tracking
+  itemsStudied    Int   @default(0) @map("items_studied") // Number of words/sentences studied
+  correctCount    Int   @default(0) @map("correct_count")
+  incorrectCount  Int   @default(0) @map("incorrect_count")
+  
+  // Last studied item for "continue where you left off"
+  lastItemId      String?  @map("last_item_id") // wordId or sentenceId
+  lastItemType    String?  @map("last_item_type") // "word" or "sentence"
+  
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@index([userId, sessionType])
+  @@index([userId, startedAt])
+  @@map("learning_sessions")
 }
