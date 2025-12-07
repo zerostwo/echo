@@ -499,6 +499,7 @@ export interface VocabFilters {
     dueFilter?: 'overdue' | 'today' | 'week' | 'month';
     domain?: string[];
     pos?: string[];
+    showMastered?: boolean;
 }
 
 export interface PaginatedVocabResult {
@@ -578,89 +579,109 @@ export async function getVocabPaginated(
 
     try {
         const wordFrequencyMap = new Map<string, { frequency: number; sentenceIds: string[] }>();
+        let dictionaryWordIds: string[] | null = null;
 
-        // Step 1: Get words from Materials (if not filtering by dictionary only)
-        if (!filters.dictionaryId) {
-            // Get user's material IDs first
-            let materialsQuery = client
-                .from('materials')
-                .select('id')
-                .eq('user_id', userId)
-                .is('deleted_at', null);
-
-            // Support both single materialId and multiple materialIds
-            if (filters.materialIds && filters.materialIds.length > 0) {
-                materialsQuery = materialsQuery.in('id', filters.materialIds);
-            } else if (filters.materialId) {
-                materialsQuery = materialsQuery.eq('id', filters.materialId);
-            }
-
-            const { data: materials, error: materialsError } = await materialsQuery;
-            
-            const materialIds = (materials || []).map((m: any) => m.id);
-
-            if (materialIds.length > 0) {
-                // Get sentences for these materials - use larger batch size
-                const MATERIAL_BATCH_SIZE = 100;
-                const sentencePromises = [];
-                
-                for (let i = 0; i < materialIds.length; i += MATERIAL_BATCH_SIZE) {
-                    const batchMaterialIds = materialIds.slice(i, i + MATERIAL_BATCH_SIZE);
-                    sentencePromises.push(
-                        client
-                            .from('sentences')
-                            .select('id')
-                            .in('material_id', batchMaterialIds)
-                            .is('deleted_at', null)
-                    );
-                }
-
-                const sentenceResults = await Promise.all(sentencePromises);
-                const allSentences = sentenceResults.flatMap(r => r.data || []);
-                const sentenceIds = allSentences.map((s: any) => s.id);
-
-                if (sentenceIds.length > 0) {
-                    // Get word occurrences - use larger batch size and parallel requests
-                    const BATCH_SIZE = 200;
-                    const occurrencePromises = [];
-                    
-                    for (let i = 0; i < sentenceIds.length; i += BATCH_SIZE) {
-                        const batchIds = sentenceIds.slice(i, i + BATCH_SIZE);
-                        occurrencePromises.push(
-                            client
-                                .from('word_occurrences')
-                                .select('word_id, sentence_id')
-                                .in('sentence_id', batchIds)
-                        );
-                    }
-
-                    const occurrenceResults = await Promise.all(occurrencePromises);
-                    const allOccurrences = occurrenceResults.flatMap(r => r.data || []);
-
-                    // Group by word and count frequencies
-                    allOccurrences.forEach((occ) => {
-                        const wordId = occ.word_id;
-                        if (!wordFrequencyMap.has(wordId)) {
-                            wordFrequencyMap.set(wordId, { frequency: 0, sentenceIds: [] });
-                        }
-                        const entry = wordFrequencyMap.get(wordId)!;
-                        entry.frequency++;
-                        entry.sentenceIds.push(occ.sentence_id);
-                    });
-                }
-            }
-        }
-
-        // Step 2: Get words from Dictionaries
-        let dictionaryWordIds: string[] = [];
+        // Step 0: Get Dictionary Words if needed
         if (filters.dictionaryId) {
-            // Fetch words from specific dictionary
             const { data: dictWords } = await client
                 .from('dictionary_words')
                 .select('word_id')
                 .eq('dictionary_id', filters.dictionaryId);
             dictionaryWordIds = dictWords?.map(dw => dw.word_id) || [];
+        }
+
+        // Step 1: Get words from Materials (calculate frequency)
+        // Get user's material IDs first
+        let materialsQuery = client
+            .from('materials')
+            .select('id')
+            .eq('user_id', userId)
+            .is('deleted_at', null);
+
+        // Support both single materialId and multiple materialIds
+        if (filters.materialIds && filters.materialIds.length > 0) {
+            materialsQuery = materialsQuery.in('id', filters.materialIds);
+        } else if (filters.materialId) {
+            materialsQuery = materialsQuery.eq('id', filters.materialId);
+        }
+
+        const { data: materials, error: materialsError } = await materialsQuery;
+        
+        const materialIds = (materials || []).map((m: any) => m.id);
+
+        if (materialIds.length > 0) {
+            // Get sentences for these materials - use larger batch size
+            const MATERIAL_BATCH_SIZE = 100;
+            const sentencePromises = [];
+            
+            for (let i = 0; i < materialIds.length; i += MATERIAL_BATCH_SIZE) {
+                const batchMaterialIds = materialIds.slice(i, i + MATERIAL_BATCH_SIZE);
+                sentencePromises.push(
+                    client
+                        .from('sentences')
+                        .select('id')
+                        .in('material_id', batchMaterialIds)
+                        .is('deleted_at', null)
+                );
+            }
+
+            const sentenceResults = await Promise.all(sentencePromises);
+            const allSentences = sentenceResults.flatMap(r => r.data || []);
+            const sentenceIds = allSentences.map((s: any) => s.id);
+
+            if (sentenceIds.length > 0) {
+                // Get word occurrences - use larger batch size and parallel requests
+                const BATCH_SIZE = 200;
+                const occurrencePromises = [];
+                
+                for (let i = 0; i < sentenceIds.length; i += BATCH_SIZE) {
+                    const batchIds = sentenceIds.slice(i, i + BATCH_SIZE);
+                    occurrencePromises.push(
+                        client
+                            .from('word_occurrences')
+                            .select('word_id, sentence_id')
+                            .in('sentence_id', batchIds)
+                    );
+                }
+
+                const occurrenceResults = await Promise.all(occurrencePromises);
+                const allOccurrences = occurrenceResults.flatMap(r => r.data || []);
+
+                // Group by word and count frequencies
+                allOccurrences.forEach((occ) => {
+                    const wordId = occ.word_id;
+                    
+                    // If dictionary filter is active, only count if word is in dictionary
+                    // (Optimization: avoid processing irrelevant words)
+                    if (dictionaryWordIds && !dictionaryWordIds.includes(wordId)) {
+                        return;
+                    }
+
+                    if (!wordFrequencyMap.has(wordId)) {
+                        wordFrequencyMap.set(wordId, { frequency: 0, sentenceIds: [] });
+                    }
+                    const entry = wordFrequencyMap.get(wordId)!;
+                    entry.frequency++;
+                    entry.sentenceIds.push(occ.sentence_id);
+                });
+            }
+        }
+
+        // Step 2: Determine final word list
+        let wordIds: string[] = [];
+
+        if (dictionaryWordIds) {
+            // Use dictionary words
+            wordIds = dictionaryWordIds;
+            // Ensure they are in map for consistency (even if freq is 0)
+            wordIds.forEach(wid => {
+                if (!wordFrequencyMap.has(wid)) {
+                    wordFrequencyMap.set(wid, { frequency: 0, sentenceIds: [] });
+                }
+            });
         } else {
+            // Use words from materials AND all user dictionaries
+            
             // Fetch words from ALL user dictionaries to include in global vocab
             const { data: userDicts } = await client
                 .from('dictionaries')
@@ -673,18 +694,17 @@ export async function getVocabPaginated(
                     .from('dictionary_words')
                     .select('word_id')
                     .in('dictionary_id', dictIds);
-                 dictionaryWordIds = dictWords?.map(dw => dw.word_id) || [];
+                 const allDictWordIds = dictWords?.map(dw => dw.word_id) || [];
+                 
+                 allDictWordIds.forEach(wid => {
+                    if (!wordFrequencyMap.has(wid)) {
+                        wordFrequencyMap.set(wid, { frequency: 0, sentenceIds: [] });
+                    }
+                 });
             }
+            
+            wordIds = Array.from(wordFrequencyMap.keys());
         }
-
-        // Merge Dictionary Words into Map
-        dictionaryWordIds.forEach(wid => {
-            if (!wordFrequencyMap.has(wid)) {
-                wordFrequencyMap.set(wid, { frequency: 0, sentenceIds: [] });
-            }
-        });
-
-        const wordIds = Array.from(wordFrequencyMap.keys());
 
         if (wordIds.length === 0) {
             const emptyResult: PaginatedVocabResult = {
@@ -888,6 +908,11 @@ export async function getVocabPaginated(
             });
         }
 
+        // Show/Hide Mastered words
+        if (filters.showMastered === false) {
+            mergedWords = mergedWords.filter(w => w.status !== 'MASTERED');
+        }
+
         // Sort
         mergedWords.sort((a, b) => {
             let aVal: any, bVal: any;
@@ -904,6 +929,17 @@ export async function getVocabPaginated(
                 case 'collins':
                     aVal = a.collins || 0;
                     bVal = b.collins || 0;
+                    break;
+                case 'fsrs_reps':
+                    aVal = a.fsrsReps || 0;
+                    bVal = b.fsrsReps || 0;
+                    break;
+                case 'fsrs_due':
+                    // Handle nulls (not started)
+                    // Treat null as very far future
+                    const maxDate = 8640000000000000;
+                    aVal = a.fsrsDue ? new Date(a.fsrsDue).getTime() : maxDate;
+                    bVal = b.fsrsDue ? new Date(b.fsrsDue).getTime() : maxDate;
                     break;
                 case 'updated_at':
                 default:

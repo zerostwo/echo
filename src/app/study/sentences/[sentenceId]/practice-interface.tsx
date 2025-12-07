@@ -273,9 +273,7 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
 
     return (
         <div className="w-full max-w-3xl mx-auto p-4 md:p-6 min-h-[calc(100vh-4rem)] flex flex-col">
-            <HeaderPortal>
-                {/* Navigation moved to main area */}
-            </HeaderPortal>
+
 
             <div className="flex-1 w-full flex items-center justify-center gap-4">
                 {/* Left Navigation Button */}

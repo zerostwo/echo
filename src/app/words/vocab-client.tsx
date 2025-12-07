@@ -145,7 +145,6 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
     statusFilter: [],
     collinsFilter: [],
     oxfordFilter: undefined,
-    showMastered: settings?.vocabShowMastered ?? false,
     frequencyRange: undefined, // undefined means no filter
     materialFilter: materialId || undefined,
     materialFilters: materialId ? [materialId] : [],
@@ -223,7 +222,6 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
       statusFilter: [],
       collinsFilter: [],
       oxfordFilter: undefined,
-      showMastered: settings?.vocabShowMastered ?? false,
       frequencyRange: undefined,
       materialFilter: materialId || undefined,
       materialFilters: materialId ? [materialId] : [],
@@ -231,7 +229,7 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
       dueFilter: undefined,
     })
     setRowSelection({})
-  }, [materialId, initialData, settings?.vocabShowMastered])
+  }, [materialId, initialData])
 
   const fetchData = useCallback(async (newPage?: number, newPageSize?: number, newSortBy?: string, newSortOrder?: 'asc' | 'desc') => {
     setLoading(true)
@@ -241,36 +239,21 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
         ? filters.materialFilters 
         : (filters.materialFilter ? [filters.materialFilter] : undefined)
       
-      // Fix status filter logic:
-      // - If user has selected specific statuses, use those exactly
-      // - If no statuses selected and showMastered is false, default to NEW and LEARNING
-      // - If no statuses selected and showMastered is true, show all (undefined)
-      let statusFilterValue: string[] | undefined
-      if (filters.statusFilter.length > 0) {
-        // User explicitly selected statuses - use those exactly
-        statusFilterValue = filters.statusFilter
-      } else if (!filters.showMastered) {
-        // No explicit selection and showMastered is off - default to NEW and LEARNING
-        statusFilterValue = ['NEW', 'LEARNING']
-      } else {
-        // No explicit selection and showMastered is on - show all
-        statusFilterValue = undefined
-      }
-      
       const apiFilters: VocabFilters = {
         dictionaryId: dictionaryId,
         materialId: materialIds && materialIds.length === 1 ? materialIds[0] : undefined,
         materialIds: materialIds && materialIds.length > 1 ? materialIds : undefined,
         search: debouncedSearch || undefined,
-        status: statusFilterValue,
+        status: filters.statusFilter.length > 0 ? filters.statusFilter : undefined,
         collins: filters.collinsFilter.length > 0 ? filters.collinsFilter : undefined,
         oxford: filters.oxfordFilter,
         minFrequency: filters.frequencyRange ? filters.frequencyRange[0] : undefined,
         maxFrequency: filters.frequencyRange ? filters.frequencyRange[1] : undefined,
         learningState: (filters.learningStateFilter && filters.learningStateFilter.length > 0) ? filters.learningStateFilter : undefined,
         dueFilter: filters.dueFilter,
-        domain: filters.domainFilter?.length > 0 ? filters.domainFilter : undefined,
-        pos: filters.posFilter?.length > 0 ? filters.posFilter : undefined,
+        domain: (filters.domainFilter?.length ?? 0) > 0 ? filters.domainFilter : undefined,
+        pos: (filters.posFilter?.length ?? 0) > 0 ? filters.posFilter : undefined,
+        showMastered: settings?.vocabShowMastered ?? false,
       }
       
       const result = await getVocabPaginated(
@@ -300,12 +283,12 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
     } finally {
       setLoading(false)
     }
-  }, [page, pageSize, debouncedSearch, filters, sortBy, sortOrder])
+  }, [page, pageSize, debouncedSearch, filters, sortBy, sortOrder, settings])
 
   // Fetch when filters change
   useEffect(() => {
     fetchData(1) // Reset to page 1 when filters change
-  }, [debouncedSearch, filters])
+  }, [debouncedSearch, filters, settings?.vocabShowMastered])
 
   const handlePageChange = (newPage: number) => {
     setPage(newPage)
@@ -382,9 +365,6 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
           break
         case 'oxford':
           newFilters.oxfordFilter = undefined
-          break
-        case 'showMastered':
-          newFilters.showMastered = false
           break
         case 'frequency':
           newFilters.frequencyRange = undefined

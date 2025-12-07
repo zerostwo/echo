@@ -307,7 +307,7 @@ export function WordDetailSheet({ word, open, onOpenChange, dictionaryId, onWord
         const lines = translationText.split('\n');
         const cleanLines: string[] = [];
         
-        lines.forEach(line => {
+        lines.forEach((line: string) => {
             const match = line.match(/^\s*\[(.*?)\](.*)/);
             if (match) {
                 domainTags.push({ tag: match[1], content: match[2].trim() });
@@ -326,18 +326,8 @@ export function WordDetailSheet({ word, open, onOpenChange, dictionaryId, onWord
                     <div className="p-6 pb-2 flex-shrink-0">
                         <SheetHeader className="p-0 space-y-1">
                             <div className="flex items-start justify-between">
-                                <SheetTitle className="text-3xl font-bold flex items-center gap-3">
+                                <SheetTitle className="text-3xl font-bold">
                                     {displayWord.text}
-                                    {displayWord.phonetic && <span className="text-lg font-normal text-muted-foreground font-mono">[{displayWord.phonetic}]</span>}
-                                    <Button 
-                                        variant="ghost" 
-                                        size="icon" 
-                                        onClick={handlePlayWord}
-                                        className={`h-8 w-8 ${isPlayingWord ? "text-primary animate-pulse" : "text-muted-foreground"}`}
-                                        title="Play Pronunciation"
-                                    >
-                                        {isPlayingWord ? <Pause className="h-5 w-5" /> : <Volume2 className="h-5 w-5" />}
-                                    </Button>
                                 </SheetTitle>
                                 <div className="flex items-center gap-1 -mr-2">
                                     {isEditing ? (
@@ -379,6 +369,20 @@ export function WordDetailSheet({ word, open, onOpenChange, dictionaryId, onWord
                                     )}
                                 </div>
                             </div>
+                            
+                            <div className="flex items-center gap-2">
+                                {displayWord.phonetic && <span className="text-lg font-normal text-muted-foreground font-mono">[{displayWord.phonetic}]</span>}
+                                <Button 
+                                    variant="ghost" 
+                                    size="icon" 
+                                    onClick={handlePlayWord}
+                                    className={`h-8 w-8 ${isPlayingWord ? "text-primary animate-pulse" : "text-muted-foreground"}`}
+                                    title="Play Pronunciation"
+                                >
+                                    {isPlayingWord ? <Pause className="h-5 w-5" /> : <Volume2 className="h-5 w-5" />}
+                                </Button>
+                            </div>
+
                             <SheetDescription className="flex flex-col gap-2 mt-1">
                                 {(tagList.length > 0 || domainTags.length > 0) && (
                                     <div className="flex flex-wrap gap-2">

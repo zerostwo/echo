@@ -71,7 +71,6 @@ export default async function DictionaryPage({ params }: { params: Promise<{ id:
               </Button>
             </Link>
             <AddWordDialog dictionaryId={dictionary.id} />
-            <DeleteDictionaryButton dictionaryId={dictionary.id} />
         </div>
       </HeaderPortal>
 

@@ -41,7 +41,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
-import { getAllWordForms, createWordFormsRegex } from '@/lib/vocab-utils';
+import { getAllWordForms, createWordFormsRegex, parsePos } from '@/lib/vocab-utils';
 import { useUserSettings } from '@/components/user-settings-provider';
 import { ScrollArea } from '@/components/ui/scroll-area';
 
@@ -104,18 +104,27 @@ const SHORTCUTS = [
   { key: '?', description: 'Show shortcuts' },
 ];
 
-const formatTranslation = (text: string) => {
+const formatTranslation = (text: string, posString: string | null) => {
   if (!text) return null;
+  
+  // Parse POS probabilities
+  const posStats = parsePos(posString);
+  // Sort by percentage descending
+  posStats.sort((a, b) => {
+      const pa = parseInt(a.percentage) || 0;
+      const pb = parseInt(b.percentage) || 0;
+      return pb - pa;
+  });
   
   // Split by common parts of speech markers
   // Matches markers like "n.", "v.", "adj.", "vt.", "vi.", "a.", "adv.", "prep.", "conj.", "pron."
   // The regex looks for the marker preceded by word boundary and followed by a dot
   const parts = text.split(/(?=\b(?:n|v|adj|adv|prep|conj|pron|art|num|int|vt|vi|a)\.)/g);
   
-  // Only show the first part if there are multiple
-  const firstPart = parts.find(p => p.trim().length > 0);
+  // Filter out empty parts
+  const validParts = parts.map(p => p.trim()).filter(p => p.length > 0);
   
-  if (!firstPart) return (
+  if (validParts.length === 0) return (
     <div className="text-center">
       <div className="leading-relaxed">
         {text}
@@ -123,10 +132,40 @@ const formatTranslation = (text: string) => {
     </div>
   );
 
+  let selectedPart = validParts[0];
+  
+  if (posStats.length > 0) {
+      // Try to find the part matching the highest probability POS
+      for (const stat of posStats) {
+          const match = validParts.find(p => p.startsWith(stat.label));
+          if (match) {
+              selectedPart = match;
+              break;
+          }
+      }
+  }
+
+  // Italicize POS tags
+  const posTagRegex = /^((?:n|v|adj|adv|prep|conj|pron|art|num|int|vt|vi|a)\.)\s*/;
+  const match = selectedPart.match(posTagRegex);
+  
+  if (match) {
+      const tag = match[1];
+      const rest = selectedPart.substring(match[0].length);
+      return (
+        <div className="text-center">
+          <div className="leading-relaxed">
+            <span className="italic font-serif mr-1 text-muted-foreground">{tag}</span>
+            {rest}
+          </div>
+        </div>
+      );
+  }
+
   return (
     <div className="text-center">
       <div className="leading-relaxed">
-        {firstPart.trim()}
+        {selectedPart}
       </div>
     </div>
   );
@@ -1613,7 +1652,8 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
                           formatTranslation(
                             (mode === 'multiple_choice' && choiceModeDirection === 'en_to_zh')
                               ? currentWord.text
-                              : (currentWord.translation || currentWord.definition || 'No definition')
+                              : (currentWord.translation || currentWord.definition || 'No definition'),
+                            currentWord.pos
                           )
                         )}
                       </ScrollArea>

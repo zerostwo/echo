@@ -13,7 +13,6 @@ type Settings = {
   vocabPageSize?: number;
   vocabSortBy?: string;
   vocabSortOrder?: 'asc' | 'desc';
-  vocabShowMastered?: boolean;
   // Materials page settings
   materialsColumns?: string[];
   materialsPageSize?: number;
@@ -33,6 +32,7 @@ type Settings = {
   dailyWordGoal?: number;
   sessionSize?: number;
   preferredLearningMode?: 'typing' | 'multiple_choice' | 'context_listening';
+  vocabShowMastered?: boolean;
   [key: string]: any;
 };
 

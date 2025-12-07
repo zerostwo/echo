@@ -238,7 +238,6 @@ export function SettingsDialog({
   // Ensure vocab settings exist
   const vocabColumns = settings.vocabColumns || ["word", "translation"]
   const vocabSortBy = settings.vocabSortBy || "date_added"
-  const vocabShowMastered = settings.vocabShowMastered ?? false
   const dailyWordGoal = settings.dailyWordGoal || 10
   const choiceModeDirection = settings.choiceModeDirection || "zh_to_en"
 
@@ -613,6 +612,27 @@ export function SettingsDialog({
 
               {activeTab === "vocabulary" && (
                 <div className="space-y-6">
+                  <div className="space-y-4">
+                    <h3 className="text-base font-medium">Vocabulary List</h3>
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-0.5">
+                        <Label htmlFor="show-mastered">Show Mastered Words</Label>
+                        <p className="text-sm text-muted-foreground">
+                          Include mastered words in the vocabulary list.
+                        </p>
+                      </div>
+                      <Switch
+                        id="show-mastered"
+                        checked={settings.vocabShowMastered ?? false}
+                        onCheckedChange={(checked) =>
+                          setSettings({ ...settings, vocabShowMastered: checked })
+                        }
+                      />
+                    </div>
+                  </div>
+
+                  <Separator />
+
                   <div className="space-y-4">
                     <h3 className="text-base font-medium">Learning Goals</h3>
                     

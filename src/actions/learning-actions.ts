@@ -283,14 +283,25 @@ async function getWordsFromDictionary(
 
   // Get words with their info in batches
   const BATCH_SIZE = 50;
-  const wordsData: any[] = [];
+  const validWords: any[] = [];
+  const statusMap = new Map<string, any>();
   
-  for (let i = 0; i < wordIdArray.length && wordsData.length < limit * 2; i += BATCH_SIZE) {
-    const batch = wordIdArray.slice(i, i + BATCH_SIZE);
+  // Iterate through all words until we have enough valid ones
+  // We fetch a bit more than limit to allow for some post-filtering/sorting if needed
+  // But since we prioritize unseen/new words which are likely at the start, linear scan is okay.
+  for (let i = 0; i < wordIdArray.length; i += BATCH_SIZE) {
+    // If we have enough words, stop. 
+    // We collect slightly more (limit * 1.5) to ensure we have a good mix if we were sorting,
+    // but here we mainly want to fill the session.
+    if (validWords.length >= limit) break;
+
+    const batchIds = wordIdArray.slice(i, i + BATCH_SIZE);
+    
+    // 1. Fetch word details
     const { data: batchWords, error: batchError } = await client
       .from('words')
       .select('id, text, phonetic, translation, definition, pos, exchange, oxford, collins, deleted_at')
-      .in('id', batch)
+      .in('id', batchIds)
       .is('deleted_at', null);
     
     if (batchError) {
@@ -298,55 +309,70 @@ async function getWordsFromDictionary(
       continue;
     }
     
-    if (batchWords) {
-      wordsData.push(...batchWords);
-    }
-  }
+    if (!batchWords || batchWords.length === 0) continue;
 
-  if (wordsData.length === 0) {
-    return { words: [], error: 'Failed to fetch word details' };
-  }
-
-  // Get existing user word statuses for these words in batches
-  const wordIdsToCheck = wordsData.map(w => w.id);
-  const existingStatuses: any[] = [];
-  
-  for (let i = 0; i < wordIdsToCheck.length; i += BATCH_SIZE) {
-    const batch = wordIdsToCheck.slice(i, i + BATCH_SIZE);
+    // 2. Fetch statuses for this batch
+    const batchWordIds = batchWords.map(w => w.id);
     const { data: batchStatuses } = await client
       .from('user_word_statuses')
       .select('*')
       .eq('user_id', userId)
-      .in('word_id', batch);
+      .in('word_id', batchWordIds);
     
+    // Update status map
     if (batchStatuses) {
-      existingStatuses.push(...batchStatuses);
+      for (const status of batchStatuses) {
+        statusMap.set(status.word_id, status);
+      }
     }
+
+    // 3. Filter this batch
+    const filteredBatch = batchWords.filter(word => {
+      // Filter by oxford
+      if (filters?.oxford !== undefined) {
+        if (filters.oxford && word.oxford !== 1) return false;
+        if (!filters.oxford && word.oxford === 1) return false;
+      }
+      // Filter by collins
+      if (filters?.collins && filters.collins.length > 0) {
+        if (!filters.collins.includes(word.collins)) return false;
+      }
+
+      // Filter by SRS status
+      const status = statusMap.get(word.id);
+      
+      // 1. Exclude MASTERED
+      if (status?.status === 'MASTERED') return false;
+      
+      // 2. Exclude future reviews (strict SRS)
+      // Keep if:
+      // - No status (Never seen)
+      // - Status is NEW (fsrs_due is usually null)
+      // - Status is LEARNING but due <= now
+      if (status?.fsrs_due) {
+          const dueDate = new Date(status.fsrs_due);
+          // Add a small buffer (e.g. 1 minute) to avoid race conditions with "now"
+          if (dueDate.getTime() > Date.now() + 60000) {
+              return false;
+          }
+      }
+
+      return true;
+    });
+
+    validWords.push(...filteredBatch);
   }
 
-  const statusMap = new Map<string, any>();
-  for (const status of existingStatuses) {
-    statusMap.set(status.word_id, status);
+  if (validWords.length === 0) {
+    // If we scanned everything and found nothing, return empty
+    // But check if it's because of the filter or just empty
+    return { words: [], error: 'No words available for learning in this dictionary' };
   }
 
-  // Apply filters and build result
-  let filteredWords = wordsData.filter(word => {
-    // Filter by oxford
-    if (filters?.oxford !== undefined) {
-      if (filters.oxford && word.oxford !== 1) return false;
-      if (!filters.oxford && word.oxford === 1) return false;
-    }
-    // Filter by collins
-    if (filters?.collins && filters.collins.length > 0) {
-      if (!filters.collins.includes(word.collins)) return false;
-    }
-    return true;
-  });
-
-  // Sort logic (same as getWordsFromMaterial)
+  // Sort logic (same as before)
   const now = new Date().toISOString();
   
-  filteredWords.sort((a, b) => {
+  validWords.sort((a, b) => {
     const statusA = statusMap.get(a.id);
     const statusB = statusMap.get(b.id);
     
@@ -379,7 +405,7 @@ async function getWordsFromDictionary(
   });
 
   // Take top N
-  const selectedWords = filteredWords.slice(0, limit);
+  const selectedWords = validWords.slice(0, limit);
   
   // Map to LearningWord
   const result: LearningWord[] = selectedWords.map(word => {
@@ -480,14 +506,19 @@ async function getWordsFromMaterial(
 
   // Get words with their info in batches to avoid URI too long
   const BATCH_SIZE = 50; // Small batch size to avoid URI issues
-  const wordsData: any[] = [];
+  const validWords: any[] = [];
+  const statusMap = new Map<string, any>();
   
-  for (let i = 0; i < wordIdArray.length && wordsData.length < limit * 2; i += BATCH_SIZE) {
-    const batch = wordIdArray.slice(i, i + BATCH_SIZE);
+  for (let i = 0; i < wordIdArray.length; i += BATCH_SIZE) {
+    if (validWords.length >= limit) break;
+
+    const batchIds = wordIdArray.slice(i, i + BATCH_SIZE);
+    
+    // 1. Fetch word details
     const { data: batchWords, error: batchError } = await client
       .from('words')
       .select('id, text, phonetic, translation, definition, pos, exchange, oxford, collins, deleted_at')
-      .in('id', batch)
+      .in('id', batchIds)
       .is('deleted_at', null);
     
     if (batchError) {
@@ -495,50 +526,43 @@ async function getWordsFromMaterial(
       continue;
     }
     
-    if (batchWords) {
-      wordsData.push(...batchWords);
-    }
-  }
+    if (!batchWords || batchWords.length === 0) continue;
 
-  if (wordsData.length === 0) {
-    return { words: [], error: 'Failed to fetch word details' };
-  }
-
-  // Get existing user word statuses for these words in batches
-  const wordIdsToCheck = wordsData.map(w => w.id);
-  const existingStatuses: any[] = [];
-  
-  for (let i = 0; i < wordIdsToCheck.length; i += BATCH_SIZE) {
-    const batch = wordIdsToCheck.slice(i, i + BATCH_SIZE);
+    // 2. Fetch statuses for this batch
+    const batchWordIds = batchWords.map(w => w.id);
     const { data: batchStatuses } = await client
       .from('user_word_statuses')
       .select('*')
       .eq('user_id', userId)
-      .in('word_id', batch);
+      .in('word_id', batchWordIds);
     
+    // Update status map
     if (batchStatuses) {
-      existingStatuses.push(...batchStatuses);
+      for (const status of batchStatuses) {
+        statusMap.set(status.word_id, status);
+      }
     }
+
+    // 3. Filter this batch
+    const filteredBatch = batchWords.filter(word => {
+      // Filter by oxford
+      if (filters?.oxford !== undefined) {
+        if (filters.oxford && word.oxford !== 1) return false;
+        if (!filters.oxford && word.oxford === 1) return false;
+      }
+      // Filter by collins
+      if (filters?.collins && filters.collins.length > 0) {
+        if (!filters.collins.includes(word.collins)) return false;
+      }
+      return true;
+    });
+
+    validWords.push(...filteredBatch);
   }
 
-  const statusMap = new Map<string, any>();
-  for (const status of existingStatuses) {
-    statusMap.set(status.word_id, status);
+  if (validWords.length === 0) {
+    return { words: [], error: 'No words available for learning in this material' };
   }
-
-  // Apply filters and build result
-  let filteredWords = wordsData.filter(word => {
-    // Filter by oxford
-    if (filters?.oxford !== undefined) {
-      if (filters.oxford && word.oxford !== 1) return false;
-      if (!filters.oxford && word.oxford === 1) return false;
-    }
-    // Filter by collins
-    if (filters?.collins && filters.collins.length > 0) {
-      if (!filters.collins.includes(word.collins)) return false;
-    }
-    return true;
-  });
 
   // Sort: prioritize words that user hasn't seen before (for pre-learning before dictation)
   // Priority order:
@@ -550,7 +574,7 @@ async function getWordsFromMaterial(
   // 6. Mastered words - lowest priority
   const now = new Date().toISOString();
   
-  filteredWords.sort((a, b) => {
+  validWords.sort((a, b) => {
     const statusA = statusMap.get(a.id);
     const statusB = statusMap.get(b.id);
     
@@ -589,7 +613,7 @@ async function getWordsFromMaterial(
   });
 
   // Take only the required limit (excluding mastered words unless we need them)
-  const nonMasteredWords = filteredWords.filter(w => {
+  const nonMasteredWords = validWords.filter(w => {
     const status = statusMap.get(w.id);
     return !status || status.status !== 'MASTERED';
   });

@@ -36,7 +36,6 @@ export interface VocabFilterState {
   statusFilter: string[]
   collinsFilter: number[]
   oxfordFilter: boolean | undefined
-  showMastered: boolean
   frequencyRange: [number, number] | undefined
   materialFilter?: string // Single material filter (for backward compatibility)
   materialFilters?: string[] // Multi-select material filters
@@ -309,10 +308,6 @@ export function VocabFilterDrawer({
     }
   }
 
-  const handleShowMasteredChange = (checked: boolean) => {
-    setLocalFilters({ ...localFilters, showMastered: checked })
-  }
-
   const handleLearningStateToggle = (state: number) => {
     const currentStates = localFilters.learningStateFilter || []
     const newStates = currentStates.includes(state)
@@ -351,7 +346,6 @@ export function VocabFilterDrawer({
       statusFilter: [],
       collinsFilter: [],
       oxfordFilter: undefined,
-      showMastered: false,
       frequencyRange: undefined,
       materialFilter: undefined,
       materialFilters: [],
@@ -370,7 +364,6 @@ export function VocabFilterDrawer({
     filters.statusFilter.length + 
     filters.collinsFilter.length + 
     (filters.oxfordFilter !== undefined ? 1 : 0) +
-    (filters.showMastered ? 1 : 0) +
     (filters.frequencyRange ? 1 : 0) +
     (filters.learningStateFilter?.length || 0) +
     (filters.dueFilter ? 1 : 0) +
@@ -380,7 +373,7 @@ export function VocabFilterDrawer({
 
   // Count for each section
   const dictionaryTagsCount = filters.collinsFilter.length + (filters.oxfordFilter !== undefined ? 1 : 0)
-  const advancedCount = (filters.frequencyRange ? 1 : 0) + (filters.showMastered ? 1 : 0)
+  const advancedCount = (filters.frequencyRange ? 1 : 0)
 
   return (
     <Sheet open={open} onOpenChange={setOpen}>
@@ -632,16 +625,6 @@ export function VocabFilterDrawer({
                     </div>
                   )}
                 </div>
-
-                {/* Show Mastered Toggle */}
-                <div className="flex items-center justify-between">
-                  <Label className="text-xs text-muted-foreground">Show Mastered</Label>
-                  <Switch
-                    checked={localFilters.showMastered}
-                    onCheckedChange={handleShowMasteredChange}
-                    className="scale-75"
-                  />
-                </div>
               </CollapsibleContent>
             </Collapsible>
           </div>
@@ -704,15 +687,6 @@ export function FilterChips({ filters, onRemoveFilter, materials = [] }: FilterC
       key: 'oxford-exclude',
       label: '¬Oxford',
       type: 'oxford',
-    })
-  }
-
-  // Show mastered chip
-  if (filters.showMastered) {
-    chips.push({
-      key: 'show-mastered',
-      label: '+Mastered',
-      type: 'showMastered',
     })
   }
 
