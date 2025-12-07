@@ -92,8 +92,11 @@ export async function getWordsForLearning(limit: number = 20, filters?: Learning
   }
   
   // Normal flow: get words from user's vocabulary that need learning
-  // First, get words that are due for review (fsrs_due <= now)
-  // These should be prioritized over new words
+  // We want a mix of reviews and new words.
+  // Strategy: Try to get at least 20% new words if available.
+  const minNewWords = Math.ceil(limit * 0.2);
+  
+  // 1. Get words that are due for review (fsrs_due <= now)
   let dueQuery = client
     .from('user_word_statuses')
     .select(`
@@ -124,7 +127,7 @@ export async function getWordsForLearning(limit: number = 20, filters?: Learning
     .in('status', ['NEW', 'LEARNING'])
     .lte('fsrs_due', now)
     .order('fsrs_due', { ascending: true })
-    .limit(limit);
+    .limit(limit); // Fetch up to limit, we'll slice later
 
   const { data: dueWords, error: dueError } = await dueQuery;
   
@@ -132,51 +135,77 @@ export async function getWordsForLearning(limit: number = 20, filters?: Learning
     console.error('[getWordsForLearning] Error fetching due words:', dueError);
   }
   
-  let allWords = dueWords || [];
+  const availableDueWords = dueWords || [];
   
-  // If we need more words, get new words (fsrs_due is null)
-  if (allWords.length < limit) {
-    const remaining = limit - allWords.length;
-    
-    let newQuery = client
-      .from('user_word_statuses')
-      .select(`
+  // 2. Get new words (fsrs_due is null)
+  let newQuery = client
+    .from('user_word_statuses')
+    .select(`
+      id,
+      word_id,
+      status,
+      fsrs_due,
+      fsrs_stability,
+      fsrs_difficulty,
+      fsrs_reps,
+      fsrs_lapses,
+      fsrs_state,
+      error_count,
+      words:word_id (
         id,
-        word_id,
-        status,
-        fsrs_due,
-        fsrs_stability,
-        fsrs_difficulty,
-        fsrs_reps,
-        fsrs_lapses,
-        fsrs_state,
-        error_count,
-        words:word_id (
-          id,
-          text,
-          phonetic,
-          translation,
-          definition,
-          pos,
-          exchange,
-          oxford,
-          collins,
-          deleted_at
-        )
-      `)
-      .eq('user_id', session.user.id)
-      .in('status', ['NEW', 'LEARNING'])
-      .is('fsrs_due', null)
-      .limit(remaining * 2); // Fetch extra for filtering
+        text,
+        phonetic,
+        translation,
+        definition,
+        pos,
+        exchange,
+        oxford,
+        collins,
+        deleted_at
+      )
+    `)
+    .eq('user_id', session.user.id)
+    .in('status', ['NEW', 'LEARNING'])
+    .is('fsrs_due', null)
+    .limit(limit); // Fetch up to limit
 
-    const { data: newWords, error: newError } = await newQuery;
+  const { data: newWords, error: newError } = await newQuery;
+  
+  if (newError) {
+    console.error('[getWordsForLearning] Error fetching new words:', newError);
+  }
+  
+  const availableNewWords = newWords || [];
+
+  // 3. Combine them with the mix strategy
+  let allWords: any[] = [];
+  
+  // If we have enough due words to fill (limit - minNewWords)
+  // and we have enough new words to fill minNewWords
+  const targetDueCount = Math.max(0, limit - minNewWords);
+  
+  // Take due words
+  const dueToTake = availableDueWords.slice(0, targetDueCount);
+  allWords = [...dueToTake];
+  
+  // Take new words
+  const newToTake = availableNewWords.slice(0, minNewWords);
+  allWords = [...allWords, ...newToTake];
+  
+  // Fill remaining space
+  const remainingSpace = limit - allWords.length;
+  if (remainingSpace > 0) {
+    // Try to fill with more due words first (if we skipped some)
+    const remainingDue = availableDueWords.slice(targetDueCount);
+    const moreDue = remainingDue.slice(0, remainingSpace);
+    allWords = [...allWords, ...moreDue];
     
-    if (newError) {
-      console.error('[getWordsForLearning] Error fetching new words:', newError);
-    }
-    
-    if (newWords) {
-      allWords = [...allWords, ...newWords];
+    // If still space, try to fill with more new words
+    const stillRemaining = limit - allWords.length;
+    if (stillRemaining > 0) {
+      const remainingNew = availableNewWords.slice(minNewWords);
+      const moreNew = remainingNew.slice(0, stillRemaining);
+      allWords = [...allWords, ...moreNew];
     }
   }
 
@@ -630,7 +659,7 @@ async function getWordsFromMaterial(
 export async function getRandomWords(
   excludeWordIds: string[], 
   count: number = 3
-): Promise<{ words: { id: string; text: string }[], error?: string }> {
+): Promise<{ words: { id: string; text: string; translation: string | null; definition: string | null }[], error?: string }> {
   const session = await auth();
   if (!session?.user?.id) return { words: [], error: 'Unauthorized' };
 
@@ -639,7 +668,7 @@ export async function getRandomWords(
   // Get random words excluding the correct answer
   const { data: words, error } = await client
     .from('words')
-    .select('id, text')
+    .select('id, text, translation, definition')
     .not('id', 'in', `(${excludeWordIds.join(',')})`)
     .is('deleted_at', null)
     .limit(100);
@@ -860,7 +889,7 @@ export async function markAsMastered(userWordStatusId: string): Promise<ReviewRe
 /**
  * Get learning statistics
  */
-export async function getLearningStats(materialId?: string): Promise<{
+export async function getLearningStats(materialId?: string, dictionaryId?: string): Promise<{
   totalNew: number;
   totalLearning: number;
   totalMastered: number;
@@ -874,8 +903,8 @@ export async function getLearningStats(materialId?: string): Promise<{
 
   const client = supabaseAdmin || supabase;
 
-  // If materialId is provided, get stats only for words from that material
-  let wordIdsInMaterial: Set<string> | null = null;
+  // If materialId or dictionaryId is provided, get stats only for words from that scope
+  let wordIdsInScope: Set<string> | null = null;
   
   if (materialId) {
     // Get sentences from material
@@ -890,7 +919,7 @@ export async function getLearningStats(materialId?: string): Promise<{
       
       // Get word occurrences in batches
       const BATCH_SIZE = 50;
-      wordIdsInMaterial = new Set<string>();
+      wordIdsInScope = new Set<string>();
       
       for (let i = 0; i < sentenceIds.length; i += BATCH_SIZE) {
         const batch = sentenceIds.slice(i, i + BATCH_SIZE);
@@ -901,13 +930,25 @@ export async function getLearningStats(materialId?: string): Promise<{
         
         if (occurrences) {
           for (const occ of occurrences) {
-            wordIdsInMaterial.add(occ.word_id);
+            wordIdsInScope.add(occ.word_id);
           }
         }
       }
     }
     
-    if (!wordIdsInMaterial || wordIdsInMaterial.size === 0) {
+    if (!wordIdsInScope || wordIdsInScope.size === 0) {
+      return { totalNew: 0, totalLearning: 0, totalMastered: 0, dueToday: 0 };
+    }
+  } else if (dictionaryId) {
+    // Get words from dictionary
+    const dictionaryWords = await prisma.dictionaryWord.findMany({
+      where: { dictionaryId },
+      select: { wordId: true }
+    });
+    
+    if (dictionaryWords.length > 0) {
+      wordIdsInScope = new Set(dictionaryWords.map(dw => dw.wordId));
+    } else {
       return { totalNew: 0, totalLearning: 0, totalMastered: 0, dueToday: 0 };
     }
   }
@@ -922,11 +963,11 @@ export async function getLearningStats(materialId?: string): Promise<{
     return { totalNew: 0, totalLearning: 0, totalMastered: 0, dueToday: 0, error: countError.message };
   }
 
-  // Filter by material if needed
+  // Filter by scope if needed
   let filteredStatuses = statusCounts || [];
-  if (wordIdsInMaterial) {
+  if (wordIdsInScope) {
     filteredStatuses = filteredStatuses.filter((ws: { word_id: string }) => 
-      wordIdsInMaterial!.has(ws.word_id)
+      wordIdsInScope!.has(ws.word_id)
     );
   }
 
@@ -939,10 +980,10 @@ export async function getLearningStats(materialId?: string): Promise<{
   const today = new Date();
   today.setHours(23, 59, 59, 999);
 
-  // For material-filtered stats, we need to count from the filtered data
+  // For scope-filtered stats, we need to count from the filtered data
   let dueCount = 0;
-  if (wordIdsInMaterial) {
-    // Get all statuses for words in material that are due
+  if (wordIdsInScope) {
+    // Get all statuses for words in scope that are due
     const { data: dueStatuses } = await client
       .from('user_word_statuses')
       .select('word_id')
@@ -952,13 +993,13 @@ export async function getLearningStats(materialId?: string): Promise<{
     
     if (dueStatuses) {
       dueCount = dueStatuses.filter((ws: { word_id: string }) => 
-        wordIdsInMaterial!.has(ws.word_id)
+        wordIdsInScope!.has(ws.word_id)
       ).length;
     }
     
-    // Also count words in material that don't have a status yet (truly new)
+    // Also count words in scope that don't have a status yet (truly new)
     const wordIdsWithStatus = new Set(filteredStatuses.map((ws: { word_id: string }) => ws.word_id));
-    const newWordsWithoutStatus = Array.from(wordIdsInMaterial).filter(id => !wordIdsWithStatus.has(id)).length;
+    const newWordsWithoutStatus = Array.from(wordIdsInScope).filter(id => !wordIdsWithStatus.has(id)).length;
     
     // Add unseen words to NEW count and dueToday
     counts['NEW'] = (counts['NEW'] || 0) + newWordsWithoutStatus;

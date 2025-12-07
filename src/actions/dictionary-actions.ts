@@ -184,6 +184,7 @@ export async function addWordToDictionaryByText(dictionaryId: string, text: stri
     } else {
         const newWord = await prisma.word.create({
           data: {
+            id: randomUUID(),
             text: result.word.text,
             phonetic: result.word.phonetic,
             definition: result.word.definition,
@@ -551,15 +552,39 @@ export async function getDictionariesPaginated(
             };
         }
 
-        const [total, dictionaries] = await Promise.all([
-            prisma.dictionary.count({ where }),
-            prisma.dictionary.findMany({
+        // Determine if we can sort in database
+        const dbSortFields = ['name', 'createdAt', 'updatedAt'];
+        const isDbSort = dbSortFields.includes(sortBy);
+
+        let dictionaries;
+        let total;
+
+        if (isDbSort) {
+            [total, dictionaries] = await Promise.all([
+                prisma.dictionary.count({ where }),
+                prisma.dictionary.findMany({
+                    where,
+                    skip,
+                    take: pageSize,
+                    orderBy: {
+                        [sortBy]: sortOrder,
+                    },
+                    include: {
+                        _count: {
+                            select: { words: true },
+                        },
+                        words: {
+                            select: {
+                                wordId: true
+                            }
+                        }
+                    },
+                })
+            ]);
+        } else {
+            // Fetch all for in-memory sorting
+            dictionaries = await prisma.dictionary.findMany({
                 where,
-                skip,
-                take: pageSize,
-                orderBy: {
-                    [sortBy]: sortOrder,
-                },
                 include: {
                     _count: {
                         select: { words: true },
@@ -570,11 +595,11 @@ export async function getDictionariesPaginated(
                         }
                     }
                 },
-            })
-        ]);
+            });
+            total = dictionaries.length;
+        }
 
-        // Fetch stats only for the fetched dictionaries
-        // We need all word IDs from these dictionaries to fetch statuses
+        // Fetch stats for the dictionaries (either page or all)
         const allWordIds = new Set<string>();
         dictionaries.forEach(d => {
             d.words.forEach(w => allWordIds.add(w.wordId));
@@ -597,7 +622,7 @@ export async function getDictionariesPaginated(
 
         const statusMap = new Map(userWordStatuses.map(s => [s.wordId, s]));
 
-        const data = dictionaries.map(dict => {
+        let data = dictionaries.map(dict => {
             const wordIds = dict.words.map(w => w.wordId);
             const totalWords = wordIds.length;
             
@@ -628,6 +653,26 @@ export async function getDictionariesPaginated(
                 accuracy
             };
         });
+
+        if (!isDbSort) {
+            // Sort in memory
+            data.sort((a, b) => {
+                const valA = a[sortBy as keyof typeof a];
+                const valB = b[sortBy as keyof typeof b];
+                
+                // Handle potential undefined/null
+                if (valA === valB) return 0;
+                if (valA === null || valA === undefined) return 1;
+                if (valB === null || valB === undefined) return -1;
+
+                if (valA < valB) return sortOrder === 'asc' ? -1 : 1;
+                if (valA > valB) return sortOrder === 'asc' ? 1 : -1;
+                return 0;
+            });
+            
+            // Paginate
+            data = data.slice(skip, skip + pageSize);
+        }
 
         return {
             data,

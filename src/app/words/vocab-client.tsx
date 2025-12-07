@@ -24,7 +24,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Button } from "@/components/ui/button"
-import { SlidersHorizontal, Loader2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Trash2, ChevronDown, ArrowUp, ArrowDown, ArrowUpDown, Pencil, Trophy } from "lucide-react"
+import { SlidersHorizontal, Loader2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Trash2, ChevronDown, ArrowUp, ArrowDown, ArrowUpDown, Pencil, Trophy, Link2 } from "lucide-react"
 import { WordDetailSheet } from "./word-detail-sheet"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
@@ -62,7 +62,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { getVocabPaginated, VocabFilters, PaginatedVocabResult } from "@/actions/vocab-actions"
-import { updateWordsStatus, deleteWords, editWord } from "@/actions/word-actions"
+import { updateWordsStatus, deleteWords, editWord, addWordRelation } from "@/actions/word-actions"
 import { addWordToDictionaryByText, getDictionaries } from "@/actions/dictionary-actions"
 import { useDebounce } from "@/hooks/use-debounce"
 import { toast } from "sonner"
@@ -175,6 +175,11 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
   const [isAddToDictionaryOpen, setIsAddToDictionaryOpen] = useState(false)
   const [availableDictionaries, setAvailableDictionaries] = useState<{ id: string; name: string }[]>([])
   const [selectedDictionaryId, setSelectedDictionaryId] = useState<string>("")
+  
+  // Add synonym dialog state
+  const [addSynonymWord, setAddSynonymWord] = useState<{ id: string; text: string } | null>(null)
+  const [isAddSynonymOpen, setIsAddSynonymOpen] = useState(false)
+  const [newSynonymText, setNewSynonymText] = useState("")
   
   const debouncedSearch = useDebounce(search, 300)
 
@@ -527,6 +532,36 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
     })
   }
 
+  // Handle context menu - open add synonym dialog
+  const handleContextAddSynonym = (word: { id: string; text: string }) => {
+    setAddSynonymWord(word)
+    setNewSynonymText("")
+    setIsAddSynonymOpen(true)
+  }
+
+  // Handle add synonym submit
+  const handleAddSynonymSubmit = async () => {
+    if (!addSynonymWord || !newSynonymText.trim()) return
+
+    startTransition(async () => {
+      try {
+        const result = await addWordRelation(addSynonymWord.id, newSynonymText.trim(), 'SYNONYM', dictionaryId)
+        if (result?.error) {
+          toast.error(result.error)
+          return
+        }
+        toast.success(`Added synonym "${newSynonymText.trim()}" to "${addSynonymWord.text}"`)
+        setNewSynonymText("") // Clear input to allow adding another
+        // Do NOT close dialog to allow adding multiple
+        
+        // Refresh list to show the new word if it was added
+        fetchData(page)
+      } catch (error) {
+        toast.error('Failed to add synonym')
+      }
+    })
+  }
+
   // Handle column visibility change with persistence
   const handleColumnVisibilityChange = async (columnId: string, isVisible: boolean) => {
     setColumnVisibility(prev => {
@@ -735,6 +770,16 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
                       <ContextMenuItem
                         onClick={(e) => {
                           e.stopPropagation()
+                          handleContextAddSynonym({ id: row.original.id, text: row.original.text })
+                        }}
+                        disabled={isPending}
+                      >
+                        <Link2 className="mr-2 h-4 w-4" />
+                        Add Synonym
+                      </ContextMenuItem>
+                      <ContextMenuItem
+                        onClick={(e) => {
+                          e.stopPropagation()
                           handleContextAddToDictionary({ id: row.original.id, text: row.original.text })
                         }}
                         disabled={isPending}
@@ -847,6 +892,7 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
               word={selectedWord} 
               open={!!selectedWord} 
               onOpenChange={(open) => !open && setSelectedWord(null)} 
+              dictionaryId={dictionaryId}
           />
       )}
 
@@ -907,6 +953,62 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
                 </>
               ) : (
                 'Save Changes'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Synonym Dialog */}
+      <Dialog open={isAddSynonymOpen} onOpenChange={setIsAddSynonymOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Add Synonym</DialogTitle>
+            <DialogDescription>
+              Add a synonym for "{addSynonymWord?.text}". This will also add the synonym to your word list.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="synonym-word" className="text-right">
+                Synonym
+              </Label>
+              <Input
+                id="synonym-word"
+                value={newSynonymText}
+                onChange={(e) => setNewSynonymText(e.target.value)}
+                className="col-span-3"
+                placeholder="Enter synonym"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    handleAddSynonymSubmit()
+                  }
+                }}
+                autoFocus
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsAddSynonymOpen(false)
+                setAddSynonymWord(null)
+                setNewSynonymText("")
+              }}
+              disabled={isPending}
+            >
+              Done
+            </Button>
+            <Button onClick={handleAddSynonymSubmit} disabled={isPending || !newSynonymText.trim()}>
+              {isPending ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Adding...
+                </>
+              ) : (
+                'Add & Keep Open'
               )}
             </Button>
           </DialogFooter>

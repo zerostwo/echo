@@ -11,25 +11,35 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useEffect, useState, useRef } from "react"
-import { getWordContext } from "@/actions/word-actions"
-import { Loader2, Volume2, Play, Pause, ExternalLink, X } from "lucide-react"
+import { getWordContext, getWordRelations, addWordRelation, removeWordRelation } from "@/actions/word-actions"
+import { Loader2, Volume2, Play, Pause, ExternalLink, X, Plus } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import Link from "next/link"
 import { parsePos, parseExchange, parseTags, getAllWordForms, createWordFormsRegex } from "@/lib/vocab-utils"
 import { useUserSettings } from "@/components/user-settings-provider"
+import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 interface WordDetailSheetProps {
     word: any
     open: boolean
     onOpenChange: (open: boolean) => void
+    dictionaryId?: string
 }
 
-export function WordDetailSheet({ word, open, onOpenChange }: WordDetailSheetProps) {
+export function WordDetailSheet({ word, open, onOpenChange, dictionaryId }: WordDetailSheetProps) {
     const { pronunciationAccent } = useUserSettings();
     const [occurrences, setOccurrences] = useState<any[]>([]);
     const [loadingCtx, setLoadingCtx] = useState(false);
     const [playingSentenceId, setPlayingSentenceId] = useState<string | null>(null);
     const [isPlayingWord, setIsPlayingWord] = useState(false);
+    
+    // Relations state
+    const [relations, setRelations] = useState<any[]>([]);
+    const [loadingRelations, setLoadingRelations] = useState(false);
+    const [newRelationText, setNewRelationText] = useState("");
+    const [newRelationType, setNewRelationType] = useState("SYNONYM");
+    const [isAddingRelation, setIsAddingRelation] = useState(false);
     
     const sentenceAudioRef = useRef<HTMLAudioElement>(null);
     const youdaoAudioRef = useRef<HTMLAudioElement>(null);
@@ -44,12 +54,50 @@ export function WordDetailSheet({ word, open, onOpenChange }: WordDetailSheetPro
                     }
                 })
                 .finally(() => setLoadingCtx(false));
+                
+            setLoadingRelations(true);
+            getWordRelations(word.id)
+                .then(res => {
+                    if (res.relations) {
+                        setRelations(res.relations);
+                    }
+                })
+                .finally(() => setLoadingRelations(false));
         } else {
             setOccurrences([]);
+            setRelations([]);
             setPlayingSentenceId(null);
             setIsPlayingWord(false);
         }
     }, [open, word?.id]);
+
+    const handleAddRelation = async () => {
+        if (!newRelationText.trim() || !word?.id) return;
+        
+        setIsAddingRelation(true);
+        try {
+            const result = await addWordRelation(word.id, newRelationText.trim(), newRelationType, dictionaryId);
+            if (result.success) {
+                setNewRelationText("");
+                // Refresh relations
+                const res = await getWordRelations(word.id);
+                if (res.relations) setRelations(res.relations);
+            }
+        } catch (e) {
+            console.error(e);
+        } finally {
+            setIsAddingRelation(false);
+        }
+    };
+
+    const handleRemoveRelation = async (id: string) => {
+        try {
+            await removeWordRelation(id);
+            setRelations(prev => prev.filter(r => r.id !== id));
+        } catch (e) {
+            console.error(e);
+        }
+    };
 
     // Handle sentence audio playback
     const handlePlaySentence = (sentence: any) => {
@@ -262,6 +310,77 @@ export function WordDetailSheet({ word, open, onOpenChange }: WordDetailSheetPro
                                     </div>
                                 </div>
                             )}
+
+                            {/* Relations Section */}
+                            <div className="space-y-3 border-t pt-6">
+                                <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider border-l-4 border-primary/20 pl-3">Relations</h3>
+                                <div className="pl-4 space-y-4">
+                                    {/* List existing relations */}
+                                    {loadingRelations ? (
+                                        <div className="flex items-center text-sm text-muted-foreground">
+                                            <Loader2 className="h-3 w-3 mr-2 animate-spin" />
+                                            Loading relations...
+                                        </div>
+                                    ) : relations.length > 0 ? (
+                                        <div className="flex flex-wrap gap-2">
+                                            {relations.map(rel => {
+                                                const type = rel.relationType || rel.relation_type;
+                                                const text = rel.customText || rel.custom_text || rel.relatedWord?.text;
+                                                
+                                                return (
+                                                <Badge key={rel.id} variant="outline" className="pl-2 pr-1 py-1 flex items-center gap-1">
+                                                    <span className="text-[10px] font-bold text-muted-foreground mr-1 bg-muted px-1 rounded">
+                                                        {type === 'SYNONYM' ? 'SYN' : 
+                                                         type === 'ANTONYM' ? 'ANT' : 
+                                                         type === 'IDIOM' ? 'IDM' : (type ? type.substring(0, 3) : '???')}
+                                                    </span>
+                                                    <span>{text}</span>
+                                                    <Button 
+                                                        variant="ghost" 
+                                                        size="icon" 
+                                                        className="h-4 w-4 ml-1 hover:bg-destructive/20 hover:text-destructive rounded-full"
+                                                        onClick={() => handleRemoveRelation(rel.id)}
+                                                    >
+                                                        <X className="h-3 w-3" />
+                                                    </Button>
+                                                </Badge>
+                                            )})}
+                                        </div>
+                                    ) : (
+                                        <p className="text-sm text-muted-foreground italic">No relations added yet.</p>
+                                    )}
+
+                                    {/* Add new relation form */}
+                                    <div className="flex gap-2 items-center">
+                                        <Select value={newRelationType} onValueChange={setNewRelationType}>
+                                            <SelectTrigger className="w-[110px] h-8 text-xs">
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="SYNONYM">Synonym</SelectItem>
+                                                <SelectItem value="ANTONYM">Antonym</SelectItem>
+                                                <SelectItem value="IDIOM">Idiom</SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                        <Input 
+                                            value={newRelationText}
+                                            onChange={(e) => setNewRelationText(e.target.value)}
+                                            placeholder="Add related word..."
+                                            className="h-8 text-sm"
+                                            onKeyDown={(e) => e.key === 'Enter' && handleAddRelation()}
+                                        />
+                                        <Button 
+                                            size="sm" 
+                                            variant="secondary" 
+                                            className="h-8 px-2"
+                                            onClick={handleAddRelation}
+                                            disabled={!newRelationText.trim() || isAddingRelation}
+                                        >
+                                            {isAddingRelation ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-4 w-4" />}
+                                        </Button>
+                                    </div>
+                                </div>
+                            </div>
 
                             {/* Context Sentences */}
                             <div className="space-y-3 border-t pt-6">

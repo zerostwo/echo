@@ -484,7 +484,7 @@ export async function editWord(wordId: string, newWordText: string) {
         // Prepare update data
         const updateData: Record<string, any> = {
             text: normalizedWord,
-            updated_at: new Date().toISOString(),
+            // updated_at removed as it's not in schema
         };
 
         // If dictionary data is found, update all word metadata
@@ -531,4 +531,306 @@ export async function editWord(wordId: string, newWordText: string) {
         console.error('Failed to edit word:', e);
         return { error: 'Failed to edit word' };
     }
+}
+
+export async function addWordRelation(wordId: string, relatedText: string, type: string, dictionaryId?: string) {
+    const session = await auth();
+    if (!session?.user?.id) return { error: 'Unauthorized' };
+
+    const client = supabaseAdmin || supabase;
+    const normalizedText = relatedText.toLowerCase().trim();
+
+    if (!normalizedText) return { error: 'Related text cannot be empty' };
+
+    // 1. Check if the related word exists in the database
+    let relatedWordId: string | null = null;
+    
+    const { data: existingWord } = await client
+        .from('words')
+        .select('id')
+        .eq('text', normalizedText)
+        .is('deleted_at', null)
+        .single();
+
+    if (existingWord) {
+        relatedWordId = existingWord.id;
+    } else {
+        // 2. If not exists, create it
+        // Query dictionary first to get metadata
+        const dictResults = await queryDictionary([normalizedText]);
+        const dictData = dictResults[normalizedText];
+        
+        const newWordData: any = {
+            id: crypto.randomUUID(),
+            text: normalizedText,
+            // updated_at removed as it's not in schema
+        };
+        
+        if (dictData) {
+            newWordData.phonetic = dictData.phonetic || null;
+            newWordData.definition = dictData.definition || null;
+            newWordData.translation = dictData.translation || null;
+            newWordData.pos = dictData.pos || null;
+            newWordData.collins = dictData.collins ? Number(dictData.collins) : null;
+            newWordData.oxford = dictData.oxford ? Number(dictData.oxford) : null;
+            newWordData.tag = dictData.tag || null;
+            newWordData.bnc = dictData.bnc ? Number(dictData.bnc) : null;
+            newWordData.frq = dictData.frq ? Number(dictData.frq) : null;
+            newWordData.exchange = dictData.exchange || null;
+            newWordData.audio = dictData.audio || null;
+            newWordData.detail = dictData.detail ? JSON.stringify(dictData.detail) : null;
+        }
+        
+        const { data: newWord, error: createError } = await client
+            .from('words')
+            .insert(newWordData)
+            .select('id')
+            .single();
+            
+        if (createError) {
+            console.error('Failed to create related word:', createError);
+            // Try to find it again in case of race condition
+            const { data: retryWord } = await client
+                .from('words')
+                .select('id')
+                .eq('text', normalizedText)
+                .single();
+            if (retryWord) relatedWordId = retryWord.id;
+            else return { error: 'Failed to create related word' };
+        } else {
+            relatedWordId = newWord.id;
+        }
+    }
+
+    if (!relatedWordId) return { error: 'Failed to resolve related word' };
+
+    // 3. Ensure the user has the RELATED word in their list (UserWordStatus)
+    // This addresses "change should be added to my word list"
+    const { data: existingStatus } = await client
+        .from('user_word_statuses')
+        .select('id')
+        .eq('user_id', session.user.id)
+        .eq('word_id', relatedWordId)
+        .single();
+        
+    if (!existingStatus) {
+        await client
+            .from('user_word_statuses')
+            .insert({
+                id: crypto.randomUUID(),
+                user_id: session.user.id,
+                word_id: relatedWordId,
+                status: 'NEW', // Default status
+                updated_at: new Date().toISOString()
+            });
+    }
+
+    // 3.5 Add to dictionary if dictionaryId is provided
+    if (dictionaryId) {
+        try {
+            // Check if already in dictionary
+            const { data: existingDictWord } = await client
+                .from('dictionary_words')
+                .select('word_id')
+                .eq('dictionary_id', dictionaryId)
+                .eq('word_id', relatedWordId)
+                .single();
+
+            if (!existingDictWord) {
+                await client
+                    .from('dictionary_words')
+                    .insert({
+                        dictionary_id: dictionaryId,
+                        word_id: relatedWordId,
+                        added_at: new Date().toISOString()
+                    });
+            }
+        } catch (e) {
+            console.error('Failed to add related word to dictionary:', e);
+            // Don't fail the whole operation
+        }
+    }
+
+    // 4. Create the relation (Forward)
+    // Check if exists first
+    const { data: existingRelation } = await client
+        .from('word_relations')
+        .select('id')
+        .eq('word_id', wordId)
+        .eq('related_word_id', relatedWordId)
+        .eq('relation_type', type)
+        .single();
+
+    if (!existingRelation) {
+        const relationData = {
+            id: crypto.randomUUID(),
+            word_id: wordId,
+            relation_type: type,
+            custom_text: normalizedText,
+            related_word_id: relatedWordId,
+        };
+
+        const { error } = await client
+            .from('word_relations')
+            .insert(relationData);
+
+        if (error) {
+            console.error('Failed to add word relation:', error);
+            return { error: 'Failed to add word relation' };
+        }
+    }
+
+    // 5. Create reverse relation (Bidirectional)
+    // This addresses "change's relationship should also show adjust"
+    if (type === 'SYNONYM' || type === 'ANTONYM') {
+        try {
+            // Check if reverse relation already exists
+            const { data: existingReverse } = await client
+                .from('word_relations')
+                .select('id')
+                .eq('word_id', relatedWordId)
+                .eq('related_word_id', wordId)
+                .eq('relation_type', type)
+                .single();
+
+            if (!existingReverse) {
+                // Get original word text for custom_text
+                const { data: originalWord } = await client
+                    .from('words')
+                    .select('text')
+                    .eq('id', wordId)
+                    .single();
+
+                if (originalWord) {
+                    await client
+                        .from('word_relations')
+                        .insert({
+                            id: crypto.randomUUID(),
+                            word_id: relatedWordId,
+                            relation_type: type,
+                            custom_text: originalWord.text,
+                            related_word_id: wordId,
+                        });
+                }
+            }
+        } catch (e) {
+            console.error('Failed to create reverse relation:', e);
+            // Don't fail the whole operation if reverse relation fails
+        }
+    }
+
+    // 6. Transitive Synonyms Logic
+    // If A is synonym of B, and B is synonym of C, then A, B, C should all be synonyms
+    if (type === 'SYNONYM') {
+        try {
+            // Collect all unique word IDs in the synonym group
+            const groupIds = new Set<string>();
+            groupIds.add(wordId);
+            groupIds.add(relatedWordId);
+            
+            // Get existing synonyms for both words to build the full group
+            // We look for any synonym relation involving either word
+            const { data: existingRelations } = await client
+                .from('word_relations')
+                .select('word_id, related_word_id')
+                .in('word_id', [wordId, relatedWordId])
+                .eq('relation_type', 'SYNONYM');
+                
+            existingRelations?.forEach(r => {
+                if (r.related_word_id) groupIds.add(r.related_word_id);
+            });
+
+            const groupArray = Array.from(groupIds);
+
+            // Fetch texts for all words in the group
+            const { data: wordsInGroup } = await client
+                .from('words')
+                .select('id, text')
+                .in('id', groupArray);
+            
+            const wordMap = new Map(wordsInGroup?.map(w => [w.id, w.text]));
+
+            // Fetch ALL existing relations within this group to avoid duplicates
+            const { data: currentGroupRelations } = await client
+                .from('word_relations')
+                .select('word_id, related_word_id')
+                .in('word_id', groupArray)
+                .eq('relation_type', 'SYNONYM');
+            
+            const existingRelSet = new Set(
+                currentGroupRelations?.map(r => `${r.word_id}:${r.related_word_id}`)
+            );
+
+            const inserts = [];
+            for (const id1 of groupArray) {
+                for (const id2 of groupArray) {
+                    if (id1 === id2) continue;
+                    if (!existingRelSet.has(`${id1}:${id2}`)) {
+                        inserts.push({
+                            id: crypto.randomUUID(),
+                            word_id: id1,
+                            related_word_id: id2,
+                            relation_type: 'SYNONYM',
+                            custom_text: wordMap.get(id2) || '',
+                        });
+                    }
+                }
+            }
+
+            if (inserts.length > 0) {
+                await client.from('word_relations').insert(inserts);
+            }
+
+        } catch (e) {
+            console.error('Failed to sync transitive synonyms:', e);
+        }
+    }
+
+    // Invalidate cache to ensure new words appear in the list
+    await invalidateVocabCache(session.user.id);
+    revalidatePath('/words');
+    
+    return { success: true };
+}
+
+export async function removeWordRelation(relationId: string) {
+    const session = await auth();
+    if (!session?.user?.id) return { error: 'Unauthorized' };
+
+    const client = supabaseAdmin || supabase;
+
+    const { error } = await client
+        .from('word_relations')
+        .delete()
+        .eq('id', relationId);
+
+    if (error) {
+        console.error('Failed to remove word relation:', error);
+        return { error: 'Failed to remove word relation' };
+    }
+
+    revalidatePath('/words');
+    return { success: true };
+}
+
+export async function getWordRelations(wordId: string) {
+    const session = await auth();
+    if (!session?.user?.id) return { error: 'Unauthorized' };
+
+    const client = supabaseAdmin || supabase;
+
+    const { data: relations, error } = await client
+        .from('word_relations')
+        .select(`
+            *,
+            relatedWord:words!related_word_id(*)
+        `)
+        .eq('word_id', wordId);
+
+    if (error) {
+        console.error('Failed to get word relations:', error);
+        return { error: 'Failed to get word relations' };
+    }
+
+    return { relations };
 }

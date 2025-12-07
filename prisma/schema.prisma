@@ -174,6 +174,9 @@ model Word {
   occurrences WordOccurrence[]
   statuses    UserWordStatus[]
   dictionaries DictionaryWord[]
+  
+  relations     WordRelation[] @relation("WordRelations")
+  relatedTo     WordRelation[] @relation("RelatedToWord")
 
   @@map("words")
 }
@@ -332,4 +335,23 @@ model LearningSession {
   @@index([userId, sessionType])
   @@index([userId, startedAt])
   @@map("learning_sessions")
+}
+
+model WordRelation {
+  id          String   @id @default(cuid())
+  wordId      String   @map("word_id")
+  word        Word     @relation("WordRelations", fields: [wordId], references: [id], onDelete: Cascade)
+  
+  relatedWordId String? @map("related_word_id")
+  relatedWord   Word?   @relation("RelatedToWord", fields: [relatedWordId], references: [id])
+  
+  // If the related word is not in our database yet, we can store the text directly
+  customText    String? @map("custom_text")
+  
+  relationType  String   @map("relation_type") // "SYNONYM", "ANTONYM", "IDIOM", etc.
+  
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  
+  @@index([wordId])
+  @@map("word_relations")
 }

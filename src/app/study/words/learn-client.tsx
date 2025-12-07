@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { LearningWord, recordReview, getRandomWords, recordLearningSessionDuration, markAsMastered } from '@/actions/learning-actions';
-import { getWordContext } from '@/actions/word-actions';
+import { getWordContext, getWordRelations } from '@/actions/word-actions';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
@@ -37,6 +37,7 @@ import {
   Pause,
   Headphones,
   CheckCircle2,
+  ArrowUpDown,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -103,6 +104,34 @@ const SHORTCUTS = [
   { key: '?', description: 'Show shortcuts' },
 ];
 
+const formatTranslation = (text: string) => {
+  if (!text) return null;
+  
+  // Split by common parts of speech markers
+  // Matches markers like "n.", "v.", "adj.", "vt.", "vi.", "a.", "adv.", "prep.", "conj.", "pron."
+  // The regex looks for the marker preceded by word boundary and followed by a dot
+  const parts = text.split(/(?=\b(?:n|v|adj|adv|prep|conj|pron|art|num|int|vt|vi|a)\.)/g);
+  
+  // Only show the first part if there are multiple
+  const firstPart = parts.find(p => p.trim().length > 0);
+  
+  if (!firstPart) return (
+    <div className="text-center">
+      <div className="leading-relaxed">
+        {text}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="text-center">
+      <div className="leading-relaxed">
+        {firstPart.trim()}
+      </div>
+    </div>
+  );
+};
+
 export function LearnClient({ initialWords, stats }: LearnClientProps) {
   const { pronunciationAccent, settings, updateSettings } = useUserSettings();
   
@@ -130,9 +159,15 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   
   // Multiple choice state
-  const [options, setOptions] = useState<{ id: string; text: string; isCorrect: boolean }[]>([]);
+  const [options, setOptions] = useState<{ id: string; text: string; isCorrect: boolean; type?: string }[]>([]);
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
+  const [selectedOptions, setSelectedOptions] = useState<string[]>([]); // For multi-select
   const [isLoadingOptions, setIsLoadingOptions] = useState(false);
+  
+  // Choice mode settings
+  const choiceModeDirection = (settings?.choiceModeDirection as 'zh_to_en' | 'en_to_zh') || 'zh_to_en';
+  const [choiceModeType, setChoiceModeType] = useState<'standard' | 'synonym'>('standard');
+  const [noSynonymsFound, setNoSynonymsFound] = useState(false);
   
   // Real-time timer state
   const [elapsedTime, setElapsedTime] = useState(0);
@@ -359,16 +394,83 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
   // Load multiple choice options
   const loadOptions = useCallback(async (word: LearningWord) => {
     setIsLoadingOptions(true);
-    const { words: randomWords } = await getRandomWords([word.wordId], 3);
+    setOptions([]);
+    setSelectedOptions([]);
+    setSelectedOption(null);
+    setNoSynonymsFound(false);
     
-    const allOptions = [
-      { id: word.wordId, text: word.text, isCorrect: true },
-      ...randomWords.map(w => ({ id: w.id, text: w.text, isCorrect: false })),
-    ].sort(() => Math.random() - 0.5);
-    
-    setOptions(allOptions);
-    setIsLoadingOptions(false);
-  }, []);
+    try {
+      if (choiceModeType === 'synonym') {
+        // Synonym mode
+        const { relations } = await getWordRelations(word.wordId);
+        const { words: randomWords } = await getRandomWords([word.wordId], 3);
+        
+        const correctOptions = relations?.map(r => ({
+            id: r.id,
+            text: r.customText || r.relatedWord?.text || 'Unknown',
+            isCorrect: true,
+            type: r.relationType
+        })) || [];
+
+        // If no relations, fallback to standard mode but maybe show a toast?
+        if (correctOptions.length === 0) {
+             setNoSynonymsFound(true);
+             // Fallback to standard mode logic
+             const { words: randomWords } = await getRandomWords([word.wordId], 3);
+             const allOptions = [
+                { id: word.wordId, text: word.text, isCorrect: true },
+                ...randomWords.map(w => ({ id: w.id, text: w.text, isCorrect: false })),
+             ].sort(() => Math.random() - 0.5);
+             setOptions(allOptions);
+        } else {
+            const distractors = randomWords.map(w => ({
+                id: w.id,
+                text: w.text,
+                isCorrect: false,
+                type: 'distractor'
+            }));
+
+            const allOptions = [
+                ...correctOptions,
+                ...distractors
+            ].sort(() => Math.random() - 0.5);
+            
+            setOptions(allOptions);
+        }
+
+      } else {
+        // Standard mode
+        const { words: randomWords } = await getRandomWords([word.wordId], 3);
+        
+        let correctText = word.text;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let distractorText = (w: any) => w.text;
+
+        if (choiceModeDirection === 'en_to_zh') {
+            // Show English, select Chinese
+            correctText = word.translation || word.definition || 'No definition';
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            distractorText = (w: any) => w.translation || w.definition || 'No definition';
+        } else {
+            // Show Chinese, select English (default)
+            correctText = word.text;
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            distractorText = (w: any) => w.text;
+        }
+        
+        const allOptions = [
+          { id: word.wordId, text: correctText, isCorrect: true },
+          ...randomWords.map(w => ({ id: w.id, text: distractorText(w), isCorrect: false })),
+        ].sort(() => Math.random() - 0.5);
+        
+        setOptions(allOptions);
+      }
+    } catch (e) {
+        console.error("Error loading options", e);
+    } finally {
+        setIsLoadingOptions(false);
+    }
+  }, [choiceModeDirection, choiceModeType]);
 
   // Load context sentence for a specific word in context listening mode
   const loadContextForWord = useCallback(async (wordIndex: number) => {
@@ -594,10 +696,10 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
 
   // Initialize options for multiple choice
   useEffect(() => {
-    if (mode === 'multiple_choice' && currentWord && options.length === 0) {
+    if (mode === 'multiple_choice' && currentWord) {
       loadOptions(currentWord);
     }
-  }, [mode, currentWord, options.length, loadOptions]);
+  }, [mode, currentWord, loadOptions]);
 
   // Auto-play pronunciation removed for multiple_choice mode to avoid giving hints
   // Pronunciation is now played after user makes a selection
@@ -660,7 +762,22 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
 
   // Handle multiple choice selection
   const handleOptionSelect = useCallback(async (optionId: string) => {
-    if (!currentWord || selectedOption) return;
+    if (!currentWord) return;
+
+    // Multi-select logic for synonym mode
+    if (choiceModeType === 'synonym' && options.some(o => o.type)) {
+        if (showResult) return;
+        setSelectedOptions(prev => {
+            if (prev.includes(optionId)) {
+                return prev.filter(id => id !== optionId);
+            } else {
+                return [...prev, optionId];
+            }
+        });
+        return;
+    }
+
+    if (selectedOption) return;
 
     setSelectedOption(optionId);
     const correct = optionId === currentWord.wordId;
@@ -705,7 +822,66 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
     } else {
       loadWordContext(currentWord.wordId);
     }
-  }, [currentWord, selectedOption, startTime, nextWord, loadWordContext]);
+  }, [currentWord, selectedOption, startTime, nextWord, loadWordContext, choiceModeType, options, showResult, playPronunciation]);
+
+  // Handle multi-select submit
+  const handleMultiSelectSubmit = useCallback(async () => {
+      if (!currentWord || showResult) return;
+
+      const correctOptionIds = options.filter(o => o.isCorrect).map(o => o.id);
+      const selectedCorrectly = selectedOptions.filter(id => correctOptionIds.includes(id));
+      const selectedIncorrectly = selectedOptions.filter(id => !correctOptionIds.includes(id));
+      
+      // Logic: Must select ALL correct options and NO incorrect options?
+      // Or just at least one correct and no incorrect?
+      // Let's go with: Must select at least one correct, and no incorrect.
+      // Or maybe strict: Select ALL correct options.
+      // Let's be strict for now: Select ALL correct options.
+      
+      const isAllCorrectSelected = correctOptionIds.every(id => selectedOptions.includes(id));
+      const isNoIncorrectSelected = selectedIncorrectly.length === 0;
+      
+      const correct = isAllCorrectSelected && isNoIncorrectSelected && correctOptionIds.length > 0;
+      
+      setIsCorrect(correct);
+      setShowResult(true);
+      
+      // Play pronunciation
+      playPronunciation(currentWord.text);
+
+      const responseTime = Date.now() - startTime;
+
+      // Record review
+      const result = await recordReview({
+        userWordStatusId: currentWord.id,
+        isCorrect: correct,
+        responseTimeMs: responseTime,
+        errorCount: correct ? 0 : 1,
+        mode: 'multiple_choice',
+      });
+
+      if (!result.success) {
+        toast.error('Failed to record review');
+      }
+
+      setSessionStats(prev => ({
+        ...prev,
+        correct: prev.correct + (correct ? 1 : 0),
+        incorrect: prev.incorrect + (correct ? 0 : 1),
+        totalTime: prev.totalTime + responseTime,
+        wordsReviewed: prev.wordsReviewed + 1,
+        wpm: Math.round((prev.wordsReviewed + 1) / ((prev.totalTime + responseTime) / 60000)),
+      }));
+
+      if (correct) {
+        setTimeout(() => {
+          nextWord();
+        }, 1000); // Slower advance for multi-select to see result
+      } else {
+        loadWordContext(currentWord.wordId);
+      }
+  }, [currentWord, showResult, options, selectedOptions, startTime, playPronunciation, nextWord, loadWordContext]);
+
 
   // Handle "I don't know" button
   const handleDontKnow = useCallback(async () => {
@@ -1077,6 +1253,14 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
       {/* Mode Toggle in Header */}
       <HeaderPortal>
         <div className="flex items-center gap-2">
+          <Button 
+            variant="ghost" 
+            size="icon"
+            onClick={() => setShowShortcutsHelp(true)}
+            title="Keyboard shortcuts (?)"
+          >
+            <HelpCircle className="h-4 w-4" />
+          </Button>
           <Tabs value={mode} onValueChange={(value) => handleModeChange(value as LearningMode)}>
             <TabsList className="grid w-full grid-cols-3">
               <TabsTrigger value="typing" className="flex items-center gap-2">
@@ -1093,14 +1277,6 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
               </TabsTrigger>
             </TabsList>
           </Tabs>
-          <Button 
-            variant="ghost" 
-            size="icon"
-            onClick={() => setShowShortcutsHelp(true)}
-            title="Keyboard shortcuts (?)"
-          >
-            <HelpCircle className="h-4 w-4" />
-          </Button>
         </div>
       </HeaderPortal>
       
@@ -1429,7 +1605,17 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
                       mode === 'multiple_choice' && "hidden md:flex"
                     )}>
                       <ScrollArea className="max-h-[80px] md:max-h-[100px]">
-                        {currentWord.translation || currentWord.definition || 'No definition'}
+                        {mode === 'multiple_choice' && choiceModeType === 'synonym' ? (
+                          <div className="text-center">
+                            <div className="leading-relaxed">{currentWord.text}</div>
+                          </div>
+                        ) : (
+                          formatTranslation(
+                            (mode === 'multiple_choice' && choiceModeDirection === 'en_to_zh')
+                              ? currentWord.text
+                              : (currentWord.translation || currentWord.definition || 'No definition')
+                          )
+                        )}
                       </ScrollArea>
                     </div>
                   ) : (
@@ -1490,19 +1676,6 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
                       })}
                     </div>
                   </div>
-
-                  {!showResult && (
-                    <div className="flex justify-center gap-3">
-                      <Button variant="outline" onClick={handleDontKnow} title="I don't know (Ctrl+S)">
-                        <SkipForward className="mr-2 h-4 w-4" />
-                        I don&apos;t know
-                      </Button>
-                      <Button variant="outline" onClick={handleMarkMastered} title="Mark as mastered (Ctrl+M)">
-                        <CheckCircle2 className="mr-2 h-4 w-4" />
-                        Mastered
-                      </Button>
-                    </div>
-                  )}
                 </div>
               ) : (
                 <div className="space-y-2 md:space-y-3">
@@ -1512,66 +1685,99 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
                     </div>
                   ) : (
                     <>
-                      {options.map((option, idx) => (
+                      {options.map((option, idx) => {
+                        // Determine variant based on mode
+                        let variant: "default" | "destructive" | "outline" | "secondary" | "ghost" | "link" | null | undefined = 'outline';
+                        let className = "w-full justify-start text-left h-auto py-2.5 px-3 md:py-3 md:px-4";
+                        
+                        if (choiceModeType === 'synonym') {
+                            const isSelected = selectedOptions.includes(option.id);
+                            if (showResult) {
+                                if (option.isCorrect) {
+                                    variant = 'default'; // Correct answers always green
+                                    className += " bg-green-600 hover:bg-green-600";
+                                } else if (isSelected) {
+                                    variant = 'destructive'; // Wrongly selected
+                                }
+                            } else {
+                                variant = isSelected ? 'secondary' : 'outline';
+                                if (isSelected) className += " border-primary border-2";
+                            }
+                        } else {
+                            // Standard single select
+                            if (selectedOption === option.id) {
+                                variant = option.isCorrect ? 'default' : 'destructive';
+                            } else if (showResult && option.isCorrect) {
+                                variant = 'default';
+                            }
+                            
+                            if (showResult && option.isCorrect) className += " bg-green-600 hover:bg-green-600";
+                            if (selectedOption === option.id && !option.isCorrect) className += " bg-red-600 hover:bg-red-600";
+                        }
+
+                        return (
                         <Button
                           key={option.id}
-                          variant={
-                            selectedOption === option.id
-                              ? option.isCorrect
-                                ? 'default'
-                                : 'destructive'
-                              : showResult && option.isCorrect
-                              ? 'default'
-                              : 'outline'
-                          }
-                          className={cn(
-                            "w-full justify-start text-left h-auto py-2.5 px-3 md:py-3 md:px-4",
-                            showResult && option.isCorrect && "bg-green-600 hover:bg-green-600",
-                            selectedOption === option.id && !option.isCorrect && "bg-red-600 hover:bg-red-600"
-                          )}
+                          variant={variant}
+                          className={className}
                           onClick={() => handleOptionSelect(option.id)}
-                          disabled={!!selectedOption}
+                          disabled={choiceModeType !== 'synonym' && !!selectedOption}
                           title={`Press ${idx + 1} to select`}
                         >
                           <span className="w-5 h-5 md:w-6 md:h-6 rounded-full bg-muted/50 flex items-center justify-center mr-2 md:mr-3 text-xs md:text-sm">
-                            {idx + 1}
+                            {choiceModeType === 'synonym' && selectedOptions.includes(option.id) ? <Check className="h-3 w-3" /> : idx + 1}
                           </span>
                           <span className="font-medium text-sm md:text-base">{option.text}</span>
                           {showResult && option.isCorrect && (
                             <Check className="ml-auto h-4 w-4" />
                           )}
-                          {selectedOption === option.id && !option.isCorrect && (
+                          {showResult && choiceModeType === 'synonym' && selectedOptions.includes(option.id) && !option.isCorrect && (
+                            <X className="ml-auto h-4 w-4" />
+                          )}
+                          {showResult && choiceModeType !== 'synonym' && selectedOption === option.id && !option.isCorrect && (
                             <X className="ml-auto h-4 w-4" />
                           )}
                         </Button>
-                      ))}
+                      )})}
                       
-                      {!showResult && (
-                        <div className="flex gap-2">
-                          <Button
-                            variant="ghost"
-                            className="flex-1 text-muted-foreground"
-                            onClick={handleDontKnow}
-                            title="I don't know (Ctrl+S)"
+                      {choiceModeType === 'synonym' && !showResult && (
+                          <Button 
+                            className="w-full mt-4" 
+                            onClick={handleMultiSelectSubmit} 
+                            disabled={selectedOptions.length === 0}
                           >
-                            I don&apos;t know
+                              Submit Answer
                           </Button>
-                          <Button
-                            variant="ghost"
-                            className="flex-1 text-muted-foreground"
-                            onClick={handleMarkMastered}
-                            title="Mark as mastered (Ctrl+M)"
-                          >
-                            <CheckCircle2 className="mr-2 h-4 w-4" />
-                            Mastered
-                          </Button>
-                        </div>
                       )}
                     </>
                   )}
                 </div>
               )}
             </div>
+
+            {/* Common Buttons for Typing and Choice modes */}
+            {!showResult && (
+              <div className="flex gap-4 w-full mt-6">
+                <Button 
+                  variant="outline" 
+                  onClick={handleDontKnow} 
+                  className="flex-1 h-12 border-muted-foreground/20 hover:border-primary hover:bg-primary/5"
+                  title="I don't know (Ctrl+S)"
+                >
+                  <HelpCircle className="mr-2 h-4 w-4" />
+                  I don&apos;t know
+                </Button>
+                <Button 
+                  variant="outline" 
+                  onClick={handleMarkMastered} 
+                  className="flex-1 h-12 border-muted-foreground/20 hover:border-green-600 hover:bg-green-50 dark:hover:bg-green-950/30"
+                  title="Mark as mastered (Ctrl+M)"
+                >
+                  <CheckCircle2 className="mr-2 h-4 w-4" />
+                  Mastered
+                </Button>
+              </div>
+            )}
 
             {/* Result Feedback */}
             {showResult && (
@@ -1670,19 +1876,43 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
       </div>
 
       {/* Session Stats - Real-time timer */}
-      <div className="flex items-center gap-6 mt-8 text-sm text-muted-foreground">
-        <div className="flex items-center gap-1">
-          <Clock className="h-4 w-4" />
-          <span className="font-mono tabular-nums">{formatTime(elapsedTime)}</span>
+      <div className="flex items-center justify-between mt-8 text-sm text-muted-foreground w-full max-w-2xl">
+        <div className="flex items-center gap-6">
+          <div className="flex items-center gap-1">
+            <Clock className="h-4 w-4" />
+            <span className="font-mono tabular-nums">{formatTime(elapsedTime)}</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="text-green-600">{sessionStats.correct}</span>
+            <span>/</span>
+            <span className="text-red-600">{sessionStats.incorrect}</span>
+          </div>
+          {sessionStats.wordsReviewed > 0 && (
+            <div>
+              {Math.round((sessionStats.correct / sessionStats.wordsReviewed) * 100)}% accuracy
+            </div>
+          )}
         </div>
-        <div className="flex items-center gap-1">
-          <span className="text-green-600">{sessionStats.correct}</span>
-          <span>/</span>
-          <span className="text-red-600">{sessionStats.incorrect}</span>
-        </div>
-        {sessionStats.wordsReviewed > 0 && (
-          <div>
-            {Math.round((sessionStats.correct / sessionStats.wordsReviewed) * 100)}% accuracy
+
+        {/* Choice Mode Toggle */}
+        {!showResult && mode === 'multiple_choice' && (
+          <div className="flex items-center bg-muted/50 rounded-lg p-1">
+            <Button 
+                variant={choiceModeType === 'standard' ? 'secondary' : 'ghost'} 
+                size="sm"
+                className="h-7 px-3 text-xs"
+                onClick={() => setChoiceModeType('standard')}
+            >
+                Standard
+            </Button>
+            <Button 
+                variant={choiceModeType === 'synonym' ? 'secondary' : 'ghost'} 
+                size="sm"
+                className="h-7 px-3 text-xs"
+                onClick={() => setChoiceModeType('synonym')}
+            >
+                Synonyms
+            </Button>
           </div>
         )}
       </div>

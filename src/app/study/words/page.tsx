@@ -62,7 +62,7 @@ export default async function LearnPage({
   }
 
   const { words, error } = await getWordsForLearning(sessionSize, Object.keys(filters).length > 0 ? filters : undefined);
-  const stats = await getLearningStats(params.materialId);
+  const stats = await getLearningStats(params.materialId, params.dictionaryId);
 
   if (error) {
     return (

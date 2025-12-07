@@ -1,11 +1,11 @@
 {
-  "name": "deep-listen",
+  "name": "Echo",
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p 17891",
     "build": "next build",
-    "start": "next start",
+    "start": "next start -p 18474",
     "lint": "eslint"
   },
   "dependencies": {
@@ -48,7 +48,7 @@
     "ioredis": "^5.8.2",
     "lucide-react": "^0.554.0",
     "natural": "^8.1.0",
-    "next": "16.0.3",
+    "next": "^16.0.7",
     "next-auth": "^5.0.0-beta.30",
     "next-themes": "^0.4.6",
     "nodemailer": "^7.0.10",
@@ -76,7 +76,7 @@
     "@types/nodemailer": "^7.0.4",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "baseline-browser-mapping": "^2.8.32",
+    "baseline-browser-mapping": "^2.9.4",
     "eslint": "^9",
     "eslint-config-next": "16.0.3",
     "tailwindcss": "^4",

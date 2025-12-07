@@ -240,6 +240,7 @@ export function SettingsDialog({
   const vocabSortBy = settings.vocabSortBy || "date_added"
   const vocabShowMastered = settings.vocabShowMastered ?? false
   const dailyWordGoal = settings.dailyWordGoal || 10
+  const choiceModeDirection = settings.choiceModeDirection || "zh_to_en"
 
   // Whisper settings with defaults
   const whisperEngine = settings.whisperEngine || "faster-whisper"
@@ -687,6 +688,33 @@ export function SettingsDialog({
                       </Select>
                       <p className="text-sm text-muted-foreground">
                         Choose the accent for word pronunciation playback during learning.
+                      </p>
+                    </div>
+                  </div>
+
+                  <Separator />
+
+                  <div className="space-y-4">
+                    <h3 className="text-base font-medium">Multiple Choice Mode</h3>
+                    
+                    <div className="space-y-2">
+                      <Label htmlFor="choice-mode-direction">Question Direction</Label>
+                      <Select
+                        value={choiceModeDirection}
+                        onValueChange={(value) =>
+                          setSettings({ ...settings, choiceModeDirection: value })
+                        }
+                      >
+                        <SelectTrigger id="choice-mode-direction">
+                          <SelectValue placeholder="Select direction" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="zh_to_en">Show Chinese, Select English</SelectItem>
+                          <SelectItem value="en_to_zh">Show English, Select Chinese</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <p className="text-sm text-muted-foreground">
+                        Choose what to display as the question and what to select as the answer.
                       </p>
                     </div>
                   </div>

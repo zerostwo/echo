@@ -25,7 +25,5 @@ export const supabaseAdmin = supabaseServiceKey
 if (typeof window === 'undefined') {
   if (!supabaseAdmin) {
     console.warn('SUPABASE_SERVICE_ROLE_KEY is missing. Server-side operations may fail if RLS is enabled.');
-  } else {
-    console.log('[Supabase] Admin client initialized with service role key');
   }
 }

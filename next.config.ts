@@ -6,7 +6,7 @@ const nextConfig: NextConfig = {
       bodySizeLimit: '500mb',
       allowedOrigins: ["echo.catplot.org"],
     },
-    middlewareClientMaxBodySize: '500mb',
+    proxyClientMaxBodySize: '500mb',
   },
 };
 
