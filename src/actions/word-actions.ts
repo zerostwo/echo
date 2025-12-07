@@ -533,6 +533,49 @@ export async function editWord(wordId: string, newWordText: string) {
     }
 }
 
+/**
+ * Update word details (definition, translation, etc.) without changing the word text.
+ */
+export async function updateWordDetails(wordId: string, updates: { definition?: string; translation?: string }) {
+    const session = await auth();
+    if (!session?.user?.id) return { error: 'Unauthorized' };
+
+    const client = supabaseAdmin || supabase;
+
+    try {
+        // Check if user has access to this word
+        const { data: userStatus, error: checkError } = await client
+            .from('user_word_statuses')
+            .select('word_id')
+            .eq('user_id', session.user.id)
+            .eq('word_id', wordId)
+            .single();
+
+        if (checkError || !userStatus) {
+            return { error: 'Word not found or access denied' };
+        }
+
+        const { error: updateError } = await client
+            .from('words')
+            .update(updates)
+            .eq('id', wordId);
+
+        if (updateError) {
+            console.error('Failed to update word details:', updateError);
+            return { error: 'Failed to update word details' };
+        }
+
+        // Invalidate vocab cache
+        await invalidateVocabCache(session.user.id);
+        revalidatePath('/vocab');
+        
+        return { success: true };
+    } catch (e) {
+        console.error('Failed to update word details:', e);
+        return { error: 'Failed to update word details' };
+    }
+}
+
 export async function addWordRelation(wordId: string, relatedText: string, type: string, dictionaryId?: string) {
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };

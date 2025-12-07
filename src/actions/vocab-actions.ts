@@ -497,6 +497,8 @@ export interface VocabFilters {
     maxFrequency?: number;
     learningState?: number[]; // FSRS states: 0=New, 1=Learning, 2=Review, 3=Relearning
     dueFilter?: 'overdue' | 'today' | 'week' | 'month';
+    domain?: string[];
+    pos?: string[];
 }
 
 export interface PaginatedVocabResult {
@@ -860,6 +862,29 @@ export async function getVocabPaginated(
                     default:
                         return true;
                 }
+            });
+        }
+
+        // Domain filter
+        if (filters.domain && filters.domain.length > 0) {
+            mergedWords = mergedWords.filter(w => {
+                if (!w.translation) return false;
+                // Check if translation contains any of the selected domain tags
+                // Domain tags are usually in format [医]
+                return filters.domain!.some(domain => w.translation.includes(`[${domain}]`));
+            });
+        }
+
+        // POS filter
+        if (filters.pos && filters.pos.length > 0) {
+            mergedWords = mergedWords.filter(w => {
+                // Check pos column first
+                if (w.pos && filters.pos!.some(p => w.pos.includes(p))) return true;
+                
+                // Also check translation for POS tags if pos column is empty or not matching
+                if (w.translation && filters.pos!.some(p => w.translation.includes(p))) return true;
+                
+                return false;
             });
         }
 

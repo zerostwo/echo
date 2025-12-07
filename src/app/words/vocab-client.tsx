@@ -151,6 +151,8 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
     materialFilters: materialId ? [materialId] : [],
     learningStateFilter: [],
     dueFilter: undefined,
+    domainFilter: [],
+    posFilter: [],
   })
   
   // Search
@@ -267,6 +269,8 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
         maxFrequency: filters.frequencyRange ? filters.frequencyRange[1] : undefined,
         learningState: (filters.learningStateFilter && filters.learningStateFilter.length > 0) ? filters.learningStateFilter : undefined,
         dueFilter: filters.dueFilter,
+        domain: filters.domainFilter?.length > 0 ? filters.domainFilter : undefined,
+        pos: filters.posFilter?.length > 0 ? filters.posFilter : undefined,
       }
       
       const result = await getVocabPaginated(
@@ -401,6 +405,12 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
           break
         case 'due':
           newFilters.dueFilter = undefined
+          break
+        case 'domain':
+          newFilters.domainFilter = prev.domainFilter?.filter(d => d !== value) || []
+          break
+        case 'pos':
+          newFilters.posFilter = prev.posFilter?.filter(p => p !== value) || []
           break
       }
       return newFilters
@@ -893,6 +903,10 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
               open={!!selectedWord} 
               onOpenChange={(open) => !open && setSelectedWord(null)} 
               dictionaryId={dictionaryId}
+              onWordUpdate={(updatedWord) => {
+                  setSelectedWord(updatedWord);
+                  setData(prev => prev.map(w => w.id === updatedWord.id ? updatedWord : w));
+              }}
           />
       )}
 

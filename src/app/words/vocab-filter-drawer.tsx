@@ -23,6 +23,15 @@ import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
 
+const DOMAIN_TAGS = [
+  "计", "医", "化", "生", "经", "法", "地", "物", 
+  "数", "机", "建", "电", "工", "心", "文", "航"
+]
+
+const POS_TAGS = [
+  "n.", "v.", "adj.", "adv.", "prep.", "conj.", "pron.", "interj.", "art.", "num."
+]
+
 export interface VocabFilterState {
   statusFilter: string[]
   collinsFilter: number[]
@@ -33,6 +42,8 @@ export interface VocabFilterState {
   materialFilters?: string[] // Multi-select material filters
   learningStateFilter?: number[] // 0=New, 1=Learning, 2=Review, 3=Relearning
   dueFilter?: 'overdue' | 'today' | 'week' | 'month' | undefined
+  domainFilter?: string[]
+  posFilter?: string[]
 }
 
 interface VocabFilterDrawerProps {
@@ -236,6 +247,8 @@ export function VocabFilterDrawer({
     reviewSchedule: false,
     materialSource: false,
     dictionaryTags: false,
+    domainTags: false,
+    posTags: false,
     advanced: false,
   })
 
@@ -254,6 +267,22 @@ export function VocabFilterDrawer({
       ? localFilters.statusFilter.filter(s => s !== status)
       : [...localFilters.statusFilter, status]
     setLocalFilters({ ...localFilters, statusFilter: newStatus })
+  }
+
+  const handleDomainToggle = (domain: string) => {
+    const currentDomains = localFilters.domainFilter || []
+    const newDomains = currentDomains.includes(domain)
+      ? currentDomains.filter(d => d !== domain)
+      : [...currentDomains, domain]
+    setLocalFilters({ ...localFilters, domainFilter: newDomains })
+  }
+
+  const handlePosToggle = (pos: string) => {
+    const currentPos = localFilters.posFilter || []
+    const newPos = currentPos.includes(pos)
+      ? currentPos.filter(p => p !== pos)
+      : [...currentPos, pos]
+    setLocalFilters({ ...localFilters, posFilter: newPos })
   }
 
   const handleCollinsToggle = (level: number) => {
@@ -328,6 +357,8 @@ export function VocabFilterDrawer({
       materialFilters: [],
       learningStateFilter: [],
       dueFilter: undefined,
+      domainFilter: [],
+      posFilter: [],
     }
     setLocalFilters(resetFilters)
     setFrequencyEnabled(false)
@@ -343,7 +374,9 @@ export function VocabFilterDrawer({
     (filters.frequencyRange ? 1 : 0) +
     (filters.learningStateFilter?.length || 0) +
     (filters.dueFilter ? 1 : 0) +
-    (filters.materialFilters?.length || (filters.materialFilter ? 1 : 0))
+    (filters.materialFilters?.length || (filters.materialFilter ? 1 : 0)) +
+    (filters.domainFilter?.length || 0) +
+    (filters.posFilter?.length || 0)
 
   // Count for each section
   const dictionaryTagsCount = filters.collinsFilter.length + (filters.oxfordFilter !== undefined ? 1 : 0)
@@ -517,6 +550,52 @@ export function VocabFilterDrawer({
               </CollapsibleContent>
             </Collapsible>
 
+            {/* Domain Tags - Collapsible */}
+            <Collapsible open={sectionsOpen.domainTags}>
+              <SectionHeader 
+                title="Domain Tags" 
+                isOpen={sectionsOpen.domainTags}
+                onToggle={() => toggleSection('domainTags')}
+                count={localFilters.domainFilter?.length || 0}
+              />
+              <CollapsibleContent className="pt-2 pb-1">
+                <div className="flex flex-wrap gap-1.5">
+                  {DOMAIN_TAGS.map((tag) => (
+                    <ToggleButton
+                      key={tag}
+                      active={localFilters.domainFilter?.includes(tag) || false}
+                      onClick={() => handleDomainToggle(tag)}
+                    >
+                      {tag}
+                    </ToggleButton>
+                  ))}
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
+
+            {/* POS Tags - Collapsible */}
+            <Collapsible open={sectionsOpen.posTags}>
+              <SectionHeader 
+                title="Part of Speech" 
+                isOpen={sectionsOpen.posTags}
+                onToggle={() => toggleSection('posTags')}
+                count={localFilters.posFilter?.length || 0}
+              />
+              <CollapsibleContent className="pt-2 pb-1">
+                <div className="flex flex-wrap gap-1.5">
+                  {POS_TAGS.map((tag) => (
+                    <ToggleButton
+                      key={tag}
+                      active={localFilters.posFilter?.includes(tag) || false}
+                      onClick={() => handlePosToggle(tag)}
+                    >
+                      {tag}
+                    </ToggleButton>
+                  ))}
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
+
             {/* Advanced Options - Collapsible */}
             <Collapsible open={sectionsOpen.advanced}>
               <SectionHeader 
@@ -659,6 +738,26 @@ export function FilterChips({ filters, onRemoveFilter, materials = [] }: FilterC
       label: `FSRS:${stateLabels[state]}`,
       type: 'learningState',
       value: state,
+    })
+  })
+
+  // Domain chips
+  filters.domainFilter?.forEach(domain => {
+    chips.push({
+      key: `domain-${domain}`,
+      label: `[${domain}]`,
+      type: 'domain',
+      value: domain,
+    })
+  })
+
+  // POS chips
+  filters.posFilter?.forEach(pos => {
+    chips.push({
+      key: `pos-${pos}`,
+      label: pos,
+      type: 'pos',
+      value: pos,
     })
   })
 

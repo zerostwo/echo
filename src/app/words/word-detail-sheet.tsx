@@ -11,14 +11,22 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useEffect, useState, useRef } from "react"
-import { getWordContext, getWordRelations, addWordRelation, removeWordRelation } from "@/actions/word-actions"
-import { Loader2, Volume2, Play, Pause, ExternalLink, X, Plus } from "lucide-react"
+import { getWordContext, getWordRelations, addWordRelation, removeWordRelation, updateWordDetails } from "@/actions/word-actions"
+import { Loader2, Volume2, Play, Pause, ExternalLink, X, Plus, Pencil, Save } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import Link from "next/link"
 import { parsePos, parseExchange, parseTags, getAllWordForms, createWordFormsRegex, TRANS_PREFIX_MAP } from "@/lib/vocab-utils"
 import { useUserSettings } from "@/components/user-settings-provider"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { toast } from "sonner"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 
 const FormattedText = ({ text }: { text: string }) => {
     if (!text) return null;
@@ -60,14 +68,22 @@ interface WordDetailSheetProps {
     open: boolean
     onOpenChange: (open: boolean) => void
     dictionaryId?: string
+    onWordUpdate?: (updatedWord: any) => void
 }
 
-export function WordDetailSheet({ word, open, onOpenChange, dictionaryId }: WordDetailSheetProps) {
+export function WordDetailSheet({ word, open, onOpenChange, dictionaryId, onWordUpdate }: WordDetailSheetProps) {
     const { pronunciationAccent } = useUserSettings();
+    const [displayWord, setDisplayWord] = useState(word);
     const [occurrences, setOccurrences] = useState<any[]>([]);
     const [loadingCtx, setLoadingCtx] = useState(false);
     const [playingSentenceId, setPlayingSentenceId] = useState<string | null>(null);
     const [isPlayingWord, setIsPlayingWord] = useState(false);
+    
+    // Edit mode state
+    const [isEditing, setIsEditing] = useState(false);
+    const [editDefinition, setEditDefinition] = useState("");
+    const [editTranslation, setEditTranslation] = useState("");
+    const [isSaving, setIsSaving] = useState(false);
     
     // Relations state
     const [relations, setRelations] = useState<any[]>([]);
@@ -79,10 +95,15 @@ export function WordDetailSheet({ word, open, onOpenChange, dictionaryId }: Word
     const sentenceAudioRef = useRef<HTMLAudioElement>(null);
     const youdaoAudioRef = useRef<HTMLAudioElement>(null);
 
+    // Sync displayWord with prop word when it changes
     useEffect(() => {
-        if (open && word?.id) {
+        setDisplayWord(word);
+    }, [word]);
+
+    useEffect(() => {
+        if (open && displayWord?.id) {
             setLoadingCtx(true);
-            getWordContext(word.id)
+            getWordContext(displayWord.id)
                 .then(res => {
                     if (res.occurrences) {
                         // Deduplicate sentences - keep only the first occurrence for each sentence
@@ -98,31 +119,74 @@ export function WordDetailSheet({ word, open, onOpenChange, dictionaryId }: Word
                 .finally(() => setLoadingCtx(false));
                 
             setLoadingRelations(true);
-            getWordRelations(word.id)
+            getWordRelations(displayWord.id)
                 .then(res => {
                     if (res.relations) {
                         setRelations(res.relations);
                     }
                 })
                 .finally(() => setLoadingRelations(false));
+            
+            // Initialize edit state
+            setEditDefinition(displayWord.definition || "");
+            setEditTranslation(displayWord.translation || "");
+            setIsEditing(false);
         } else {
             setOccurrences([]);
             setRelations([]);
             setPlayingSentenceId(null);
             setIsPlayingWord(false);
+            setIsEditing(false);
         }
-    }, [open, word?.id]);
+    }, [open, displayWord?.id, displayWord?.definition, displayWord?.translation]);
+
+    const handleSave = async () => {
+        if (!displayWord?.id) return;
+        
+        setIsSaving(true);
+        try {
+            const result = await updateWordDetails(displayWord.id, {
+                definition: editDefinition,
+                translation: editTranslation
+            });
+            
+            if (result.success) {
+                toast.success("Word details updated");
+                setIsEditing(false);
+                
+                // Update local display state immediately (WYSIWYG)
+                const updatedWord = { 
+                    ...displayWord, 
+                    definition: editDefinition, 
+                    translation: editTranslation 
+                };
+                setDisplayWord(updatedWord);
+                
+                // Notify parent
+                if (onWordUpdate) {
+                    onWordUpdate(updatedWord);
+                }
+            } else {
+                toast.error("Failed to update word details");
+            }
+        } catch (e) {
+            console.error(e);
+            toast.error("An error occurred");
+        } finally {
+            setIsSaving(false);
+        }
+    };
 
     const handleAddRelation = async () => {
-        if (!newRelationText.trim() || !word?.id) return;
+        if (!newRelationText.trim() || !displayWord?.id) return;
         
         setIsAddingRelation(true);
         try {
-            const result = await addWordRelation(word.id, newRelationText.trim(), newRelationType, dictionaryId);
+            const result = await addWordRelation(displayWord.id, newRelationText.trim(), newRelationType, dictionaryId);
             if (result.success) {
                 setNewRelationText("");
                 // Refresh relations
-                const res = await getWordRelations(word.id);
+                const res = await getWordRelations(displayWord.id);
                 if (res.relations) setRelations(res.relations);
             }
         } catch (e) {
@@ -202,7 +266,7 @@ export function WordDetailSheet({ word, open, onOpenChange, dictionaryId }: Word
 
     // Handle word pronunciation playback using Youdao API
     const handlePlayWord = () => {
-        if (!youdaoAudioRef.current || !word?.text) return;
+        if (!youdaoAudioRef.current || !displayWord?.text) return;
 
         const audio = youdaoAudioRef.current;
         
@@ -214,7 +278,7 @@ export function WordDetailSheet({ word, open, onOpenChange, dictionaryId }: Word
 
         // type=1 for UK accent, type=2 for US accent
         const accentType = pronunciationAccent === 'uk' ? 1 : 2;
-        const audioUrl = `https://dict.youdao.com/dictvoice?audio=${encodeURIComponent(word.text)}&type=${accentType}`;
+        const audioUrl = `https://dict.youdao.com/dictvoice?audio=${encodeURIComponent(displayWord.text)}&type=${accentType}`;
         
         audio.src = audioUrl;
         audio.currentTime = 0;
@@ -226,11 +290,34 @@ export function WordDetailSheet({ word, open, onOpenChange, dictionaryId }: Word
         audio.onerror = () => setIsPlayingWord(false);
     };
 
-    if (!word) return null;
+    if (!displayWord) return null;
 
-    const posList = parsePos(word.pos);
-    const exchangeList = parseExchange(word.exchange);
-    const tagList = parseTags(word.tag);
+    const posList = parsePos(displayWord.pos);
+    const exchangeList = parseExchange(displayWord.exchange);
+    const tagList = parseTags(displayWord.tag);
+
+    // Extract domain tags from translation
+    // Logic: Look for [Tag] at the start of lines in translation
+    // We use the current editTranslation if editing, or displayWord.translation
+    const translationText = isEditing ? editTranslation : (displayWord.translation || "");
+    const domainTags: { tag: string, content: string }[] = [];
+    let displayTranslation = translationText;
+
+    if (!isEditing && translationText) {
+        const lines = translationText.split('\n');
+        const cleanLines: string[] = [];
+        
+        lines.forEach(line => {
+            const match = line.match(/^\s*\[(.*?)\](.*)/);
+            if (match) {
+                domainTags.push({ tag: match[1], content: match[2].trim() });
+                // Do NOT add to cleanLines - hide the entire line
+            } else {
+                cleanLines.push(line);
+            }
+        });
+        displayTranslation = cleanLines.join('\n');
+    }
 
     return (
         <Sheet open={open} onOpenChange={onOpenChange}>
@@ -240,8 +327,8 @@ export function WordDetailSheet({ word, open, onOpenChange, dictionaryId }: Word
                         <SheetHeader className="p-0 space-y-1">
                             <div className="flex items-start justify-between">
                                 <SheetTitle className="text-3xl font-bold flex items-center gap-3">
-                                    {word.text}
-                                    {word.phonetic && <span className="text-lg font-normal text-muted-foreground font-mono">[{word.phonetic}]</span>}
+                                    {displayWord.text}
+                                    {displayWord.phonetic && <span className="text-lg font-normal text-muted-foreground font-mono">[{displayWord.phonetic}]</span>}
                                     <Button 
                                         variant="ghost" 
                                         size="icon" 
@@ -252,20 +339,67 @@ export function WordDetailSheet({ word, open, onOpenChange, dictionaryId }: Word
                                         {isPlayingWord ? <Pause className="h-5 w-5" /> : <Volume2 className="h-5 w-5" />}
                                     </Button>
                                 </SheetTitle>
-                                <SheetClose asChild>
-                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground -mr-2 -mt-1">
-                                        <X className="h-4 w-4" />
-                                        <span className="sr-only">Close</span>
-                                    </Button>
-                                </SheetClose>
+                                <div className="flex items-center gap-1 -mr-2">
+                                    {isEditing ? (
+                                        <>
+                                            <Button 
+                                                variant="ghost" 
+                                                size="icon" 
+                                                className="h-8 w-8 text-green-600 hover:text-green-700 hover:bg-green-50"
+                                                onClick={handleSave}
+                                                disabled={isSaving}
+                                                title="Save Changes"
+                                            >
+                                                {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                                            </Button>
+                                            <Button 
+                                                variant="ghost" 
+                                                size="icon" 
+                                                className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                                                onClick={() => {
+                                                    setIsEditing(false);
+                                                    setEditDefinition(displayWord.definition || "");
+                                                    setEditTranslation(displayWord.translation || "");
+                                                }}
+                                                title="Cancel"
+                                            >
+                                                <X className="h-4 w-4" />
+                                            </Button>
+                                        </>
+                                    ) : (
+                                        <Button 
+                                            variant="ghost" 
+                                            size="icon" 
+                                            className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                                            onClick={() => setIsEditing(true)}
+                                            title="Edit Word Details"
+                                        >
+                                            <Pencil className="h-4 w-4" />
+                                        </Button>
+                                    )}
+                                </div>
                             </div>
                             <SheetDescription className="flex flex-col gap-2 mt-1">
-                                {tagList.length > 0 && (
+                                {(tagList.length > 0 || domainTags.length > 0) && (
                                     <div className="flex flex-wrap gap-2">
                                         {tagList.map((tag, idx) => (
-                                            <Badge key={idx} variant="secondary" className="bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-300 dark:border-blue-800 hover:bg-blue-100">
+                                            <Badge key={`tag-${idx}`} variant="secondary" className="bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-300 dark:border-blue-800 hover:bg-blue-100">
                                                 {tag.label}
                                             </Badge>
+                                        ))}
+                                        {domainTags.map((item, idx) => (
+                                            <TooltipProvider key={`domain-${idx}`}>
+                                                <Tooltip>
+                                                    <TooltipTrigger asChild>
+                                                        <Badge variant="outline" className="text-muted-foreground border-dashed cursor-help">
+                                                            {item.tag}
+                                                        </Badge>
+                                                    </TooltipTrigger>
+                                                    <TooltipContent>
+                                                        <p>{item.content}</p>
+                                                    </TooltipContent>
+                                                </Tooltip>
+                                            </TooltipProvider>
                                         ))}
                                     </div>
                                 )}
@@ -276,27 +410,120 @@ export function WordDetailSheet({ word, open, onOpenChange, dictionaryId }: Word
                     <ScrollArea className="flex-1 px-6 h-[1px]">
                         <div className="space-y-8 pb-10 pl-1 pt-2">
                             {/* Definition Section */}
-                            {word.definition && (
+                            {(displayWord.definition || isEditing) && (
                                 <div className="space-y-3">
                                     <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider border-l-4 border-primary/20 pl-3">Definition</h3>
                                     <div className="pl-2 text-base text-gray-800 dark:text-gray-200">
-                                        <FormattedText text={word.definition} />
+                                        {isEditing ? (
+                                            <Textarea 
+                                                value={editDefinition}
+                                                onChange={(e) => setEditDefinition(e.target.value)}
+                                                className="min-h-[100px] font-sans"
+                                                placeholder="Enter definition..."
+                                            />
+                                        ) : (
+                                            <FormattedText text={displayWord.definition} />
+                                        )}
                                     </div>
                                 </div>
                             )}
 
                             {/* Translation Section */}
-                            {word.translation && (
+                            {(displayWord.translation || isEditing) && (
                                 <div className="space-y-3">
                                     <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider border-l-4 border-primary/20 pl-3">Translation</h3>
                                     <div className="pl-2 text-base">
-                                        <FormattedText text={word.translation} />
+                                        {isEditing ? (
+                                            <Textarea 
+                                                value={editTranslation}
+                                                onChange={(e) => setEditTranslation(e.target.value)}
+                                                className="min-h-[100px] font-sans"
+                                                placeholder="Enter translation..."
+                                            />
+                                        ) : (
+                                            <FormattedText text={displayTranslation} />
+                                        )}
                                     </div>
                                 </div>
                             )}
 
+                            {/* Relations Section - Moved here */}
+                            <div className="space-y-3 border-t pt-6">
+                                <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider border-l-4 border-primary/20 pl-3">Relations</h3>
+                                <div className="pl-4 space-y-4">
+                                    {/* List existing relations */}
+                                    {loadingRelations ? (
+                                        <div className="flex items-center text-sm text-muted-foreground">
+                                            <Loader2 className="h-3 w-3 mr-2 animate-spin" />
+                                            Loading relations...
+                                        </div>
+                                    ) : relations.length > 0 ? (
+                                        <div className="flex flex-wrap gap-2">
+                                            {relations.map(rel => {
+                                                const type = rel.relationType || rel.relation_type;
+                                                const text = rel.customText || rel.custom_text || rel.relatedWord?.text;
+                                                
+                                                return (
+                                                <Badge key={rel.id} variant="outline" className="pl-2 pr-1 py-1 flex items-center gap-1">
+                                                    <span className="text-[10px] font-bold text-muted-foreground mr-1 bg-muted px-1 rounded">
+                                                        {type === 'SYNONYM' ? 'SYN' : 
+                                                         type === 'ANTONYM' ? 'ANT' : 
+                                                         type === 'IDIOM' ? 'IDM' : (type ? type.substring(0, 3) : '???')}
+                                                    </span>
+                                                    <span>{text}</span>
+                                                    {isEditing && (
+                                                        <Button 
+                                                            variant="ghost" 
+                                                            size="icon" 
+                                                            className="h-4 w-4 ml-1 hover:bg-destructive/20 hover:text-destructive rounded-full"
+                                                            onClick={() => handleRemoveRelation(rel.id)}
+                                                        >
+                                                            <X className="h-3 w-3" />
+                                                        </Button>
+                                                    )}
+                                                </Badge>
+                                            )})}
+                                        </div>
+                                    ) : (
+                                        <p className="text-sm text-muted-foreground italic">No relations added yet.</p>
+                                    )}
+
+                                    {/* Add new relation form - Only visible in edit mode */}
+                                    {isEditing && (
+                                        <div className="flex gap-2 items-center">
+                                            <Select value={newRelationType} onValueChange={setNewRelationType}>
+                                                <SelectTrigger className="w-[110px] h-8 text-xs">
+                                                    <SelectValue />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectItem value="SYNONYM">Synonym</SelectItem>
+                                                    <SelectItem value="ANTONYM">Antonym</SelectItem>
+                                                    <SelectItem value="IDIOM">Idiom</SelectItem>
+                                                </SelectContent>
+                                            </Select>
+                                            <Input 
+                                                value={newRelationText}
+                                                onChange={(e) => setNewRelationText(e.target.value)}
+                                                placeholder="Add related word..."
+                                                className="h-8 text-sm"
+                                                onKeyDown={(e) => e.key === 'Enter' && handleAddRelation()}
+                                            />
+                                            <Button 
+                                                size="sm" 
+                                                variant="secondary" 
+                                                className="h-8 px-2"
+                                                onClick={handleAddRelation}
+                                                disabled={!newRelationText.trim() || isAddingRelation}
+                                            >
+                                                {isAddingRelation ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-4 w-4" />}
+                                            </Button>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
                             {/* POS Distribution Section */}
-                            {posList.length > 0 && (
+                            {posList.length > 0 && !isEditing && (
                                 <div className="space-y-3">
                                     <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider border-l-4 border-primary/20 pl-3">Part of Speech</h3>
                                     <div className="pl-2 space-y-3">
@@ -324,7 +551,7 @@ export function WordDetailSheet({ word, open, onOpenChange, dictionaryId }: Word
                             )}
 
                             {/* Word Forms Section */}
-                            {exchangeList.length > 0 && (
+                            {exchangeList.length > 0 && !isEditing && (
                                 <div className="space-y-3">
                                      <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider border-l-4 border-primary/20 pl-3">Word Forms</h3>
                                      <div className="pl-2">
@@ -341,32 +568,32 @@ export function WordDetailSheet({ word, open, onOpenChange, dictionaryId }: Word
                             )}
                             
                             {/* Stats Section */}
-                            {(word.collins || word.bnc || word.frq || word.oxford) && (
+                            {(displayWord.collins || displayWord.bnc || displayWord.frq || displayWord.oxford) && !isEditing && (
                                 <div className="space-y-3">
                                     <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider border-l-4 border-primary/20 pl-3">Statistics</h3>
                                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pl-4">
-                                        {word.collins && (
+                                        {displayWord.collins && (
                                             <div className="bg-muted/30 p-3 rounded-lg border text-center">
                                                 <div className="text-muted-foreground text-[10px] uppercase tracking-widest mb-1">Collins</div>
                                                 <div className="flex justify-center text-yellow-500 text-sm">
-                                                    {"★".repeat(Number(word.collins))}
-                                                    <span className="text-muted-foreground/20">{"★".repeat(5 - Number(word.collins))}</span>
+                                                    {"★".repeat(Number(displayWord.collins))}
+                                                    <span className="text-muted-foreground/20">{"★".repeat(5 - Number(displayWord.collins))}</span>
                                                 </div>
                                             </div>
                                         )}
-                                        {word.bnc && (
+                                        {displayWord.bnc && (
                                             <div className="bg-muted/30 p-3 rounded-lg border text-center">
                                                 <div className="text-muted-foreground text-[10px] uppercase tracking-widest mb-1">BNC Rank</div>
-                                                <div className="font-mono font-semibold">{word.bnc}</div>
+                                                <div className="font-mono font-semibold">{displayWord.bnc}</div>
                                             </div>
                                         )}
-                                        {word.frq && (
+                                        {displayWord.frq && (
                                             <div className="bg-muted/30 p-3 rounded-lg border text-center">
                                                 <div className="text-muted-foreground text-[10px] uppercase tracking-widest mb-1">Frequency</div>
-                                                <div className="font-mono font-semibold">{word.frq}</div>
+                                                <div className="font-mono font-semibold">{displayWord.frq}</div>
                                             </div>
                                         )}
-                                        {word.oxford === 1 && (
+                                        {displayWord.oxford === 1 && (
                                             <div className="bg-muted/30 p-3 rounded-lg border text-center flex flex-col justify-center items-center bg-blue-50 dark:bg-blue-900/20 border-blue-100 dark:border-blue-800">
                                                 <div className="text-blue-600 dark:text-blue-400 text-xs font-bold uppercase tracking-wider">Oxford 3000</div>
                                             </div>
@@ -374,77 +601,6 @@ export function WordDetailSheet({ word, open, onOpenChange, dictionaryId }: Word
                                     </div>
                                 </div>
                             )}
-
-                            {/* Relations Section */}
-                            <div className="space-y-3 border-t pt-6">
-                                <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider border-l-4 border-primary/20 pl-3">Relations</h3>
-                                <div className="pl-4 space-y-4">
-                                    {/* List existing relations */}
-                                    {loadingRelations ? (
-                                        <div className="flex items-center text-sm text-muted-foreground">
-                                            <Loader2 className="h-3 w-3 mr-2 animate-spin" />
-                                            Loading relations...
-                                        </div>
-                                    ) : relations.length > 0 ? (
-                                        <div className="flex flex-wrap gap-2">
-                                            {relations.map(rel => {
-                                                const type = rel.relationType || rel.relation_type;
-                                                const text = rel.customText || rel.custom_text || rel.relatedWord?.text;
-                                                
-                                                return (
-                                                <Badge key={rel.id} variant="outline" className="pl-2 pr-1 py-1 flex items-center gap-1">
-                                                    <span className="text-[10px] font-bold text-muted-foreground mr-1 bg-muted px-1 rounded">
-                                                        {type === 'SYNONYM' ? 'SYN' : 
-                                                         type === 'ANTONYM' ? 'ANT' : 
-                                                         type === 'IDIOM' ? 'IDM' : (type ? type.substring(0, 3) : '???')}
-                                                    </span>
-                                                    <span>{text}</span>
-                                                    <Button 
-                                                        variant="ghost" 
-                                                        size="icon" 
-                                                        className="h-4 w-4 ml-1 hover:bg-destructive/20 hover:text-destructive rounded-full"
-                                                        onClick={() => handleRemoveRelation(rel.id)}
-                                                    >
-                                                        <X className="h-3 w-3" />
-                                                    </Button>
-                                                </Badge>
-                                            )})}
-                                        </div>
-                                    ) : (
-                                        <p className="text-sm text-muted-foreground italic">No relations added yet.</p>
-                                    )}
-
-                                    {/* Add new relation form */}
-                                    <div className="flex gap-2 items-center">
-                                        <Select value={newRelationType} onValueChange={setNewRelationType}>
-                                            <SelectTrigger className="w-[110px] h-8 text-xs">
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value="SYNONYM">Synonym</SelectItem>
-                                                <SelectItem value="ANTONYM">Antonym</SelectItem>
-                                                <SelectItem value="IDIOM">Idiom</SelectItem>
-                                            </SelectContent>
-                                        </Select>
-                                        <Input 
-                                            value={newRelationText}
-                                            onChange={(e) => setNewRelationText(e.target.value)}
-                                            placeholder="Add related word..."
-                                            className="h-8 text-sm"
-                                            onKeyDown={(e) => e.key === 'Enter' && handleAddRelation()}
-                                        />
-                                        <Button 
-                                            size="sm" 
-                                            variant="secondary" 
-                                            className="h-8 px-2"
-                                            onClick={handleAddRelation}
-                                            disabled={!newRelationText.trim() || isAddingRelation}
-                                        >
-                                            {isAddingRelation ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-4 w-4" />}
-                                        </Button>
-                                    </div>
-                                </div>
-                            </div>
 
                             {/* Context Sentences */}
                             <div className="space-y-3 border-t pt-6">
@@ -479,7 +635,7 @@ export function WordDetailSheet({ word, open, onOpenChange, dictionaryId }: Word
                                                      }
                                                      
                                                      // Fallback: use word forms from exchange field to match
-                                                     const wordForms = getAllWordForms(word.text, word.exchange);
+                                                     const wordForms = getAllWordForms(displayWord.text, displayWord.exchange);
                                                      const regex = createWordFormsRegex(wordForms);
                                                      
                                                      return (
