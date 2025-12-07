@@ -198,49 +198,53 @@ export async function updateSentence(sentenceId: string, payload: SentenceUpdate
         return { error: 'Failed to update sentence' };
     }
 
-    const { data: existingOccurrences } = await client
-        .from('word_occurrences')
-        .select('word_id')
-        .eq('sentence_id', sentenceId);
-    const oldWordIds = existingOccurrences?.map((o: any) => o.word_id) || [];
+    // Only update vocabulary if content has changed
+    const oldEffectiveContent = sentence.edited_content ?? sentence.content;
+    if (effectiveContent !== oldEffectiveContent) {
+        const { data: existingOccurrences } = await client
+            .from('word_occurrences')
+            .select('word_id')
+            .eq('sentence_id', sentenceId);
+        const oldWordIds = existingOccurrences?.map((o: any) => o.word_id) || [];
 
-    const { error: deleteError } = await client.from('word_occurrences').delete().eq('sentence_id', sentenceId);
-    if (deleteError) {
-        console.error('Failed to delete old occurrences', deleteError);
-        return { error: 'Failed to update vocabulary for sentence' };
-    }
-
-    // Use tokenizeWithPositions to get word positions for fill-in-blank feature
-    const tokensWithPositions = tokenizeWithPositions(effectiveContent);
-    const tokens = tokensWithPositions.map(t => t.word);
-    const rawToWordId = await upsertWordsForTokens(client, session.user.id, tokens);
-
-    const occurrences = tokensWithPositions
-        .map((token) => {
-            const wordId = rawToWordId.get(token.word);
-            if (!wordId) return null;
-            return { 
-                id: randomUUID(), 
-                word_id: wordId, 
-                sentence_id: sentenceId,
-                start_index: token.startIndex,
-                end_index: token.endIndex,
-            };
-        })
-        .filter(Boolean) as { id: string; word_id: string; sentence_id: string; start_index: number; end_index: number }[];
-
-    if (occurrences.length > 0) {
-        const { error: occError } = await client.from('word_occurrences').insert(occurrences);
-        if (occError) {
-            console.error('Failed to insert occurrences', occError);
+        const { error: deleteError } = await client.from('word_occurrences').delete().eq('sentence_id', sentenceId);
+        if (deleteError) {
+            console.error('Failed to delete old occurrences', deleteError);
             return { error: 'Failed to update vocabulary for sentence' };
         }
-    }
 
-    const newWordIds = Array.from(new Set(occurrences.map((o) => o.word_id)));
-    const removedWordIds = oldWordIds.filter((id) => !newWordIds.includes(id));
-    if (removedWordIds.length > 0) {
-        await cleanupOrphanWords(client, removedWordIds);
+        // Use tokenizeWithPositions to get word positions for fill-in-blank feature
+        const tokensWithPositions = tokenizeWithPositions(effectiveContent);
+        const tokens = tokensWithPositions.map(t => t.word);
+        const rawToWordId = await upsertWordsForTokens(client, session.user.id, tokens);
+
+        const occurrences = tokensWithPositions
+            .map((token) => {
+                const wordId = rawToWordId.get(token.word);
+                if (!wordId) return null;
+                return { 
+                    id: randomUUID(), 
+                    word_id: wordId, 
+                    sentence_id: sentenceId,
+                    start_index: token.startIndex,
+                    end_index: token.endIndex,
+                };
+            })
+            .filter(Boolean) as { id: string; word_id: string; sentence_id: string; start_index: number; end_index: number }[];
+
+        if (occurrences.length > 0) {
+            const { error: occError } = await client.from('word_occurrences').insert(occurrences);
+            if (occError) {
+                console.error('Failed to insert occurrences', occError);
+                return { error: 'Failed to update vocabulary for sentence' };
+            }
+        }
+
+        const newWordIds = Array.from(new Set(occurrences.map((o) => o.word_id)));
+        const removedWordIds = oldWordIds.filter((id) => !newWordIds.includes(id));
+        if (removedWordIds.length > 0) {
+            await cleanupOrphanWords(client, removedWordIds);
+        }
     }
 
     revalidatePath('/materials');

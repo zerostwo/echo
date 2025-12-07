@@ -1,28 +1,29 @@
 
 export const POS_MAP: Record<string, string> = {
-    n: "Noun",
-    v: "Verb",
-    adj: "Adjective",
-    adv: "Adverb",
-    prep: "Preposition",
-    conj: "Conjunction",
-    pron: "Pronoun",
-    art: "Article",
-    num: "Number",
-    int: "Interjection",
-    x: "Other",
+    n: "n.",
+    v: "v.",
+    j: "adj.",
+    r: "adv.",
+    i: "prep.",
+    c: "conj.",
+    p: "pron.",
+    a: "art.",
+    m: "num.",
+    u: "int.",
+    d: "det.",
+    x: "other",
 };
 
 export const EXCHANGE_MAP: Record<string, string> = {
-    p: "Past Tense",
-    d: "Past Participle",
-    i: "Present Participle",
-    3: "3rd Person Singular",
+    p: "Past tense",
+    d: "Past participle",
+    i: "Present participle",
+    3: "3rd person singular",
     r: "Comparative",
     t: "Superlative",
     s: "Plural",
     0: "Lemma",
-    1: "Lemma Transform",
+    1: "Lemma transform",
 };
 
 export const TAG_MAP: Record<string, string> = {
@@ -34,6 +35,26 @@ export const TAG_MAP: Record<string, string> = {
     ielts: "IELTS",
     gre: "GRE",
     ky: "Postgrad",
+};
+
+// Map for standardizing translation prefixes
+export const TRANS_PREFIX_MAP: Record<string, string> = {
+    "n.": "n.",
+    "a.": "adj.",
+    "adj.": "adj.",
+    "v.": "v.",
+    "vt.": "vt.",
+    "vi.": "vi.",
+    "adv.": "adv.",
+    "prep.": "prep.",
+    "conj.": "conj.",
+    "pron.": "pron.",
+    "num.": "num.",
+    "int.": "int.",
+    "interj.": "int.",
+    "art.": "art.",
+    "aux.": "aux.",
+    "pl.": "pl.",
 };
 
 export function parsePos(posString: string | null | undefined) {

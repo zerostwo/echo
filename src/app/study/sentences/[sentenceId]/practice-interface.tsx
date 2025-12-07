@@ -5,9 +5,10 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { evaluateDictation } from '@/actions/listening-actions';
 import { lookupWordByText } from '@/actions/word-actions';
+import { updateSentence } from '@/actions/sentence-actions';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
-import { Play, RotateCw, Check, ArrowRight, ArrowLeft, Pause, Eye, EyeOff, RefreshCw, Keyboard, X } from 'lucide-react';
+import { Play, RotateCw, Check, ArrowRight, ArrowLeft, Pause, Eye, EyeOff, RefreshCw, Keyboard, X, ChevronLeft, ChevronRight, Plus, Minus } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
@@ -89,14 +90,21 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
         startTimeRef.current = Date.now();
     }, [sentence.id]);
 
+    // Local sentence state for immediate updates
+    const [currentSentence, setCurrentSentence] = useState(sentence);
+    
+    useEffect(() => {
+        setCurrentSentence(sentence);
+    }, [sentence]);
+
     const handlePlay = () => {
         if (audioRef.current) {
             if (isPlaying) {
                 audioRef.current.pause();
                 setIsPlaying(false);
             } else {
-                const start = Number.isFinite(sentence.startTime) ? sentence.startTime : 0;
-                const end = Number.isFinite(sentence.endTime) ? sentence.endTime : 0;
+                const start = Number.isFinite(currentSentence.startTime) ? currentSentence.startTime : 0;
+                const end = Number.isFinite(currentSentence.endTime) ? currentSentence.endTime : 0;
                 
                 // Always start from beginning of sentence if stopped
                 if (audioRef.current.currentTime < start || (end > 0 && audioRef.current.currentTime >= end)) {
@@ -110,7 +118,7 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
 
     const handleReplay = () => {
         if (audioRef.current) {
-            const start = Number.isFinite(sentence.startTime) ? sentence.startTime : 0;
+            const start = Number.isFinite(currentSentence.startTime) ? currentSentence.startTime : 0;
             audioRef.current.currentTime = start;
             audioRef.current.play();
             setIsPlaying(true);
@@ -126,7 +134,7 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
         // Calculate duration in seconds
         const durationSeconds = Math.round((Date.now() - startTimeRef.current) / 1000);
         
-        const result = await evaluateDictation(sentence.id, userText, durationSeconds);
+        const result = await evaluateDictation(currentSentence.id, userText, durationSeconds);
         
         // Reset timer for next attempt
         startTimeRef.current = Date.now();
@@ -150,8 +158,8 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
         const handleTimeUpdate = () => {
             // Add a small buffer to end time to prevent cutting off too early
             // Ensure we have valid start/end times before enforcing loop/stop
-            const startTime = Number.isFinite(sentence.startTime) ? sentence.startTime : 0;
-            const endTime = Number.isFinite(sentence.endTime) ? sentence.endTime : 0;
+            const startTime = Number.isFinite(currentSentence.startTime) ? currentSentence.startTime : 0;
+            const endTime = Number.isFinite(currentSentence.endTime) ? currentSentence.endTime : 0;
 
             if (endTime > 0 && audio.currentTime >= endTime) {
                 if (isLooping) {
@@ -167,7 +175,7 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
 
         audio.addEventListener('timeupdate', handleTimeUpdate);
         return () => audio.removeEventListener('timeupdate', handleTimeUpdate);
-    }, [sentence, isLooping]);
+    }, [currentSentence, isLooping]);
 
     // Keyboard shortcuts
     useEffect(() => {
@@ -233,47 +241,110 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
         }
     }, [sentence.id, sentence.startTime]);
 
+    const handleTimeAdjustment = async (type: 'start' | 'end', change: number) => {
+        const newSentence = { ...currentSentence };
+        if (type === 'start') {
+            newSentence.startTime = Math.max(0, (newSentence.startTime || 0) + change);
+            // Ensure start time doesn't exceed end time
+            if (newSentence.endTime && newSentence.startTime >= newSentence.endTime) {
+                newSentence.startTime = newSentence.endTime - 0.1;
+            }
+        } else {
+            newSentence.endTime = Math.max((newSentence.startTime || 0) + 0.1, (newSentence.endTime || 0) + change);
+        }
+        
+        setCurrentSentence(newSentence);
+        
+        try {
+            const result = await updateSentence(newSentence.id, {
+                content: newSentence.content,
+                startTime: newSentence.startTime,
+                endTime: newSentence.endTime
+            });
+            
+            if (result.error) {
+                toast.error(result.error);
+            }
+        } catch (e) {
+            console.error(e);
+            toast.error("Failed to update time");
+        }
+    };
+
     return (
         <div className="w-full max-w-3xl mx-auto p-4 md:p-6 min-h-[calc(100vh-4rem)] flex flex-col">
             <HeaderPortal>
-                <div className="flex items-center gap-2">
-                    {prevId ? (
-                        <Button variant="outline" size="sm" asChild>
-                            <Link href={`/study/sentences/${prevId}`}>
-                                <ArrowLeft className="mr-2 h-4 w-4" /> Previous
-                            </Link>
-                        </Button>
-                    ) : (
-                        <Button variant="outline" size="sm" disabled>
-                            <ArrowLeft className="mr-2 h-4 w-4" /> Previous
-                        </Button>
-                    )}
+                {/* Navigation moved to main area */}
+            </HeaderPortal>
 
-                    {nextId ? (
-                        <Button variant="outline" size="sm" asChild>
-                            <Link href={`/study/sentences/${nextId}`}>
-                                Next <ArrowRight className="ml-2 h-4 w-4" />
+            <div className="flex-1 w-full flex items-center justify-center gap-4">
+                {/* Left Navigation Button */}
+                <div className="hidden md:block">
+                    {prevId ? (
+                        <Button variant="ghost" size="icon" asChild title="Previous Sentence" className="h-12 w-12 rounded-full">
+                            <Link href={`/study/sentences/${prevId}`}>
+                                <ChevronLeft className="h-8 w-8" />
                             </Link>
                         </Button>
                     ) : (
-                        <Button variant="outline" size="sm" disabled>
-                            Next <ArrowRight className="ml-2 h-4 w-4" />
+                        <Button variant="ghost" size="icon" disabled className="h-12 w-12 rounded-full opacity-50">
+                            <ChevronLeft className="h-8 w-8" />
                         </Button>
                     )}
                 </div>
-            </HeaderPortal>
 
-            <div className="flex-1 w-full">
                 {/* Main Practice Area */}
-                <div className="space-y-6 w-full">
+                <div className="space-y-6 w-full max-w-3xl">
                     <Card className="border-none shadow-lg bg-card/50 backdrop-blur-sm w-full">
                         <CardHeader className="flex flex-row items-center justify-between pb-2">
                             <div className="space-y-1">
                                 <div className="flex items-center gap-3">
-                                    <CardTitle className="text-xl">Sentence #{sentence.order + 1}</CardTitle>
-                                    <Badge variant="secondary" className="font-mono text-xs">
-                                        {formatTime(sentence.startTime)} - {formatTime(sentence.endTime)}
-                                    </Badge>
+                                    <CardTitle className="text-xl">Sentence #{currentSentence.order + 1}</CardTitle>
+                                    <div className="flex items-center gap-2 bg-secondary/50 rounded-md px-2 py-1">
+                                        <div className="flex items-center gap-1">
+                                            <Button 
+                                                variant="ghost" 
+                                                size="icon" 
+                                                className="h-4 w-4 hover:bg-background/50"
+                                                onClick={() => handleTimeAdjustment('start', -0.1)}
+                                                title="Start time -0.1s"
+                                            >
+                                                <Minus className="h-3 w-3" />
+                                            </Button>
+                                            <span className="font-mono text-xs w-12 text-center">{formatTimeDetail(currentSentence.startTime)}</span>
+                                            <Button 
+                                                variant="ghost" 
+                                                size="icon" 
+                                                className="h-4 w-4 hover:bg-background/50"
+                                                onClick={() => handleTimeAdjustment('start', 0.1)}
+                                                title="Start time +0.1s"
+                                            >
+                                                <Plus className="h-3 w-3" />
+                                            </Button>
+                                        </div>
+                                        <span className="text-muted-foreground text-xs">-</span>
+                                        <div className="flex items-center gap-1">
+                                            <Button 
+                                                variant="ghost" 
+                                                size="icon" 
+                                                className="h-4 w-4 hover:bg-background/50"
+                                                onClick={() => handleTimeAdjustment('end', -0.1)}
+                                                title="End time -0.1s"
+                                            >
+                                                <Minus className="h-3 w-3" />
+                                            </Button>
+                                            <span className="font-mono text-xs w-12 text-center">{formatTimeDetail(currentSentence.endTime)}</span>
+                                            <Button 
+                                                variant="ghost" 
+                                                size="icon" 
+                                                className="h-4 w-4 hover:bg-background/50"
+                                                onClick={() => handleTimeAdjustment('end', 0.1)}
+                                                title="End time +0.1s"
+                                            >
+                                                <Plus className="h-3 w-3" />
+                                            </Button>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                             <div className="flex items-center gap-2">
@@ -449,6 +520,48 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
                         </Alert>
                     )}
                 </div>
+
+                {/* Right Navigation Button */}
+                <div className="hidden md:block">
+                    {nextId ? (
+                        <Button variant="ghost" size="icon" asChild title="Next Sentence" className="h-12 w-12 rounded-full">
+                            <Link href={`/study/sentences/${nextId}`}>
+                                <ChevronRight className="h-8 w-8" />
+                            </Link>
+                        </Button>
+                    ) : (
+                        <Button variant="ghost" size="icon" disabled className="h-12 w-12 rounded-full opacity-50">
+                            <ChevronRight className="h-8 w-8" />
+                        </Button>
+                    )}
+                </div>
+            </div>
+            
+            {/* Mobile Navigation (Bottom) */}
+            <div className="flex md:hidden items-center justify-between mt-4 gap-4">
+                {prevId ? (
+                    <Button variant="outline" className="flex-1" asChild>
+                        <Link href={`/study/sentences/${prevId}`}>
+                            <ChevronLeft className="mr-2 h-4 w-4" /> Previous
+                        </Link>
+                    </Button>
+                ) : (
+                    <Button variant="outline" className="flex-1" disabled>
+                        <ChevronLeft className="mr-2 h-4 w-4" /> Previous
+                    </Button>
+                )}
+                
+                {nextId ? (
+                    <Button variant="outline" className="flex-1" asChild>
+                        <Link href={`/study/sentences/${nextId}`}>
+                            Next <ChevronRight className="ml-2 h-4 w-4" />
+                        </Link>
+                    </Button>
+                ) : (
+                    <Button variant="outline" className="flex-1" disabled>
+                        Next <ChevronRight className="ml-2 h-4 w-4" />
+                    </Button>
+                )}
             </div>
             
             {/* Word Detail Sheet */}
@@ -579,4 +692,12 @@ function formatTime(seconds: number) {
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
     return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
+function formatTimeDetail(seconds: number) {
+    if (!Number.isFinite(seconds)) return "0:00.0";
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    const ms = Math.floor((seconds % 1) * 10);
+    return `${mins}:${secs.toString().padStart(2, '0')}.${ms}`;
 }

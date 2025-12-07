@@ -15,10 +15,45 @@ import { getWordContext, getWordRelations, addWordRelation, removeWordRelation }
 import { Loader2, Volume2, Play, Pause, ExternalLink, X, Plus } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import Link from "next/link"
-import { parsePos, parseExchange, parseTags, getAllWordForms, createWordFormsRegex } from "@/lib/vocab-utils"
+import { parsePos, parseExchange, parseTags, getAllWordForms, createWordFormsRegex, TRANS_PREFIX_MAP } from "@/lib/vocab-utils"
 import { useUserSettings } from "@/components/user-settings-provider"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+
+const FormattedText = ({ text }: { text: string }) => {
+    if (!text) return null;
+    
+    const lines = text.split('\n');
+    
+    return (
+        <div className="space-y-1">
+            {lines.map((line, i) => {
+                // Match prefix like "n. ", "vt. ", "a. "
+                // The regex should match the start of the line
+                const match = line.match(/^([a-z]+\.([ \t]*(&|or)[ \t]*[a-z]+\.)*)\s*(.*)/i);
+                
+                if (match) {
+                    const prefix = match[1];
+                    const content = match[4]; // The rest of the line
+                    
+                    const mappedPrefix = prefix.replace(/[a-z]+\./gi, (m) => {
+                        const lower = m.toLowerCase();
+                        return TRANS_PREFIX_MAP[lower] || m;
+                    });
+
+                    return (
+                        <div key={i} className="flex gap-3">
+                            <div className="w-12 text-right font-serif italic text-muted-foreground shrink-0">{mappedPrefix}</div>
+                            <div className="flex-1">{content}</div>
+                        </div>
+                    );
+                }
+                
+                return <div key={i} className="leading-relaxed pl-[3.75rem]">{line}</div>;
+            })}
+        </div>
+    );
+};
 
 interface WordDetailSheetProps {
     word: any
@@ -50,7 +85,14 @@ export function WordDetailSheet({ word, open, onOpenChange, dictionaryId }: Word
             getWordContext(word.id)
                 .then(res => {
                     if (res.occurrences) {
-                        setOccurrences(res.occurrences);
+                        // Deduplicate sentences - keep only the first occurrence for each sentence
+                        const uniqueSentences = new Map();
+                        res.occurrences.forEach((occ: any) => {
+                            if (!uniqueSentences.has(occ.sentence.id)) {
+                                uniqueSentences.set(occ.sentence.id, occ);
+                            }
+                        });
+                        setOccurrences(Array.from(uniqueSentences.values()));
                     }
                 })
                 .finally(() => setLoadingCtx(false));
@@ -195,7 +237,7 @@ export function WordDetailSheet({ word, open, onOpenChange, dictionaryId }: Word
             <SheetContent className="w-[480px] sm:max-w-[480px] p-0 [&>button]:hidden">
                 <div className="flex flex-col h-full">
                     <div className="p-6 pb-2 flex-shrink-0">
-                        <SheetHeader className="p-0 space-y-2">
+                        <SheetHeader className="p-0 space-y-1">
                             <div className="flex items-start justify-between">
                                 <SheetTitle className="text-3xl font-bold flex items-center gap-3">
                                     {word.text}
@@ -217,22 +259,16 @@ export function WordDetailSheet({ word, open, onOpenChange, dictionaryId }: Word
                                     </Button>
                                 </SheetClose>
                             </div>
-                            <SheetDescription className="flex flex-wrap gap-2">
-                                {posList.length > 0 ? (
-                                    posList.map((pos, idx) => (
-                                        <Badge key={idx} variant="outline" className="font-normal">
-                                            <span className="font-semibold mr-1">{pos.label}</span>
-                                            {pos.percentage && <span className="text-muted-foreground opacity-70">{pos.percentage}</span>}
-                                        </Badge>
-                                    ))
-                                ) : (
-                                    word.pos && <Badge variant="outline">{word.pos}</Badge>
+                            <SheetDescription className="flex flex-col gap-2 mt-1">
+                                {tagList.length > 0 && (
+                                    <div className="flex flex-wrap gap-2">
+                                        {tagList.map((tag, idx) => (
+                                            <Badge key={idx} variant="secondary" className="bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-300 dark:border-blue-800 hover:bg-blue-100">
+                                                {tag.label}
+                                            </Badge>
+                                        ))}
+                                    </div>
                                 )}
-                                {tagList.map((tag, idx) => (
-                                    <Badge key={idx} variant="secondary" className="bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-300 dark:border-blue-800">
-                                        {tag.label}
-                                    </Badge>
-                                ))}
                             </SheetDescription>
                         </SheetHeader>
                     </div>
@@ -243,8 +279,8 @@ export function WordDetailSheet({ word, open, onOpenChange, dictionaryId }: Word
                             {word.definition && (
                                 <div className="space-y-3">
                                     <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider border-l-4 border-primary/20 pl-3">Definition</h3>
-                                    <div className="pl-4">
-                                        <p className="text-md leading-relaxed whitespace-pre-wrap text-gray-800 dark:text-gray-200">{word.definition}</p>
+                                    <div className="pl-2 text-base text-gray-800 dark:text-gray-200">
+                                        <FormattedText text={word.definition} />
                                     </div>
                                 </div>
                             )}
@@ -253,8 +289,36 @@ export function WordDetailSheet({ word, open, onOpenChange, dictionaryId }: Word
                             {word.translation && (
                                 <div className="space-y-3">
                                     <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider border-l-4 border-primary/20 pl-3">Translation</h3>
-                                    <div className="pl-4">
-                                        <p className="text-lg leading-relaxed whitespace-pre-wrap">{word.translation}</p>
+                                    <div className="pl-2 text-base">
+                                        <FormattedText text={word.translation} />
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* POS Distribution Section */}
+                            {posList.length > 0 && (
+                                <div className="space-y-3">
+                                    <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider border-l-4 border-primary/20 pl-3">Part of Speech</h3>
+                                    <div className="pl-2 space-y-3">
+                                        {posList
+                                            .map(p => ({
+                                                ...p,
+                                                value: parseInt(p.percentage?.replace('%', '') || '0')
+                                            }))
+                                            .sort((a, b) => b.value - a.value)
+                                            .map((pos, idx) => (
+                                                <div key={idx} className="flex items-center gap-3 text-base">
+                                                    <div className="w-12 text-right font-serif italic text-muted-foreground">{pos.label}</div>
+                                                    <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
+                                                        <div 
+                                                            className="h-full bg-primary/60 rounded-full" 
+                                                            style={{ width: `${pos.value}%` }}
+                                                        />
+                                                    </div>
+                                                    <div className="w-10 text-sm text-muted-foreground tabular-nums">{pos.value}%</div>
+                                                </div>
+                                            ))
+                                        }
                                     </div>
                                 </div>
                             )}
@@ -263,11 +327,11 @@ export function WordDetailSheet({ word, open, onOpenChange, dictionaryId }: Word
                             {exchangeList.length > 0 && (
                                 <div className="space-y-3">
                                      <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider border-l-4 border-primary/20 pl-3">Word Forms</h3>
-                                     <div className="pl-4">
+                                     <div className="pl-2">
                                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-3">
                                             {exchangeList.map((item, idx) => (
                                                 <div key={idx} className="flex justify-between items-baseline border-b border-dotted border-muted-foreground/20 pb-1">
-                                                    <span className="text-muted-foreground text-xs uppercase tracking-wide">{item.label}</span>
+                                                    <span className="text-muted-foreground text-xs tracking-wide">{item.label}</span>
                                                     <span className="font-medium font-mono text-sm">{item.word}</span>
                                                 </div>
                                             ))}
@@ -385,15 +449,15 @@ export function WordDetailSheet({ word, open, onOpenChange, dictionaryId }: Word
                             {/* Context Sentences */}
                             <div className="space-y-3 border-t pt-6">
                                  <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider border-l-4 border-primary/20 pl-3">Context Sentences</h3>
-                                 <div className="pl-4">
+                                 <div className="pl-2">
                                      {loadingCtx ? (
                                          <div className="flex items-center text-sm text-muted-foreground py-4">
                                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                                              Loading examples...
                                          </div>
                                      ) : occurrences.length > 0 ? (
-                                         <ul className="space-y-4">
-                                             {occurrences.map(occ => {
+                                         <div className="space-y-6">
+                                             {occurrences.map((occ, index) => {
                                                  // Helper function to highlight the word in sentence
                                                  const highlightSentence = () => {
                                                      const content = occ.sentence.content;
@@ -429,37 +493,37 @@ export function WordDetailSheet({ word, open, onOpenChange, dictionaryId }: Word
                                                  };
                                                  
                                                  return (
-                                                 <li key={occ.id} 
-                                                     className={`relative group rounded-lg border transition-all duration-200 ${playingSentenceId === occ.sentence.id ? 'bg-primary/5 border-primary ring-1 ring-primary' : 'bg-card hover:bg-muted/50'}`}
-                                                 >
-                                                     <div className="p-4 cursor-pointer" onClick={() => handlePlaySentence(occ.sentence)}>
-                                                         <div className="flex gap-3">
-                                                             <div className="flex-shrink-0 mt-1">
-                                                                 <div className={`w-6 h-6 rounded-full flex items-center justify-center transition-colors ${playingSentenceId === occ.sentence.id ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary'}`}>
-                                                                     {playingSentenceId === occ.sentence.id ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3 ml-0.5" />}
-                                                                 </div>
+                                                 <div key={occ.id} className="flex gap-3 group border-b border-border/40 pb-4 last:border-0 last:pb-0">
+                                                     <div className="text-muted-foreground font-mono text-lg font-medium pt-0.5 w-6 text-right shrink-0 select-none opacity-50">{index + 1}.</div>
+                                                     <div className="flex-1 space-y-2">
+                                                         <div className="flex items-start justify-between gap-3">
+                                                             <div className="text-base leading-relaxed text-gray-800 dark:text-gray-200">
+                                                                 {highlightSentence()}
                                                              </div>
-                                                             <div className="flex-1 min-w-0">
-                                                                 <p className="leading-relaxed text-sm">
-                                                                     {highlightSentence()}
-                                                                 </p>
-                                                             </div>
+                                                             <Button 
+                                                                 variant="ghost" 
+                                                                 size="icon" 
+                                                                 className={`h-6 w-6 shrink-0 mt-1 transition-colors ${playingSentenceId === occ.sentence.id ? 'text-primary' : 'text-muted-foreground hover:text-primary'}`}
+                                                                 onClick={() => handlePlaySentence(occ.sentence)}
+                                                             >
+                                                                 {playingSentenceId === occ.sentence.id ? <Pause className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+                                                             </Button>
+                                                         </div>
+                                                         <div className="flex justify-end">
+                                                             <Link 
+                                                                 href={`/study/sentences/${occ.sentence.id}`}
+                                                                 className="inline-flex items-center text-xs text-muted-foreground hover:text-primary hover:underline transition-colors"
+                                                                 onClick={(e) => e.stopPropagation()}
+                                                             >
+                                                                 <span>{occ.sentence.material.title}</span>
+                                                                 <ExternalLink className="w-3 h-3 ml-1" />
+                                                             </Link>
                                                          </div>
                                                      </div>
-                                                     <div className="px-4 pb-3 pt-0 flex justify-end">
-                                                         <Link 
-                                                             href={`/materials/${occ.sentence.material.id}`}
-                                                             className="inline-flex items-center text-xs text-muted-foreground hover:text-primary hover:underline transition-colors"
-                                                             onClick={(e) => e.stopPropagation()}
-                                                         >
-                                                             <span>{occ.sentence.material.title}</span>
-                                                             <ExternalLink className="w-3 h-3 ml-1" />
-                                                         </Link>
-                                                     </div>
-                                                 </li>
+                                                 </div>
                                                  );
                                              })}
-                                         </ul>
+                                         </div>
                                      ) : (
                                          <div className="text-sm text-muted-foreground italic py-4 text-center bg-muted/20 rounded-lg">
                                              No context sentences found for this word.
