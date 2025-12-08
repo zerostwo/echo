@@ -46,6 +46,8 @@ model User {
   notifications Notification[]
   learningSessions LearningSession[]
   dictionaries  Dictionary[]
+  exportJobs    ExportJob[]
+  importJobs    ImportJob[]
 
   @@map("users")
 }
@@ -354,4 +356,37 @@ model WordRelation {
   
   @@index([wordId])
   @@map("word_relations")
+}
+
+model ExportJob {
+  id          String   @id @default(cuid())
+  userId      String   @map("user_id")
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  options     String   // JSON string: { include: { learning: boolean, vocab: boolean, ... } }
+  status      String   // "queued", "processing", "finished", "failed"
+  filePath    String?  @map("file_path") // Path in storage
+  error       String?
+  
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@index([userId])
+  @@map("export_jobs")
+}
+
+model ImportJob {
+  id          String   @id @default(cuid())
+  userId      String   @map("user_id")
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  status      String   // "queued", "processing", "finished", "failed"
+  filePath    String?  @map("file_path") // Path in storage (uploaded zip)
+  error       String?
+  
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@index([userId])
+  @@map("import_jobs")
 }

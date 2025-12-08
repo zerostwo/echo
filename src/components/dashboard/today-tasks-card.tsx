@@ -136,7 +136,7 @@ export function TodayTasksCard({ wordsReviewed, sentencesPracticed, dailyGoals }
             <Progress value={sentenceProgress} className="h-2 flex-1 bg-slate-100 [&>div]:bg-slate-800" />
             <Button asChild size="sm" className="w-28 bg-slate-800 hover:bg-slate-900 text-white">
               <Link href="/study/sentences">
-                Start Study
+                {sentencesPracticed > 0 ? 'Resume' : 'Start Study'}
               </Link>
             </Button>
           </div>

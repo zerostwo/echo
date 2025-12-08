@@ -33,9 +33,10 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Separator } from "@/components/ui/separator"
 import { AccountForm } from "@/components/account-form"
 import { SecuritySettings } from "@/components/settings/security-settings"
+import { DataSettings } from "@/components/settings/data-settings"
 import { updateSettings } from "@/actions/user-actions"
 import { toast } from "sonner"
-import { Loader2, Settings, User, Book, Bell, Shield, Info, Keyboard, RotateCcw } from "lucide-react"
+import { Loader2, Settings, User, Book, Bell, Shield, Info, Keyboard, RotateCcw, Database } from "lucide-react"
 import { cn } from "@/lib/utils"
 import {
   Tooltip,
@@ -339,6 +340,11 @@ export function SettingsDialog({
       icon: Shield,
       id: "security",
     },
+    {
+      title: "Data",
+      icon: Database,
+      id: "data",
+    },
   ]
 
   return (
@@ -386,7 +392,7 @@ export function SettingsDialog({
                   </Button>
                 </div>
               )}
-              {activeTab !== "account" && activeTab !== "security" && (
+              {activeTab !== "account" && activeTab !== "security" && activeTab !== "data" && (
                 <div className="flex items-center gap-2">
                   <Button size="sm" onClick={handleSave} disabled={isLoading}>
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
@@ -867,6 +873,12 @@ export function SettingsDialog({
               {activeTab === "security" && (
                 <div className="space-y-6">
                   <SecuritySettings twoFactorEnabled={user.twoFactorEnabled} />
+                </div>
+              )}
+
+              {activeTab === "data" && (
+                <div className="space-y-6">
+                  <DataSettings />
                 </div>
               )}
             </div>
