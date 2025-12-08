@@ -15,6 +15,7 @@ export default async function LearnPage({
     dictionaryId?: string
     oxford?: string
     collins?: string
+    hardest?: string
   }> 
 }) {
   const session = await auth();
@@ -59,6 +60,10 @@ export default async function LearnPage({
   
   if (params.collins) {
     filters.collins = params.collins.split(',').map(Number).filter(n => !isNaN(n));
+  }
+
+  if (params.hardest === 'true') {
+    filters.hardest = true;
   }
 
   const { words, error } = await getWordsForLearning(sessionSize, Object.keys(filters).length > 0 ? filters : undefined);

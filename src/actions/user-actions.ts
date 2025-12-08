@@ -264,13 +264,22 @@ export async function updateSettings(settings: any) {
   }
 
   try {
-      // Fetch current settings to merge? Or just overwrite?
-      // The settings field is a stringified JSON
+      const client = supabaseAdmin || supabase;
+      const { data: user } = await client.from('users').select('settings').eq('id', session.user.id).single();
       
-      const { error: updateError } = await supabase
+      let currentSettings = {};
+      if (user?.settings) {
+          try {
+              currentSettings = JSON.parse(user.settings);
+          } catch (e) {}
+      }
+      
+      const newSettings = { ...currentSettings, ...settings };
+
+      const { error: updateError } = await client
           .from('users')
           .update({ 
-            settings: JSON.stringify(settings),
+            settings: JSON.stringify(newSettings),
             updated_at: new Date().toISOString() 
           })
           .eq('id', session.user.id);
@@ -286,3 +295,4 @@ export async function updateSettings(settings: any) {
       return { error: 'Failed to update settings' };
   }
 }
+

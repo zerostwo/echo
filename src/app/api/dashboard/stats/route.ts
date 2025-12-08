@@ -14,6 +14,11 @@ export interface DashboardStats {
   // Today's tasks
   wordsDueToday: number;
   wordsReviewedTodayCount: number;
+  sentencesPracticedTodayCount: number;
+  dailyGoals: {
+    words: number;
+    sentences: number;
+  };
 
   // Vocabulary snapshot
   vocabSnapshot: {
@@ -45,6 +50,7 @@ export interface DashboardStats {
   // Summary stats
   totalMaterials: number;
   totalSentences: number;
+  totalWords: number;
   totalPractices: number;
   averageScore: number;
 
@@ -84,6 +90,8 @@ export async function GET() {
       todayReviewsResult,
       wordStatusesResult,
       hardestWordsResult,
+      userSettingsResult,
+      sentencesPracticedTodayResult,
     ] = await Promise.all([
       // Materials with sentence count
       client
@@ -148,6 +156,21 @@ export async function GET() {
         .gt('error_count', 0)
         .order('error_count', { ascending: false })
         .limit(5),
+
+      // User settings for daily goals
+      client
+        .from('users')
+        .select('settings')
+        .eq('id', userId)
+        .single(),
+
+      // Sentences practiced today
+      client
+        .from('practice_progress')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', userId)
+        .gte('updated_at', todayStart.toISOString())
+        .lte('updated_at', todayEnd.toISOString()),
     ]);
 
     // Process materials
@@ -184,6 +207,7 @@ export async function GET() {
 
     // Process word statuses for vocabulary snapshot
     const wordStatuses = wordStatusesResult.data || [];
+    const totalWords = wordStatuses.length;
     const vocabSnapshot = wordStatuses.reduce(
       (acc: { new: number; learning: number; mastered: number }, ws: { status: string }) => {
         if (ws.status === 'NEW') acc.new++;
@@ -330,15 +354,31 @@ export async function GET() {
       }
     }
 
+    // Parse user settings
+    let dailyGoals = { words: 20, sentences: 10 };
+    if (userSettingsResult.data?.settings) {
+      try {
+        const settings = JSON.parse(userSettingsResult.data.settings);
+        if (settings.dailyGoals) {
+          dailyGoals = settings.dailyGoals;
+        }
+      } catch (e) {
+        console.error('Failed to parse user settings:', e);
+      }
+    }
+
     const stats: DashboardStats = {
       heatmapData,
       wordsDueToday: wordsDueToday || 0,
       wordsReviewedTodayCount: wordsReviewedToday,
+      sentencesPracticedTodayCount: sentencesPracticedTodayResult.count || 0,
+      dailyGoals,
       vocabSnapshot,
       sentenceSnapshot,
       hardestWords,
       totalMaterials,
       totalSentences,
+      totalWords,
       totalPractices,
       averageScore,
       lastWord,

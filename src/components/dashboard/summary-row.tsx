@@ -1,53 +1,67 @@
 'use client';
 
-import { BookOpen, FileText, Mic, Trophy } from 'lucide-react';
+import { Card, CardContent } from "@/components/ui/card"
+import { Book, AlignLeft, Type } from 'lucide-react';
 
 interface SummaryRowProps {
   totalMaterials: number;
   totalSentences: number;
-  totalPractices: number;
-  averageScore: number;
+  totalWords: number;
 }
 
 export function SummaryRow({
   totalMaterials,
   totalSentences,
-  totalPractices,
-  averageScore,
+  totalWords,
 }: SummaryRowProps) {
   const stats = [
     {
-      label: 'Materials',
+      label: 'Total Materials',
       value: totalMaterials,
-      icon: FileText,
+      icon: Book,
+      color: 'bg-blue-500',
+      extra: '+4 this week',
+      extraColor: 'text-green-500',
     },
     {
-      label: 'Sentences',
-      value: totalSentences,
-      icon: Mic,
+      label: 'Total Sentences',
+      value: totalSentences.toLocaleString(),
+      icon: AlignLeft,
+      color: 'bg-indigo-500',
+      extra: 'Top 5%',
+      extraColor: 'text-muted-foreground',
     },
     {
-      label: 'Practices',
-      value: totalPractices,
-      icon: BookOpen,
-    },
-    {
-      label: 'Avg Score',
-      value: `${averageScore}%`,
-      icon: Trophy,
+      label: 'Total Words',
+      value: totalWords.toLocaleString(),
+      icon: Type,
+      color: 'bg-emerald-500',
+      extra: '85% coverage',
+      extraColor: 'text-emerald-500',
     },
   ];
 
   return (
-    <div className="grid grid-cols-4 gap-2 rounded-lg border bg-muted/30 p-2">
+    <div className="grid gap-2 md:grid-cols-3">
       {stats.map((stat) => (
-        <div key={stat.label} className="flex items-center gap-2 px-2 py-1">
-          <stat.icon className="h-4 w-4 text-muted-foreground shrink-0" />
-          <div className="min-w-0">
-            <p className="text-xs text-muted-foreground truncate">{stat.label}</p>
-            <p className="text-sm font-semibold">{stat.value}</p>
-          </div>
-        </div>
+        <Card key={stat.label} className="overflow-hidden">
+          <CardContent className="p-3 flex items-center gap-4">
+            <div className={`${stat.color} p-3 rounded-lg`}>
+              <stat.icon className="h-6 w-6 text-white" />
+            </div>
+            <div className="flex-1">
+              <p className="text-sm font-medium text-muted-foreground">
+                {stat.label}
+              </p>
+              <div className="flex items-baseline justify-between">
+                <h2 className="text-2xl font-bold">{stat.value}</h2>
+                <span className={`text-xs font-medium ${stat.extraColor}`}>
+                  {stat.extra}
+                </span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
       ))}
     </div>
   );

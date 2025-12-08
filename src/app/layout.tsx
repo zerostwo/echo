@@ -142,7 +142,7 @@ export default async function RootLayout({
                           <DynamicBreadcrumb folders={folders} />
                           <div id="header-actions" className="ml-auto flex items-center gap-2 pointer-events-auto" />
                       </header>
-                      <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
+                      <div className="flex flex-1 flex-col gap-4 px-12 pt-0 pb-4">
                           {children}
                       </div>
                   </SidebarInset>

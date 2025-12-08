@@ -224,7 +224,12 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
     if (posStats.length > 0) {
         // Try to find the part matching the highest probability POS
         for (const stat of posStats) {
-            const match = validParts.find(p => p.startsWith(stat.label));
+            const match = validParts.find(p => {
+                if (p.startsWith(stat.label)) return true;
+                // Handle vi. and vt. as v.
+                if (stat.label === 'v.' && (p.startsWith('vi.') || p.startsWith('vt.'))) return true;
+                return false;
+            });
             if (match) {
                 selectedPart = match;
                 break;

@@ -1,7 +1,7 @@
 'use client';
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { AudioLines } from 'lucide-react';
+import { Progress } from '@/components/ui/progress';
 
 interface SentenceSnapshotCardProps {
   newCount: number;
@@ -11,52 +11,34 @@ interface SentenceSnapshotCardProps {
 
 export function SentenceSnapshotCard({ newCount, practicedCount, masteredCount }: SentenceSnapshotCardProps) {
   const total = newCount + practicedCount + masteredCount;
+  const masteryPercentage = total > 0 ? (masteredCount / total) * 100 : 0;
   
-  const segments = [
-    { label: 'New', count: newCount, color: 'bg-purple-500', textColor: 'text-purple-500' },
-    { label: 'Practiced', count: practicedCount, color: 'bg-amber-500', textColor: 'text-amber-500' },
-    { label: 'Mastered', count: masteredCount, color: 'bg-green-500', textColor: 'text-green-500' },
-  ];
-
   return (
     <Card className="h-full flex flex-col">
-      <CardHeader className="flex flex-row items-center justify-between py-3 pb-2">
-        <CardTitle className="text-sm font-medium">Sentence Progress</CardTitle>
-        <AudioLines className="h-4 w-4 text-muted-foreground" />
+      <CardHeader className="py-2 pb-2">
+        <CardTitle className="text-base font-semibold">Sentence Progress</CardTitle>
       </CardHeader>
-      <CardContent className="pb-3 flex-1 flex flex-col justify-center">
-        {/* Progress bar visualization */}
-        <div className="flex h-2 w-full overflow-hidden rounded-full bg-muted mb-3">
-          {total > 0 ? (
-            segments.map((segment) => {
-              const width = (segment.count / total) * 100;
-              if (width === 0) return null;
-              return (
-                <div
-                  key={segment.label}
-                  className={`${segment.color} transition-all`}
-                  style={{ width: `${width}%` }}
-                />
-              );
-            })
-          ) : (
-            <div className="w-full bg-muted" />
-          )}
+      <CardContent className="pb-2 flex-1 flex flex-col gap-3">
+        <div className="space-y-2">
+          <div className="inline-flex items-center rounded-md border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent bg-secondary text-secondary-foreground hover:bg-secondary/80">
+            Mastery {masteryPercentage.toFixed(2)}%
+          </div>
+          <Progress value={masteryPercentage} className="h-2 bg-blue-100 [&>div]:bg-blue-600 dark:bg-blue-900/20 dark:[&>div]:bg-blue-400" />
         </div>
 
-        {/* Legend */}
-        <div className="grid grid-cols-3 gap-2 text-xs">
-          {segments.map((segment) => (
-            <div key={segment.label} className="text-center">
-              <div className={`font-bold ${segment.textColor}`}>{segment.count}</div>
-              <div className="text-muted-foreground">{segment.label}</div>
-            </div>
-          ))}
-        </div>
-
-        {/* Total */}
-        <div className="border-t pt-2 mt-2 text-center text-xs text-muted-foreground">
-          {total} total sentences
+        <div className="grid grid-cols-3 gap-3">
+          <div className="rounded-lg bg-blue-100 p-3 dark:bg-blue-900/20">
+            <div className="text-xs font-medium text-muted-foreground mb-1">New</div>
+            <div className="text-xl font-bold text-blue-700 dark:text-blue-400">{newCount.toLocaleString()}</div>
+          </div>
+          <div className="rounded-lg bg-orange-100 p-3 dark:bg-orange-900/20">
+            <div className="text-xs font-medium text-muted-foreground mb-1">Studying</div>
+            <div className="text-xl font-bold text-orange-700 dark:text-orange-400">{practicedCount.toLocaleString()}</div>
+          </div>
+          <div className="rounded-lg bg-green-100 p-3 dark:bg-green-900/20">
+            <div className="text-xs font-medium text-muted-foreground mb-1">Mastered</div>
+            <div className="text-xl font-bold text-green-700 dark:text-green-400">{masteredCount.toLocaleString()}</div>
+          </div>
         </div>
       </CardContent>
     </Card>

@@ -10,11 +10,20 @@ import { HardestWordsCard } from './hardest-words-card';
 import { SummaryRow } from './summary-row';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
+import { HeaderPortal } from '@/components/header-portal';
+import { NotificationsDialog } from '@/components/notifications-dialog';
+import { Button } from '@/components/ui/button';
+import { Bell } from 'lucide-react';
 
 interface DashboardStats {
   heatmapData: Array<{ date: string; duration: number }>;
   wordsDueToday: number;
   wordsReviewedTodayCount: number;
+  sentencesPracticedTodayCount: number;
+  dailyGoals: {
+    words: number;
+    sentences: number;
+  };
   vocabSnapshot: {
     new: number;
     learning: number;
@@ -38,6 +47,7 @@ interface DashboardStats {
   }>;
   totalMaterials: number;
   totalSentences: number;
+  totalWords: number;
   totalPractices: number;
   averageScore: number;
   lastWord?: {
@@ -91,6 +101,7 @@ export function DashboardContent() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
 
   useEffect(() => {
     async function fetchStats() {
@@ -126,44 +137,53 @@ export function DashboardContent() {
   }
 
   return (
-    <div className="flex flex-1 flex-col gap-3 p-4 pt-0">
-      {/* Summary Row - full width, compact */}
+    <div className="flex flex-1 flex-col gap-2 pt-0">
+      <HeaderPortal>
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" size="icon" onClick={() => setNotificationsOpen(true)}>
+            <Bell className="h-4 w-4" />
+          </Button>
+          <NotificationsDialog open={notificationsOpen} onOpenChange={setNotificationsOpen} />
+        </div>
+      </HeaderPortal>
+
+      {/* Row 1: Summary Cards */}
       <SummaryRow
         totalMaterials={stats.totalMaterials}
         totalSentences={stats.totalSentences}
-        totalPractices={stats.totalPractices}
-        averageScore={stats.averageScore}
+        totalWords={stats.totalWords}
       />
 
-      {/* Activity Heatmap - full width with year tabs */}
-      <ActivityHeatmap data={stats.heatmapData} />
+      <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-3">
+        {/* Row 2: Today's Tasks (Col 1) + Heatmap (Col 2-3) */}
+        <div className="col-span-1">
+            <TodayTasksCard
+            wordsReviewed={stats.wordsReviewedTodayCount}
+            sentencesPracticed={stats.sentencesPracticedTodayCount}
+            dailyGoals={stats.dailyGoals}
+            />
+        </div>
+        <div className="col-span-1 lg:col-span-2">
+             <ActivityHeatmap data={stats.heatmapData} />
+        </div>
 
-      {/* Main content grid - 2x3 layout on large screens */}
-      <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-        {/* Row 1 */}
-        <ContinueLearningCard
-          lastWord={stats.lastWord}
-          lastSentence={stats.lastSentence}
-          wordsDueToday={stats.wordsDueToday}
-          sentencesDueToday={stats.sentenceSnapshot.new}
-        />
-        <TodayTasksCard
-          wordsDueToday={stats.wordsDueToday}
-          wordsReviewed={stats.wordsReviewedTodayCount}
-        />
-        <HardestWordsCard words={stats.hardestWords} />
-        
-        {/* Row 2 */}
-        <VocabSnapshotCard
-          newCount={stats.vocabSnapshot.new}
-          learningCount={stats.vocabSnapshot.learning}
-          masteredCount={stats.vocabSnapshot.mastered}
-        />
+        {/* Row 3 */}
+        {/* Col 1: Sentences */}
         <SentenceSnapshotCard
           newCount={stats.sentenceSnapshot.new}
           practicedCount={stats.sentenceSnapshot.practiced}
           masteredCount={stats.sentenceSnapshot.mastered}
         />
+        
+        {/* Col 2: Words */}
+        <VocabSnapshotCard
+          newCount={stats.vocabSnapshot.new}
+          learningCount={stats.vocabSnapshot.learning}
+          masteredCount={stats.vocabSnapshot.mastered}
+        />
+
+        {/* Col 3: Hardest Words */}
+        <HardestWordsCard words={stats.hardestWords} />
       </div>
     </div>
   );

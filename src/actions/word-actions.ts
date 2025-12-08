@@ -877,3 +877,53 @@ export async function getWordRelations(wordId: string) {
 
     return { relations };
 }
+
+export async function getHardestWords(limit: number = 50) {
+    const session = await auth();
+    if (!session?.user?.id) return { error: 'Unauthorized' };
+
+    const client = supabaseAdmin || supabase;
+
+    const { data: hardestWords, error } = await client
+        .from('user_word_statuses')
+        .select(`
+          id,
+          error_count,
+          words:word_id (
+            id,
+            text,
+            translation,
+            phonetic,
+            pos,
+            definition,
+            tag,
+            exchange
+          )
+        `)
+        .eq('user_id', session.user.id)
+        .gt('error_count', 0)
+        .order('error_count', { ascending: false })
+        .limit(limit);
+
+    if (error) {
+        console.error('Failed to fetch hardest words:', error);
+        return { error: 'Failed to fetch hardest words' };
+    }
+
+    return {
+        words: hardestWords.map((ws: any) => {
+            const word = ws.words;
+            return {
+                id: word?.id || ws.id,
+                text: word?.text || '',
+                errorCount: ws.error_count || 0,
+                translation: word?.translation || null,
+                phonetic: word?.phonetic || null,
+                pos: word?.pos || null,
+                definition: word?.definition || null,
+                tag: word?.tag || null,
+                exchange: word?.exchange || null,
+            };
+        })
+    };
+}

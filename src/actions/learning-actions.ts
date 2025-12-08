@@ -65,6 +65,7 @@ export interface LearningFilters {
   collins?: number[];
   minFrequency?: number;
   maxFrequency?: number;
+  hardest?: boolean;
 }
 
 /**
@@ -89,6 +90,71 @@ export async function getWordsForLearning(limit: number = 20, filters?: Learning
   // Special handling for dictionary filter
   if (filters?.dictionaryId) {
     return getWordsFromDictionary(client, session.user.id, filters.dictionaryId, limit, filters);
+  }
+
+  // Special handling for hardest words
+  if (filters?.hardest) {
+    const { data: hardestWords, error: hardestError } = await client
+      .from('user_word_statuses')
+      .select(`
+        id,
+        word_id,
+        status,
+        fsrs_due,
+        fsrs_stability,
+        fsrs_difficulty,
+        fsrs_reps,
+        fsrs_lapses,
+        fsrs_state,
+        error_count,
+        words:word_id (
+          id,
+          text,
+          phonetic,
+          translation,
+          definition,
+          pos,
+          exchange,
+          oxford,
+          collins,
+          deleted_at
+        )
+      `)
+      .eq('user_id', session.user.id)
+      .gt('error_count', 0)
+      .order('error_count', { ascending: false })
+      .limit(limit);
+
+    if (hardestError) {
+      console.error('[getWordsForLearning] Error fetching hardest words:', hardestError);
+      return { words: [], error: hardestError.message };
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const words: LearningWord[] = (hardestWords || []).map((ws: any) => {
+      const word = ws.words;
+      return {
+        id: ws.id,
+        wordId: word?.id || ws.word_id,
+        text: word?.text || '',
+        phonetic: word?.phonetic ?? null,
+        translation: word?.translation ?? null,
+        definition: word?.definition ?? null,
+        pos: word?.pos ?? null,
+        exchange: word?.exchange ?? null,
+        status: ws.status,
+        exampleSentence: null,
+        fsrsState: ws.fsrs_state || 0,
+        fsrsDue: ws.fsrs_due,
+        fsrsStability: ws.fsrs_stability,
+        fsrsDifficulty: ws.fsrs_difficulty,
+        fsrsReps: ws.fsrs_reps || 0,
+        fsrsLapses: ws.fsrs_lapses || 0,
+        errorCount: ws.error_count || 0,
+      };
+    });
+
+    return { words };
   }
   
   // Normal flow: get words from user's vocabulary that need learning
