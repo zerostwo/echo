@@ -69,6 +69,7 @@ export const columns = (folders: any[], timezone: string): ColumnDef<Material>[]
   },
   {
     accessorKey: "_count.sentences",
+    id: "sentences",
     header: "Sentences",
     enableSorting: false,
     cell: ({ row }) => {
@@ -134,9 +135,9 @@ export const columns = (folders: any[], timezone: string): ColumnDef<Material>[]
     }
   },
   {
-    id: "time",
+    id: "practice_time",
     accessorFn: (row) => row.stats.duration,
-    header: "Time",
+    header: "Practice Time",
     enableSorting: false,
     cell: ({ row }) => {
         const stats = row.original.stats
@@ -147,6 +148,7 @@ export const columns = (folders: any[], timezone: string): ColumnDef<Material>[]
   },
   {
     accessorKey: "created_at",
+    id: "uploaded",
     header: "Uploaded",
     enableSorting: false,
     cell: ({ row }) => {

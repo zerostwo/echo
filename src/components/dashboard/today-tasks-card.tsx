@@ -117,8 +117,8 @@ export function TodayTasksCard({ wordsReviewed, sentencesPracticed, dailyGoals }
             <span className="text-sm text-muted-foreground">{wordsReviewed}/{goals.words}</span>
           </div>
           <div className="flex items-center gap-4">
-            <Progress value={wordProgress} className="h-2 flex-1 bg-indigo-100 [&>div]:bg-indigo-600" />
-            <Button asChild size="sm" className="w-28 bg-indigo-600 hover:bg-indigo-700 text-white">
+            <Progress value={wordProgress} className="h-2 flex-1 bg-emerald-100 [&>div]:bg-emerald-600" />
+            <Button asChild size="sm" className="w-28 bg-emerald-600 hover:bg-emerald-700 text-white">
               <Link href="/study/words">
                 {wordsReviewed > 0 ? 'Resume' : 'Start'}
               </Link>
@@ -133,8 +133,8 @@ export function TodayTasksCard({ wordsReviewed, sentencesPracticed, dailyGoals }
             <span className="text-sm text-muted-foreground">{sentencesPracticed}/{goals.sentences}</span>
           </div>
           <div className="flex items-center gap-4">
-            <Progress value={sentenceProgress} className="h-2 flex-1 bg-slate-100 [&>div]:bg-slate-800" />
-            <Button asChild size="sm" className="w-28 bg-slate-800 hover:bg-slate-900 text-white">
+            <Progress value={sentenceProgress} className="h-2 flex-1 bg-indigo-100 [&>div]:bg-indigo-600" />
+            <Button asChild size="sm" className="w-28 bg-indigo-600 hover:bg-indigo-700 text-white">
               <Link href="/study/sentences">
                 {sentencesPracticed > 0 ? 'Resume' : 'Start Study'}
               </Link>

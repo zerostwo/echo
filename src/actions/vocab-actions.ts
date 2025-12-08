@@ -571,11 +571,11 @@ export async function getVocabPaginated(
     // Try to get from cache first
     const cached = await getCached<PaginatedVocabResult>(cacheKey);
     if (cached) {
-        console.log('[getVocabPaginated] Cache hit');
+        console.log(`[${new Date().toISOString()}] [getVocabPaginated] Cache hit`);
         return cached;
     }
 
-        console.log('[getVocabPaginated] Cache miss, fetching from database');
+        console.log(`[${new Date().toISOString()}] [getVocabPaginated] Cache miss, fetching from database`);
 
     try {
         const wordFrequencyMap = new Map<string, { frequency: number; sentenceIds: string[] }>();

@@ -887,7 +887,7 @@ export async function getMaterialsPaginated(
                 .is('deleted_at', null),
             client
                 .from('practice_progress')
-                .select('sentence_id, score, attempts, user_id')
+                .select('sentence_id, score, attempts, user_id, duration')
                 .eq('user_id', userId),
             client
                 .from('word_occurrences')

@@ -384,6 +384,7 @@ export function PaginatedDataTable({
       },
       {
         accessorKey: "_count.sentences",
+        id: "sentences",
         header: () => (
           <SortableColumnHeader 
             column="sentences" 
@@ -398,7 +399,7 @@ export function PaginatedDataTable({
         }
       },
       {
-        id: "vocab",
+        id: "words",
         accessorFn: (row) => row.stats.vocabCount,
         header: () => (
           <SortableColumnHeader 
@@ -483,12 +484,12 @@ export function PaginatedDataTable({
         }
       },
       {
-        id: "time",
+        id: "practice time",
         accessorFn: (row) => row.stats.duration,
         header: () => (
           <SortableColumnHeader 
             column="time" 
-            label="Time" 
+            label="Practice Time" 
             sortBy={sortBy} 
             sortOrder={sortOrder} 
             onSort={handleSort} 
@@ -497,12 +498,19 @@ export function PaginatedDataTable({
         cell: ({ row }) => {
             const stats = row.original.stats
             if (stats.practicedCount === 0) return <span className="text-muted-foreground pl-4">-</span>
-            const durationMins = Math.round(stats.duration / 60)
+            
+            const durationSeconds = stats.duration || 0
+            if (durationSeconds > 0 && durationSeconds < 60) {
+                return <span className="pl-4 text-muted-foreground text-xs">&lt; 1m</span>
+            }
+            
+            const durationMins = Math.round(durationSeconds / 60)
             return <span className="pl-4">{durationMins}m</span>
         }
       },
       {
         accessorKey: "created_at",
+        id: "uploaded",
         header: () => (
           <SortableColumnHeader 
             column="created_at" 
@@ -513,7 +521,8 @@ export function PaginatedDataTable({
           />
         ),
         cell: ({ row }) => {
-            return formatInTimeZone(row.getValue("created_at"), tz)
+            const createdAt = row.original.created_at || row.original.createdAt
+            return formatInTimeZone(createdAt, tz)
         }
       }
     ]

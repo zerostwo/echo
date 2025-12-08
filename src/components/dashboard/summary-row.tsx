@@ -1,7 +1,7 @@
 'use client';
 
 import { Card, CardContent } from "@/components/ui/card"
-import { Book, AlignLeft, Type } from 'lucide-react';
+import { AlignLeft, Library, Languages } from 'lucide-react';
 
 interface SummaryRowProps {
   totalMaterials: number;
@@ -18,26 +18,26 @@ export function SummaryRow({
     {
       label: 'Total Materials',
       value: totalMaterials,
-      icon: Book,
+      icon: Library,
       color: 'bg-blue-500',
-      extra: '+4 this week',
-      extraColor: 'text-green-500',
+      extra: '',
+      extraColor: '',
     },
     {
       label: 'Total Sentences',
       value: totalSentences.toLocaleString(),
       icon: AlignLeft,
       color: 'bg-indigo-500',
-      extra: 'Top 5%',
-      extraColor: 'text-muted-foreground',
+      extra: '',
+      extraColor: '',
     },
     {
       label: 'Total Words',
       value: totalWords.toLocaleString(),
-      icon: Type,
+      icon: Languages,
       color: 'bg-emerald-500',
-      extra: '85% coverage',
-      extraColor: 'text-emerald-500',
+      extra: '',
+      extraColor: '',
     },
   ];
 

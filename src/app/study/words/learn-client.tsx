@@ -240,9 +240,18 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
         // Try to find the part matching the highest probability POS
         for (const stat of posStats) {
             const match = validParts.find(p => {
+                // Extract tag from part
+                const tagMatch = p.match(/^((?:n|a|adj|s|v|vt|vi|adv|r|prep|conj|pron|num|int|interj|art|aux|pl)\.)\s*/);
+                if (tagMatch) {
+                    const tag = tagMatch[1];
+                    const normalizedTag = TRANS_PREFIX_MAP[tag] || tag;
+                    // Compare normalized tags
+                    if (normalizedTag === stat.label) return true;
+                    // Handle vi. and vt. as v. explicitly if not handled by map (though map handles it)
+                    if (stat.label === 'v.' && (normalizedTag === 'vi.' || normalizedTag === 'vt.')) return true;
+                }
+                
                 if (p.startsWith(stat.label)) return true;
-                // Handle vi. and vt. as v.
-                if (stat.label === 'v.' && (p.startsWith('vi.') || p.startsWith('vt.'))) return true;
                 return false;
             });
             if (match) {
@@ -969,9 +978,12 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
     setShowResult(true);
     
     // Play pronunciation after selection (whether correct or incorrect)
-    setTimeout(() => {
-      playPronunciation(currentWord.text);
-    }, 100);
+    // Only play if NOT en_to_zh (because en_to_zh plays at start)
+    if (choiceModeDirection !== 'en_to_zh') {
+      setTimeout(() => {
+        playPronunciation(currentWord.text);
+      }, 100);
+    }
 
     let currentPause = 0;
     if (contextPlayingAudio && lastPauseStartRef.current) {

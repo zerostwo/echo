@@ -383,7 +383,8 @@ export function WordDetailSheet({ word, open, onOpenChange, dictionaryId, onWord
                                 </Button>
                             </div>
 
-                            <SheetDescription className="flex flex-col gap-2 mt-1">
+                            <SheetDescription className="flex flex-col gap-2 mt-1" asChild>
+                                <div className="text-muted-foreground text-sm">
                                 {(tagList.length > 0 || domainTags.length > 0) && (
                                     <div className="flex flex-wrap gap-2">
                                         {tagList.map((tag, idx) => (
@@ -407,6 +408,7 @@ export function WordDetailSheet({ word, open, onOpenChange, dictionaryId, onWord
                                         ))}
                                     </div>
                                 )}
+                                </div>
                             </SheetDescription>
                         </SheetHeader>
                     </div>

@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Book, ChevronRight, LayoutDashboard, Library, WholeWord, Settings, Trash2 } from "lucide-react"
+import { Book, ChevronRight, LayoutDashboard, Library, Languages, Settings, Trash2 } from "lucide-react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 
@@ -68,7 +68,7 @@ export function AppSidebar({ user, settings, folders = [], materials = [], ...pr
     {
       title: "Word",
       url: "/words",
-      icon: WholeWord,
+      icon: Languages,
     },
     {
       title: "Dictionary",
