@@ -38,6 +38,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           const { email, password } = parsedCredentials.data;
           
           const client = supabaseAdmin || supabase;
+          console.log('[Auth] Using Supabase URL:', process.env.NEXT_PUBLIC_SUPABASE_URL);
           
           const { data: user, error } = await client
             .from('users')
@@ -45,8 +46,13 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             .eq('email', email)
             .single();
 
-          if (error || !user) return null;
+          if (error || !user) {
+            console.log('[Auth] User not found or error:', email, error);
+            return null;
+          }
           
+          console.log('[Auth] Found user:', user.email, 'Verified:', user.email_verified);
+
           // Check if user is active
           if (!user.is_active) {
             return null;
@@ -54,6 +60,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           
           // Check if email is verified
           if (!user.email_verified) {
+            console.log('[Auth] Throwing EMAIL_NOT_VERIFIED for:', user.email);
             throw new Error('EMAIL_NOT_VERIFIED');
           }
 
@@ -98,13 +105,14 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             try {
               const { data: userData } = await client
                 .from('users')
-                .select('email, image, display_name, username, quota, used_space')
+                .select('email, image, display_name, username, quota, used_space, role')
                 .eq('id', token.id)
                 .single();
 
               if (userData) {
                 session.user.email = userData.email;
                 session.user.image = userData.image || session.user.image;
+                session.user.role = userData.role || session.user.role;
                 (session.user as any).displayName = userData.display_name;
                 (session.user as any).username = userData.username;
                 (session.user as any).quota = Number(userData.quota) || 10737418240;

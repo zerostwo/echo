@@ -63,7 +63,7 @@ export default async function AdminUsersPage() {
                                 <TableCell>
                                     <div className="flex items-center gap-2">
                                         <UserQuotaDialog userId={u.id} currentQuotaGB={Number(u.quota) / 1024 / 1024 / 1024} />
-                                        <UserActions userId={u.id} isActive={u.is_active} />
+                                        <UserActions userId={u.id} isActive={u.is_active} role={u.role} />
                                     </div>
                                 </TableCell>
                             </TableRow>

@@ -6,6 +6,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { evaluateDictation } from '@/actions/listening-actions';
 import { lookupWordByText } from '@/actions/word-actions';
 import { updateSentence } from '@/actions/sentence-actions';
+import { recordLearningSessionDuration } from '@/actions/learning-actions';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { Play, RotateCw, Check, ArrowRight, ArrowLeft, Pause, Eye, EyeOff, RefreshCw, Keyboard, X, ChevronLeft, ChevronRight, Plus, Minus } from 'lucide-react';
@@ -89,6 +90,34 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
     useEffect(() => {
         startTimeRef.current = Date.now();
     }, [sentence.id]);
+
+    // Record duration on unmount or visibility change
+    useEffect(() => {
+        const handleUnload = () => {
+            const duration = Date.now() - startTimeRef.current;
+            if (duration > 1000) { // Only record if more than 1 second
+                const durationSeconds = Math.round(duration / 1000);
+                recordLearningSessionDuration(durationSeconds).catch(console.error);
+            }
+        };
+        
+        window.addEventListener('beforeunload', handleUnload);
+        
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'hidden') {
+                handleUnload();
+                // Reset start time so we don't double count if user comes back
+                startTimeRef.current = Date.now();
+            }
+        };
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+
+        return () => {
+            window.removeEventListener('beforeunload', handleUnload);
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+            handleUnload();
+        };
+    }, []);
 
     // Local sentence state for immediate updates
     const [currentSentence, setCurrentSentence] = useState(sentence);

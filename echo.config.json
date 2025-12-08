@@ -1,0 +1,15 @@
+{
+  "displayName": "Echo",
+  "description": "A platform for deep listening and precision learning.",
+  "server": {
+    "host": "0.0.0.0",
+    "ports": {
+      "dev": 17891,
+      "prod": 18474
+    }
+  },
+  "domain": {
+    "production": "https://echo.catplot.org",
+    "development": "http://localhost"
+  }
+}

@@ -217,7 +217,7 @@ async function processImportJob(jobId: string, mode: "merge" | "overwrite") {
             const newWordId = wordIdMap.get(s.wordId)
             if (!newWordId) continue
 
-            const { id, userId: oldUserId, wordId, ...data } = s
+            const { id, userId: oldUserId, wordId, word, reviews, ...data } = s
             
             // Upsert status
             await prisma.userWordStatus.upsert({

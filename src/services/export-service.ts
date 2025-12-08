@@ -326,7 +326,7 @@ async function processExportJob(jobId: string) {
       if (createError) {
         console.error("Failed to create bucket:", createError)
         // Update uploadError to reflect the creation failure
-        uploadError = new Error(`Failed to create bucket 'exports': ${createError.message}`)
+        uploadError = new Error(`Failed to create bucket 'exports': ${createError.message}`) as any
       } else {
         console.log(`Bucket '${BUCKET_NAME}' created successfully. Retrying upload...`)
         // Add a small delay to ensure bucket is ready

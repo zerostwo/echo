@@ -52,8 +52,9 @@ interface AppSidebarProps extends React.ComponentProps<typeof Sidebar> {
 
 export function AppSidebar({ user, settings, folders = [], materials = [], ...props }: AppSidebarProps) {
   const pathname = usePathname()
+  const isAdminPage = pathname.startsWith('/admin')
 
-  const navItems = [
+  let navItems = [
     {
       title: "Dashboard",
       url: "/dashboard",
@@ -81,12 +82,24 @@ export function AppSidebar({ user, settings, folders = [], materials = [], ...pr
     },
   ]
 
-  if (user?.role === 'ADMIN') {
-    navItems.push({
-      title: 'Admin',
-      url: '/admin/users',
-      icon: Settings,
-    })
+  if (isAdminPage) {
+    navItems = [
+      {
+        title: 'Dashboard',
+        url: '/admin/dashboard',
+        icon: LayoutDashboard,
+      },
+      {
+        title: 'Users',
+        url: '/admin/users',
+        icon: Settings,
+      },
+      {
+        title: 'Settings',
+        url: '/admin/settings',
+        icon: Settings,
+      },
+    ]
   }
 
   const userData = {
@@ -98,13 +111,14 @@ export function AppSidebar({ user, settings, folders = [], materials = [], ...pr
     avatar: user?.image || "",
     quota: user?.quota || 10737418240,
     usedSpace: user?.usedSpace || 0,
+    role: user?.role,
   }
 
   return (
     <Sidebar {...props}>
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel>Echo</SidebarGroupLabel>
+          <SidebarGroupLabel>{isAdminPage ? 'Admin' : 'Echo'}</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {navItems.map((item, index) => (
@@ -114,10 +128,12 @@ export function AppSidebar({ user, settings, folders = [], materials = [], ...pr
           </SidebarGroupContent>
         </SidebarGroup>
         
-        {/* Folder tree section - Always show for folder organization */}
-        <SidebarGroup className="flex-1 min-h-0 overflow-hidden">
-          <SidebarFolderTree folders={folders} materials={materials} />
-        </SidebarGroup>
+        {/* Folder tree section - Only show for regular user interface */}
+        {!isAdminPage && (
+          <SidebarGroup className="flex-1 min-h-0 overflow-hidden">
+            <SidebarFolderTree folders={folders} materials={materials} />
+          </SidebarGroup>
+        )}
       </SidebarContent>
       <SidebarFooter>
         <NavUser user={userData} settings={settings} />

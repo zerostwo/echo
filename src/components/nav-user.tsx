@@ -5,6 +5,8 @@ import {
   ChevronsUpDown,
   LogOut,
   Settings,
+  LayoutDashboard,
+  Shield,
 } from "lucide-react"
 
 import {
@@ -30,6 +32,7 @@ import { signOut } from "next-auth/react"
 import { SettingsDialog } from "@/components/settings-dialog"
 import { NotificationsDialog } from "@/components/notifications-dialog"
 import { useState } from "react"
+import { usePathname } from "next/navigation"
 
 export function NavUser({
   user,
@@ -61,6 +64,8 @@ export function NavUser({
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [notificationsOpen, setNotificationsOpen] = useState(false)
   const [defaultTab, setDefaultTab] = useState("general")
+  const pathname = usePathname()
+  const isAdminPage = pathname.startsWith('/admin')
 
   return (
     <>
@@ -117,6 +122,18 @@ export function NavUser({
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
               <DropdownMenuGroup>
+                {(user as any).role === 'ADMIN' && !isAdminPage && (
+                  <DropdownMenuItem onClick={() => window.location.href = "/admin/dashboard"}>
+                    <Shield />
+                    Admin Panel
+                  </DropdownMenuItem>
+                )}
+                {isAdminPage && (
+                  <DropdownMenuItem onClick={() => window.location.href = "/dashboard"}>
+                    <LayoutDashboard />
+                    Back to App
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuItem 
                   onClick={() => {
                     setDefaultTab("general")

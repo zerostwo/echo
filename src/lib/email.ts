@@ -1,4 +1,6 @@
 import nodemailer from 'nodemailer';
+import { getBaseUrl, siteConfig } from '@/config/site';
+import { headers } from 'next/headers';
 
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
@@ -19,7 +21,7 @@ interface SendEmailOptions {
 export async function sendEmail({ to, subject, html }: SendEmailOptions) {
   try {
     const info = await transporter.sendMail({
-      from: `"${process.env.SMTP_SENDER_NAME || 'Echo'}" <${process.env.SMTP_ADMIN_EMAIL || process.env.SMTP_USER}>`,
+      from: `"${process.env.SMTP_SENDER_NAME || siteConfig.name}" <${process.env.SMTP_ADMIN_EMAIL || process.env.SMTP_USER}>`,
       to,
       subject,
       html,
@@ -30,6 +32,21 @@ export async function sendEmail({ to, subject, html }: SendEmailOptions) {
     console.error('[Email] Failed to send email:', error);
     return { success: false, error };
   }
+}
+
+// Helper to get dynamic base URL from headers
+async function getDynamicBaseUrl() {
+  try {
+    const headersList = await headers();
+    const host = headersList.get('host');
+    const protocol = headersList.get('x-forwarded-proto') || (host?.includes('localhost') ? 'http' : 'https');
+    if (host) {
+      return `${protocol}://${host}`;
+    }
+  } catch (error) {
+    // Fallback if headers() is not available (e.g. background job)
+  }
+  return getBaseUrl();
 }
 
 // Shared email wrapper template
@@ -102,7 +119,7 @@ function emailWrapper(content: string) {
 }
 
 export async function sendVerificationEmail(email: string, name: string, token: string) {
-  const baseUrl = process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+  const baseUrl = await getDynamicBaseUrl();
   const verificationUrl = `${baseUrl}/verify-email?token=${token}`;
   
   const content = `
@@ -187,7 +204,7 @@ export async function sendVerificationEmail(email: string, name: string, token: 
 }
 
 export async function sendEmailChangeVerification(newEmail: string, name: string, token: string, pendingEmail: string) {
-  const baseUrl = process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+  const baseUrl = await getDynamicBaseUrl();
   const verificationUrl = `${baseUrl}/verify-email?token=${token}&email=${encodeURIComponent(pendingEmail)}&type=change`;
   
   const content = `
@@ -272,7 +289,7 @@ export async function sendEmailChangeVerification(newEmail: string, name: string
 }
 
 export async function sendPasswordResetEmail(email: string, name: string, token: string) {
-  const baseUrl = process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+  const baseUrl = await getDynamicBaseUrl();
   const resetUrl = `${baseUrl}/reset-password?token=${token}`;
   
   const content = `

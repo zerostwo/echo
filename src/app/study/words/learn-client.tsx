@@ -75,6 +75,7 @@ interface SessionState {
   sessionStats: SessionStats;
   wordIds: string[];
   timestamp: number;
+  recordedTime: number;
 }
 
 interface WordOccurrence {
@@ -188,6 +189,20 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
   // Track if session check has been done (only check once on mount)
   const sessionCheckedRef = useRef(false);
   
+  // Track recorded time to avoid double counting
+  const recordedTimeRef = useRef(0);
+  const sessionStatsRef = useRef(sessionStats);
+  const elapsedTimeRef = useRef(0);
+
+  // Keep refs in sync
+  useEffect(() => {
+    sessionStatsRef.current = sessionStats;
+  }, [sessionStats]);
+
+  useEffect(() => {
+    elapsedTimeRef.current = elapsedTime;
+  }, [elapsedTime]);
+
   // Audio refs
   const youdaoAudioRef = useRef<HTMLAudioElement>(null);
   const sentenceAudioRef = useRef<HTMLAudioElement>(null);
@@ -277,6 +292,10 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
         if (isRecent && isSameWords && session.currentIndex > 0 && session.currentIndex < initialWords.length) {
           setSavedSession(session);
           setShowRecoveryDialog(true);
+          // Restore recorded time if available
+          if (session.recordedTime) {
+            recordedTimeRef.current = session.recordedTime;
+          }
         } else {
           localStorage.removeItem(SESSION_STORAGE_KEY);
         }
@@ -297,19 +316,69 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
       sessionStats,
       wordIds: words.map(w => w.id),
       timestamp: Date.now(),
+      recordedTime: recordedTimeRef.current,
     };
     localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(sessionState));
   }, [currentIndex, mode, sessionStats, words, isComplete]);
+
+  // Record session duration on unmount or visibility change
+  useEffect(() => {
+    const handleUnload = () => {
+      const currentTotal = sessionStatsRef.current.totalTime + elapsedTimeRef.current;
+      const recorded = recordedTimeRef.current;
+      const delta = currentTotal - recorded;
+      
+      if (delta > 1000) { // Only record if more than 1 second
+        const durationSeconds = Math.round(delta / 1000);
+        recordLearningSessionDuration(durationSeconds).catch(console.error);
+        recordedTimeRef.current = currentTotal;
+        
+        // Update local storage with new recorded time
+        const saved = localStorage.getItem(SESSION_STORAGE_KEY);
+        if (saved) {
+          try {
+            const session = JSON.parse(saved);
+            session.recordedTime = currentTotal;
+            localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+          } catch (e) {
+            // Ignore error
+          }
+        }
+      }
+    };
+    
+    window.addEventListener('beforeunload', handleUnload);
+    // Also handle visibility change to hidden as a potential exit
+    const handleVisibilityChange = () => {
+        if (document.visibilityState === 'hidden') {
+            handleUnload();
+        }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleUnload);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      handleUnload(); // Also run on component unmount
+    };
+  }, []);
 
   // Clear session on completion and record learning duration
   useEffect(() => {
     if (isComplete) {
       localStorage.removeItem(SESSION_STORAGE_KEY);
       
-      // Record learning session duration (convert ms to seconds)
-      const durationSeconds = Math.round(sessionStats.totalTime / 1000);
-      if (durationSeconds > 0) {
-        recordLearningSessionDuration(durationSeconds).catch(console.error);
+      // Record remaining learning session duration
+      const currentTotal = sessionStats.totalTime;
+      const recorded = recordedTimeRef.current;
+      const delta = currentTotal - recorded;
+
+      if (delta > 0) {
+        const durationSeconds = Math.round(delta / 1000);
+        if (durationSeconds > 0) {
+          recordLearningSessionDuration(durationSeconds).catch(console.error);
+        }
+        recordedTimeRef.current = currentTotal;
       }
     }
   }, [isComplete, sessionStats.totalTime]);

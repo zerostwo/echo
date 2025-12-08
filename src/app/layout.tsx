@@ -13,6 +13,7 @@ import { BreadcrumbProvider } from "@/context/breadcrumb-context";
 import { UserSettingsProvider } from "@/components/user-settings-provider";
 import { headers } from "next/headers";
 import Script from "next/script";
+import { siteConfig } from "@/config/site";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -27,8 +28,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Echo",
-  description: "A platform for deep listening and precision learning.",
+  title: siteConfig.name,
+  description: siteConfig.description,
 };
 
 export default async function RootLayout({
