@@ -67,7 +67,7 @@ export default async function MaterialsPage({ searchParams }: { searchParams: Pr
   }).map((m: any) => m.id);
 
   return (
-    <div className="p-8 h-full">
+    <div className="py-8 h-full">
       <HeaderPortal>
           <UploadMaterialDialog folderId={currentFolderId === 'unfiled' ? null : currentFolderId || null} />
       </HeaderPortal>

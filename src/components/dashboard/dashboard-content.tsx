@@ -66,7 +66,7 @@ interface DashboardStats {
 
 function DashboardSkeleton() {
   return (
-    <div className="flex flex-1 flex-col gap-3 p-4 pt-0">
+    <div className="flex flex-1 flex-col gap-3 pb-4 pt-0">
       {/* Summary Row skeleton */}
       <Skeleton className="h-14 w-full rounded-lg" />
 

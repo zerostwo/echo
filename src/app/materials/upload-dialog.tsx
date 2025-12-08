@@ -14,6 +14,7 @@ import { useState } from "react"
 import { toast } from "sonner"
 import { UploadDropzone } from "@/components/upload-dropzone"
 import { useRouter } from "next/navigation"
+import { Upload } from "lucide-react"
 
 interface UploadMaterialDialogProps {
     folderId?: string | null;
@@ -108,7 +109,10 @@ export function UploadMaterialDialog({ folderId }: UploadMaterialDialogProps) {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button>Upload Material</Button>
+        <Button size="sm">
+          <Upload className="mr-2 h-4 w-4" />
+          Upload Material
+        </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-[500px]">
         <DialogHeader>

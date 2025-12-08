@@ -39,7 +39,7 @@ export default async function DictionariesPage() {
   }
 
   return (
-    <div className="p-8 h-full">
+    <div className="py-8 h-full">
       <SetBreadcrumbs items={[
         { title: "Dictionary", href: "/dictionaries" }
       ]} />

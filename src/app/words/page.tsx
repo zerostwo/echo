@@ -79,7 +79,7 @@ export default async function VocabPage({ searchParams }: { searchParams: Promis
   const learnUrl = materialId ? `/study/words?materialId=${materialId}` : '/study/words';
 
   return (
-    <div className="flex-1 space-y-8 p-8">
+    <div className="flex-1 space-y-8 py-8">
       <HeaderPortal>
         <div className="flex items-center gap-2">
             {materialId && (
@@ -89,14 +89,14 @@ export default async function VocabPage({ searchParams }: { searchParams: Promis
                         Filtered by: {filteredMaterialTitle || 'Material'}
                     </Badge>
                     <Link href="/words">
-                        <Button variant="ghost" size="icon" className="h-8 w-8">
+                        <Button variant="ghost" size="icon" className="h-9 w-9">
                             <X className="h-4 w-4" />
                         </Button>
                     </Link>
                 </div>
             )}
             <Link href={learnUrl}>
-              <Button>
+              <Button size="sm">
                 <GraduationCap className="mr-2 h-4 w-4" />
                 Start Learning
               </Button>

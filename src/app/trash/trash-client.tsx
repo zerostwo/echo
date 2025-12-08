@@ -459,6 +459,7 @@ export function TrashClient({
       <HeaderPortal>
         <Button 
             variant="outline" 
+            size="sm"
             className="text-destructive hover:text-destructive"
             onClick={() => setIsEmptyTrashOpen(true)}
         >

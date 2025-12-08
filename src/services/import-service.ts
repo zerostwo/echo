@@ -176,7 +176,6 @@ async function processImportJob(jobId: string, mode: "merge" | "overwrite") {
         await prisma.wordReview.deleteMany({ where: { userWordStatus: { userId } } })
         await prisma.practiceProgress.deleteMany({ where: { userId } })
         await prisma.dailyStudyStat.deleteMany({ where: { userId } })
-        await prisma.learningSession.deleteMany({ where: { userId } })
         
         // 2. User Word Statuses
         await prisma.userWordStatus.deleteMany({ where: { userId } })

@@ -56,7 +56,7 @@ export default async function DictionaryPage({ params }: { params: Promise<{ id:
   const { stats } = initialResult;
 
   return (
-    <div className="h-full flex flex-col space-y-4 p-4">
+    <div className="h-full flex flex-col space-y-4 py-4">
       <SetBreadcrumbs items={[
         { title: "Dictionary", href: "/dictionaries" },
         { title: dictionary.name, href: `/dictionaries/${dictionary.id}` }

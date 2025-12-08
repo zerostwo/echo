@@ -133,7 +133,7 @@ export default async function MaterialDetailPage({ params }: { params: Promise<{
   };
 
   return (
-    <div className="flex-1 p-8 space-y-8">
+    <div className="flex-1 py-8 space-y-8">
       <SetBreadcrumbs items={breadcrumbs} />
 
       <MaterialStatsCard 

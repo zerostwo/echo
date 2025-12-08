@@ -209,12 +209,6 @@ async function processExportJob(jobId: string) {
           where: { userId },
         })
         fs.writeFileSync(path.join(studyDir, "daily_stats.json"), jsonStringify(stats))
-
-        // Export LearningSession
-        const sessions = await prisma.learningSession.findMany({
-          where: { userId },
-        })
-        fs.writeFileSync(path.join(studyDir, "sessions.json"), jsonStringify(sessions))
       }
     }
 

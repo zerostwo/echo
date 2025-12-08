@@ -42,7 +42,7 @@ export default async function TrashPage() {
   } : result;
 
   return (
-    <div className="p-8 h-full">
+    <div className="py-8 h-full">
       <div className="text-sm text-muted-foreground mb-4">
         Items in trash will be permanently deleted after 30 days.
       </div>
