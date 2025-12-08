@@ -1,10 +1,10 @@
-import NextAuth, { DefaultSession } from 'next-auth';
-import Credentials from 'next-auth/providers/credentials';
+import { NextAuthOptions, DefaultSession } from 'next-auth';
+import CredentialsProvider from 'next-auth/providers/credentials';
 import { supabase, supabaseAdmin } from '@/lib/supabase';
 import { z } from 'zod';
-import bcrypt from 'bcryptjs';
-import { authConfig } from './auth.config';
+import bcrypt from 'bcrypt';
 import { authenticator } from 'otplib';
+import { getServerSession } from "next-auth/next"
 
 declare module 'next-auth' {
   interface Session {
@@ -19,17 +19,25 @@ declare module 'next-auth' {
   }
 }
 
-export const { handlers, auth, signIn, signOut } = NextAuth({
-  ...authConfig,
-  trustHost: true,
+export const authOptions: NextAuthOptions = {
   secret: process.env.AUTH_SECRET,
+  pages: {
+    signIn: '/login',
+  },
+  session: {
+    strategy: "jwt"
+  },
   providers: [
-    Credentials({
+    CredentialsProvider({
+      name: "Credentials",
       credentials: {
-        email: {},
-        password: {},
+        email: { label: "Email", type: "text" },
+        password: { label: "Password", type: "password" },
+        code: { label: "2FA Code", type: "text" }
       },
-      authorize: async (credentials) => {
+      async authorize(credentials) {
+        if (!credentials?.email || !credentials?.password) return null;
+
         const parsedCredentials = z
           .object({ email: z.string().email(), password: z.string().min(6) })
           .safeParse(credentials);
@@ -77,18 +85,20 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
                      throw new Error('Invalid 2FA code');
                  }
              }
-             return user;
+             return {
+                 id: user.id,
+                 email: user.email,
+                 role: user.role,
+                 image: user.image,
+                 name: user.display_name || user.username
+             } as any;
           }
         }
         return null;
       },
     }),
   ],
-  session: {
-    strategy: "jwt"
-  },
   callbacks: {
-    ...authConfig.callbacks,
     async jwt({ token, user }) {
         if (user) {
             token.id = user.id;
@@ -125,4 +135,6 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         return session
     }
   },
-});
+};
+
+export const auth = () => getServerSession(authOptions);

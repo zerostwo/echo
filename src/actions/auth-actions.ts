@@ -3,9 +3,7 @@
 import { z } from 'zod';
 import crypto from 'crypto';
 import { supabaseAdmin, supabase } from '@/lib/supabase';
-import bcrypt from 'bcryptjs';
-import { signIn } from '@/auth';
-import { AuthError } from 'next-auth';
+import bcrypt from 'bcrypt';
 import { sendVerificationEmail, sendPasswordResetEmail } from '@/lib/email';
 
 const RegisterSchema = z.object({
@@ -156,74 +154,9 @@ export async function authenticate(
   prevState: string | undefined,
   formData: FormData,
 ) {
-  try {
-    const formEntries = Object.fromEntries(formData);
-    const email = formEntries.email as string | undefined;
-
-    if (!email) {
-      return 'Invalid credentials.';
-    }
-
-    // Early check to avoid surfacing credential errors for non-existent users
-    const client = supabaseAdmin || supabase;
-    const { data: existingUser, error: lookupError } = await client
-      .from('users')
-      .select('id')
-      .eq('email', email)
-      .single();
-
-    if (lookupError && lookupError.code !== 'PGRST116') {
-      console.error('[Auth] User lookup failed:', lookupError);
-      return 'Something went wrong.';
-    }
-
-    if (!existingUser) {
-      return 'USER_NOT_FOUND';
-    }
-
-    await signIn('credentials', {
-      ...formEntries,
-      redirectTo: '/dashboard',
-    });
-  } catch (error) {
-    if ((error as any)?.type === 'CredentialsSignin') {
-      return 'Invalid email or password.';
-    }
-    if ((error as Error).message === '2FA_REQUIRED') {
-        return '2FA_REQUIRED';
-    }
-    if ((error as Error).message === 'Invalid 2FA code') {
-        return 'Invalid 2FA code';
-    }
-    if ((error as Error).message === 'EMAIL_NOT_VERIFIED') {
-        return 'EMAIL_NOT_VERIFIED';
-    }
-    if ((error as Error).message === 'USER_NOT_FOUND') {
-        return 'USER_NOT_FOUND';
-    }
-    if (error instanceof AuthError) {
-      // Some NextAuth errors wrap the original error
-      if (error.cause?.err?.message === '2FA_REQUIRED') return '2FA_REQUIRED';
-      if (error.cause?.err?.message === 'Invalid 2FA code') return 'Invalid 2FA code';
-      if (error.cause?.err?.message === 'EMAIL_NOT_VERIFIED') return 'EMAIL_NOT_VERIFIED';
-      if (error.cause?.err?.message === 'USER_NOT_FOUND') return 'USER_NOT_FOUND';
-
-      switch (error.type) {
-        case 'CredentialsSignin':
-          return 'Invalid email or password.';
-        case 'CallbackRouteError':
-            // Handle wrapped errors
-            if (error.cause?.err?.message === '2FA_REQUIRED') return '2FA_REQUIRED';
-            if (error.cause?.err?.message === 'Invalid 2FA code') return 'Invalid 2FA code';
-            if (error.cause?.err?.message === 'EMAIL_NOT_VERIFIED') return 'EMAIL_NOT_VERIFIED';
-            if (error.cause?.err?.message === 'USER_NOT_FOUND') return 'USER_NOT_FOUND';
-            return 'Invalid email or password.';
-        default:
-          return 'Something went wrong.';
-      }
-    }
-    throw error;
-  }
+  // This function is deprecated in favor of client-side signIn
+  // But we keep it to avoid breaking imports if any
+  return 'Please use client-side authentication';
 }
 
 // Forgot Password - Request Reset

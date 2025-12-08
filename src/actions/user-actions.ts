@@ -4,7 +4,7 @@ import { auth } from "@/auth"
 import { supabase, supabaseAdmin } from "@/lib/supabase"
 import { revalidatePath } from "next/cache"
 import { z } from "zod"
-import bcrypt from "bcryptjs"
+import bcrypt from "bcrypt"
 import { randomUUID } from "crypto"
 import { sendEmailChangeVerification } from "@/lib/email"
 

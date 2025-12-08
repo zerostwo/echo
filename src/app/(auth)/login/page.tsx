@@ -1,7 +1,7 @@
 'use client';
 
-import { useActionState, useState, useEffect } from 'react';
-import { authenticate, resendVerificationEmail } from '@/actions/auth-actions';
+import { useState } from 'react';
+import { resendVerificationEmail } from '@/actions/auth-actions';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -11,9 +11,11 @@ import Link from 'next/link';
 import { ShieldCheck, MailWarning, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useRouter } from 'next/navigation';
+import { signIn } from 'next-auth/react';
 
 export default function LoginPage() {
-  const [errorMessage, formAction, isPending] = useActionState(authenticate, undefined);
+  const [errorMessage, setErrorMessage] = useState<string | undefined>(undefined);
+  const [isPending, setIsPending] = useState(false);
   const [show2FA, setShow2FA] = useState(false);
   const [showEmailNotVerified, setShowEmailNotVerified] = useState(false);
   const [email, setEmail] = useState('');
@@ -21,30 +23,51 @@ export default function LoginPage() {
   const [isResending, setIsResending] = useState(false);
   const router = useRouter();
 
-  useEffect(() => {
-    if (errorMessage === '2FA_REQUIRED') {
-      setShow2FA(true);
-      setShowEmailNotVerified(false);
-    } else if (errorMessage === 'EMAIL_NOT_VERIFIED') {
-      setShowEmailNotVerified(true);
-      setShow2FA(false);
-    }
-  }, [errorMessage]);
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    setIsPending(true);
+    setErrorMessage(undefined);
 
-  useEffect(() => {
-    if (errorMessage === 'USER_NOT_FOUND') {
-      const timeout = setTimeout(() => {
-        const params = new URLSearchParams();
-        if (email) {
-          params.set('email', email);
+    const formData = new FormData(e.currentTarget);
+    const code = formData.get('code') as string;
+
+    try {
+      const res = await signIn('credentials', {
+        email,
+        password,
+        code: show2FA ? code : undefined,
+        redirect: false,
+      });
+
+      if (res?.error) {
+        if (res.error === '2FA_REQUIRED') {
+          setShow2FA(true);
+          setShowEmailNotVerified(false);
+        } else if (res.error === 'EMAIL_NOT_VERIFIED') {
+          setShowEmailNotVerified(true);
+          setShow2FA(false);
+        } else if (res.error === 'USER_NOT_FOUND') {
+           const timeout = setTimeout(() => {
+            const params = new URLSearchParams();
+            if (email) {
+              params.set('email', email);
+            }
+            params.set('reason', 'user_not_found');
+            router.push(params.size ? `/register?${params.toString()}` : '/register');
+          }, 300);
+        } else {
+          setErrorMessage(res.error);
         }
-        params.set('reason', 'user_not_found');
-        router.push(params.size ? `/register?${params.toString()}` : '/register');
-      }, 300);
-
-      return () => clearTimeout(timeout);
+      } else {
+        router.push('/dashboard');
+        router.refresh();
+      }
+    } catch (error) {
+      setErrorMessage('Something went wrong');
+    } finally {
+      setIsPending(false);
     }
-  }, [errorMessage, email, router]);
+  };
 
   const handleResendVerification = async () => {
     if (!email || isResending) return;
@@ -117,7 +140,7 @@ export default function LoginPage() {
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <form action={formAction} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-4">
           {/* Hidden inputs to preserve credentials during 2FA step */}
           {show2FA && (
             <>
