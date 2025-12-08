@@ -688,6 +688,28 @@ export function SettingsDialog({
                   <Separator />
 
                   <div className="space-y-4">
+                    <h3 className="text-base font-medium">Typing Mode</h3>
+                    
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-0.5">
+                        <Label htmlFor="typing-hint">Typing Hints</Label>
+                        <p className="text-sm text-muted-foreground">
+                          Show red/green feedback while typing. Disable for a harder challenge.
+                        </p>
+                      </div>
+                      <Switch
+                        id="typing-hint"
+                        checked={settings.typingHintEnabled ?? true}
+                        onCheckedChange={(checked) =>
+                          setSettings({ ...settings, typingHintEnabled: checked })
+                        }
+                      />
+                    </div>
+                  </div>
+
+                  <Separator />
+
+                  <div className="space-y-4">
                     <h3 className="text-base font-medium">Pronunciation</h3>
                     
                     <div className="space-y-2">

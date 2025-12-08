@@ -278,7 +278,7 @@ async function getWordsFromDictionary(
   const wordIdArray = dictionaryWords.map(dw => dw.wordId)
 
   if (wordIdArray.length === 0) {
-    return { words: [], error: 'No words found in this dictionary' };
+    return { words: [] };
   }
 
   // Get words with their info in batches
@@ -366,7 +366,7 @@ async function getWordsFromDictionary(
   if (validWords.length === 0) {
     // If we scanned everything and found nothing, return empty
     // But check if it's because of the filter or just empty
-    return { words: [], error: 'No words available for learning in this dictionary' };
+    return { words: [] };
   }
 
   // Sort logic (same as before)
@@ -499,7 +499,7 @@ async function getWordsFromMaterial(
   }
 
   if (materialWordIds.size === 0) {
-    return { words: [], error: 'No words found for this material' };
+    return { words: [] };
   }
 
   const wordIdArray = Array.from(materialWordIds);
@@ -561,7 +561,7 @@ async function getWordsFromMaterial(
   }
 
   if (validWords.length === 0) {
-    return { words: [], error: 'No words available for learning in this material' };
+    return { words: [] };
   }
 
   // Sort: prioritize words that user hasn't seen before (for pre-learning before dictation)
@@ -683,7 +683,7 @@ async function getWordsFromMaterial(
 export async function getRandomWords(
   excludeWordIds: string[], 
   count: number = 3
-): Promise<{ words: { id: string; text: string; translation: string | null; definition: string | null }[], error?: string }> {
+): Promise<{ words: { id: string; text: string; translation: string | null; definition: string | null; pos: string | null }[], error?: string }> {
   const session = await auth();
   if (!session?.user?.id) return { words: [], error: 'Unauthorized' };
 
@@ -692,7 +692,7 @@ export async function getRandomWords(
   // Get random words excluding the correct answer
   const { data: words, error } = await client
     .from('words')
-    .select('id, text, translation, definition')
+    .select('id, text, translation, definition, pos')
     .not('id', 'in', `(${excludeWordIds.join(',')})`)
     .is('deleted_at', null)
     .limit(100);
@@ -1220,8 +1220,16 @@ export async function getWordsForContextListening(
       continue; // Skip words without sentences
     }
     
-    // Pick a random sentence from the available ones
-    const randomOcc = occurrences[Math.floor(Math.random() * occurrences.length)];
+    // Pick the shortest sentence from the available ones
+    // Sort by content length ascending
+    occurrences.sort((a, b) => {
+      const lenA = a.sentence?.content?.length || Number.MAX_SAFE_INTEGER;
+      const lenB = b.sentence?.content?.length || Number.MAX_SAFE_INTEGER;
+      return lenA - lenB;
+    });
+    
+    // Take the shortest one
+    const randomOcc = occurrences[0];
     const sentence = randomOcc.sentence;
     
     if (!sentence || !sentence.material) {

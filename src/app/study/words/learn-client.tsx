@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import Link from 'next/link';
 import { LearningWord, recordReview, getRandomWords, recordLearningSessionDuration, markAsMastered } from '@/actions/learning-actions';
 import { getWordContext, getWordRelations } from '@/actions/word-actions';
 import { Button } from '@/components/ui/button';
@@ -38,10 +39,13 @@ import {
   Headphones,
   CheckCircle2,
   ArrowUpDown,
+  RotateCw,
+  RefreshCw,
+  ExternalLink,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
-import { getAllWordForms, createWordFormsRegex, parsePos } from '@/lib/vocab-utils';
+import { getAllWordForms, createWordFormsRegex, parsePos, TRANS_PREFIX_MAP } from '@/lib/vocab-utils';
 import { useUserSettings } from '@/components/user-settings-provider';
 import { ScrollArea } from '@/components/ui/scroll-area';
 
@@ -105,70 +109,9 @@ const SHORTCUTS = [
 ];
 
 const formatTranslation = (text: string, posString: string | null) => {
-  if (!text) return null;
-  
-  // Parse POS probabilities
-  const posStats = parsePos(posString);
-  // Sort by percentage descending
-  posStats.sort((a, b) => {
-      const pa = parseInt(a.percentage) || 0;
-      const pb = parseInt(b.percentage) || 0;
-      return pb - pa;
-  });
-  
-  // Split by common parts of speech markers
-  // Matches markers like "n.", "v.", "adj.", "vt.", "vi.", "a.", "adv.", "prep.", "conj.", "pron."
-  // The regex looks for the marker preceded by word boundary and followed by a dot
-  const parts = text.split(/(?=\b(?:n|v|adj|adv|prep|conj|pron|art|num|int|vt|vi|a)\.)/g);
-  
-  // Filter out empty parts
-  const validParts = parts.map(p => p.trim()).filter(p => p.length > 0);
-  
-  if (validParts.length === 0) return (
-    <div className="text-center">
-      <div className="leading-relaxed">
-        {text}
-      </div>
-    </div>
-  );
-
-  let selectedPart = validParts[0];
-  
-  if (posStats.length > 0) {
-      // Try to find the part matching the highest probability POS
-      for (const stat of posStats) {
-          const match = validParts.find(p => p.startsWith(stat.label));
-          if (match) {
-              selectedPart = match;
-              break;
-          }
-      }
-  }
-
-  // Italicize POS tags
-  const posTagRegex = /^((?:n|v|adj|adv|prep|conj|pron|art|num|int|vt|vi|a)\.)\s*/;
-  const match = selectedPart.match(posTagRegex);
-  
-  if (match) {
-      const tag = match[1];
-      const rest = selectedPart.substring(match[0].length);
-      return (
-        <div className="text-center">
-          <div className="leading-relaxed">
-            <span className="italic font-serif mr-1 text-muted-foreground">{tag}</span>
-            {rest}
-          </div>
-        </div>
-      );
-  }
-
-  return (
-    <div className="text-center">
-      <div className="leading-relaxed">
-        {selectedPart}
-      </div>
-    </div>
-  );
+  // This function is now deprecated in favor of getDisplayContent inside the component
+  // but kept for backward compatibility if needed elsewhere
+  return null;
 };
 
 export function LearnClient({ initialWords, stats }: LearnClientProps) {
@@ -198,7 +141,7 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   
   // Multiple choice state
-  const [options, setOptions] = useState<{ id: string; text: string; isCorrect: boolean; type?: string }[]>([]);
+  const [options, setOptions] = useState<{ id: string; text: string; isCorrect: boolean; type?: string; pos?: string | null }[]>([]);
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
   const [selectedOptions, setSelectedOptions] = useState<string[]>([]); // For multi-select
   const [isLoadingOptions, setIsLoadingOptions] = useState(false);
@@ -210,6 +153,8 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
   
   // Real-time timer state
   const [elapsedTime, setElapsedTime] = useState(0);
+  const [timerPausedTime, setTimerPausedTime] = useState(0);
+  const lastPauseStartRef = useRef<number | null>(null);
   
   // Page visibility / blur state
   const [isPageBlurred, setIsPageBlurred] = useState(false);
@@ -233,6 +178,7 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
   const [contextSentences, setContextSentences] = useState<Map<number, WordOccurrence>>(new Map());
   const [isLoadingContext, setIsLoadingContext] = useState(false);
   const [contextPlayingAudio, setContextPlayingAudio] = useState(false);
+  const [isLooping, setIsLooping] = useState(false);
   // Store the target word (actual word form in sentence) for context listening mode
   const [contextTargetWord, setContextTargetWord] = useState<string>('');
   
@@ -248,6 +194,65 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
 
   const currentWord = words[currentIndex];
   const progress = words.length > 0 ? ((currentIndex) / words.length) * 100 : 0;
+
+  // Helper to process translation text and POS
+  const getDisplayContent = useCallback((text: string, posString: string | null) => {
+    if (!text) return { tag: null, content: '' };
+  
+    // Parse POS probabilities
+    const posStats = parsePos(posString);
+    // Sort by percentage descending
+    posStats.sort((a, b) => {
+        const pa = parseInt(a.percentage) || 0;
+        const pb = parseInt(b.percentage) || 0;
+        return pb - pa;
+    });
+    
+    // Split by common parts of speech markers
+    const parts = text.split(/(?=\b(?:n|a|adj|s|v|vt|vi|adv|r|prep|conj|pron|num|int|interj|art|aux|pl)\.)/g);
+    
+    // Filter out empty parts
+    const validParts = parts.map(p => p.trim()).filter(p => p.length > 0);
+    
+    if (validParts.length === 0) return {
+      tag: null,
+      content: text.replace(/\[[^\]]+\]/g, '')
+    };
+  
+    let selectedPart = validParts[0];
+    
+    if (posStats.length > 0) {
+        // Try to find the part matching the highest probability POS
+        for (const stat of posStats) {
+            const match = validParts.find(p => p.startsWith(stat.label));
+            if (match) {
+                selectedPart = match;
+                break;
+            }
+        }
+    }
+  
+    // Italicize POS tags
+    const posTagRegex = /^((?:n|a|adj|s|v|vt|vi|adv|r|prep|conj|pron|num|int|interj|art|aux|pl)\.)\s*/;
+    const match = selectedPart.match(posTagRegex);
+    
+    if (match) {
+        const tag = match[1];
+        const rest = selectedPart.substring(match[0].length);
+        const normalizedTag = TRANS_PREFIX_MAP[tag] || tag;
+        const cleanRest = rest.replace(/\[[^\]]+\]/g, '');
+  
+        return {
+          tag: normalizedTag,
+          content: cleanRest
+        };
+    }
+  
+    return {
+      tag: null,
+      content: selectedPart.replace(/\[[^\]]+\]/g, '')
+    };
+  }, []);
 
   // Check for saved session on mount (only once)
   useEffect(() => {
@@ -309,11 +314,15 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
     if (showResult || isComplete || isPageBlurred) return;
     
     const interval = setInterval(() => {
-      setElapsedTime(Date.now() - startTime);
+      let currentPause = 0;
+      if (contextPlayingAudio && lastPauseStartRef.current) {
+          currentPause = Date.now() - lastPauseStartRef.current;
+      }
+      setElapsedTime(Math.max(0, Date.now() - startTime - timerPausedTime - currentPause));
     }, 100);
     
     return () => clearInterval(interval);
-  }, [startTime, showResult, isComplete, isPageBlurred]);
+  }, [startTime, showResult, isComplete, isPageBlurred, contextPlayingAudio, timerPausedTime]);
 
   // Page visibility detection
   useEffect(() => {
@@ -457,8 +466,8 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
              // Fallback to standard mode logic
              const { words: randomWords } = await getRandomWords([word.wordId], 3);
              const allOptions = [
-                { id: word.wordId, text: word.text, isCorrect: true },
-                ...randomWords.map(w => ({ id: w.id, text: w.text, isCorrect: false })),
+                { id: word.wordId, text: word.text, isCorrect: true, pos: word.pos },
+                ...randomWords.map(w => ({ id: w.id, text: w.text, isCorrect: false, pos: w.pos })),
              ].sort(() => Math.random() - 0.5);
              setOptions(allOptions);
         } else {
@@ -466,7 +475,8 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
                 id: w.id,
                 text: w.text,
                 isCorrect: false,
-                type: 'distractor'
+                type: 'distractor',
+                pos: w.pos
             }));
 
             const allOptions = [
@@ -498,8 +508,8 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
         }
         
         const allOptions = [
-          { id: word.wordId, text: correctText, isCorrect: true },
-          ...randomWords.map(w => ({ id: w.id, text: distractorText(w), isCorrect: false })),
+          { id: word.wordId, text: correctText, isCorrect: true, pos: word.pos },
+          ...randomWords.map(w => ({ id: w.id, text: distractorText(w), isCorrect: false, pos: w.pos })),
         ].sort(() => Math.random() - 0.5);
         
         setOptions(allOptions);
@@ -542,17 +552,34 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
   }, [words, contextSentences]);
 
   // Play sentence audio for context listening
-  const playContextSentenceFromOccurrence = useCallback((occ: WordOccurrence) => {
+  const playContextSentenceFromOccurrence = useCallback((occ: WordOccurrence, forceReplay = false) => {
     if (!sentenceAudioRef.current) return;
 
     const audio = sentenceAudioRef.current;
     
-    // Stop any current playback
-    audio.pause();
+    // Stop any current playback if playing a different sentence
+    if (playingSentenceId && playingSentenceId !== occ.sentence.id) {
+        audio.pause();
+        setContextPlayingAudio(false);
+        // Stop timer pause if it was running
+        const pauseStart = lastPauseStartRef.current;
+        if (pauseStart) {
+            setTimerPausedTime(prev => prev + (Date.now() - pauseStart));
+            lastPauseStartRef.current = null;
+        }
+    }
     
-    if (contextPlayingAudio) {
-      setContextPlayingAudio(false);
-      return;
+    // Toggle play/pause if same sentence and not forcing replay
+    if (!forceReplay && playingSentenceId === occ.sentence.id && contextPlayingAudio) {
+        audio.pause();
+        setContextPlayingAudio(false);
+        // Stop timer pause
+        const pauseStart = lastPauseStartRef.current;
+        if (pauseStart) {
+            setTimerPausedTime(prev => prev + (Date.now() - pauseStart));
+            lastPauseStartRef.current = null;
+        }
+        return;
     }
 
     const materialId = occ.sentence.material_id || occ.sentence.material?.id;
@@ -565,9 +592,16 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
     const fullSrc = window.location.origin + src;
     
     const playAudio = () => {
-      audio.currentTime = startTime;
+      if (forceReplay || playingSentenceId !== occ.sentence.id || audio.currentTime >= endTime || audio.currentTime < startTime) {
+          audio.currentTime = startTime;
+      }
+      
       audio.play().catch(console.error);
       setContextPlayingAudio(true);
+      setPlayingSentenceId(occ.sentence.id);
+      
+      // Start timer pause
+      lastPauseStartRef.current = Date.now();
     };
 
     if (audio.src !== fullSrc) {
@@ -579,25 +613,45 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
       playAudio();
     }
     
+    // Remove old listener if exists (we attach it to the element to track it)
+    if ((audio as any)._handleTimeUpdate) {
+        audio.removeEventListener('timeupdate', (audio as any)._handleTimeUpdate);
+    }
+
     const handleTimeUpdate = () => {
       if (audio.currentTime >= endTime) {
-        audio.pause();
-        setContextPlayingAudio(false);
-        audio.removeEventListener('timeupdate', handleTimeUpdate);
-        audio.onloadedmetadata = null;
+        if (isLooping) {
+            audio.currentTime = startTime;
+            audio.play().catch(console.error);
+            // Timer pause continues
+        } else {
+            audio.pause();
+            setContextPlayingAudio(false);
+            // Stop timer pause
+            const pauseStart = lastPauseStartRef.current;
+            if (pauseStart) {
+                setTimerPausedTime(prev => prev + (Date.now() - pauseStart));
+                lastPauseStartRef.current = null;
+            }
+        }
       }
     };
     
+    (audio as any)._handleTimeUpdate = handleTimeUpdate;
     audio.addEventListener('timeupdate', handleTimeUpdate);
     
     audio.onpause = () => {
-      if (!audio.seeking && (audio.currentTime >= endTime || audio.ended || audio.paused)) {
+      if (!audio.seeking && !isLooping && (audio.currentTime >= endTime || audio.ended || audio.paused)) {
         setContextPlayingAudio(false);
-        audio.removeEventListener('timeupdate', handleTimeUpdate);
-        audio.onloadedmetadata = null;
+        // Stop timer pause
+        const pauseStart = lastPauseStartRef.current;
+        if (pauseStart) {
+            setTimerPausedTime(prev => prev + (Date.now() - pauseStart));
+            lastPauseStartRef.current = null;
+        }
       }
     };
-  }, [contextPlayingAudio]);
+  }, [contextPlayingAudio, playingSentenceId, isLooping]);
 
   // Load context for current word when mode changes to context_listening
   useEffect(() => {
@@ -617,7 +671,7 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
         // Small delay to ensure UI is ready
         const timer = setTimeout(() => {
           playContextSentenceFromOccurrence(ctxOcc);
-        }, 300);
+        }, 500);
         return () => clearTimeout(timer);
       }
     }
@@ -676,6 +730,8 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
     setErrorCount(0);
     setStartTime(Date.now());
     setElapsedTime(0);
+    setTimerPausedTime(0);
+    lastPauseStartRef.current = null;
     setWordOccurrences([]);
     setPlayingSentenceId(null);
     
@@ -740,6 +796,17 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
     }
   }, [mode, currentWord, loadOptions]);
 
+  // Auto-play pronunciation for multiple_choice mode (en_to_zh)
+  useEffect(() => {
+    if (mode === 'multiple_choice' && choiceModeDirection === 'en_to_zh' && currentWord && !showResult) {
+       // Small delay to ensure UI is ready
+       const timer = setTimeout(() => {
+         playPronunciation(currentWord.text);
+       }, 300);
+       return () => clearTimeout(timer);
+    }
+  }, [mode, choiceModeDirection, currentWord, showResult, playPronunciation]);
+
   // Auto-play pronunciation removed for multiple_choice mode to avoid giving hints
   // Pronunciation is now played after user makes a selection
 
@@ -763,7 +830,11 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
     setIsCorrect(correct);
     setShowResult(true);
 
-    const responseTime = Date.now() - startTime;
+    let currentPause = 0;
+    if (contextPlayingAudio && lastPauseStartRef.current) {
+        currentPause = Date.now() - lastPauseStartRef.current;
+    }
+    const responseTime = Date.now() - startTime - timerPausedTime - currentPause;
     
     // Record the review
     const result = await recordReview({
@@ -828,7 +899,11 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
       playPronunciation(currentWord.text);
     }, 100);
 
-    const responseTime = Date.now() - startTime;
+    let currentPause = 0;
+    if (contextPlayingAudio && lastPauseStartRef.current) {
+        currentPause = Date.now() - lastPauseStartRef.current;
+    }
+    const responseTime = Date.now() - startTime - timerPausedTime - currentPause;
 
     // Record the review
     const result = await recordReview({
@@ -888,7 +963,11 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
       // Play pronunciation
       playPronunciation(currentWord.text);
 
-      const responseTime = Date.now() - startTime;
+      let currentPause = 0;
+      if (contextPlayingAudio && lastPauseStartRef.current) {
+          currentPause = Date.now() - lastPauseStartRef.current;
+      }
+      const responseTime = Date.now() - startTime - timerPausedTime - currentPause;
 
       // Record review
       const result = await recordReview({
@@ -931,7 +1010,11 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
     setShowResult(true);
     setSelectedOption('dont-know');
 
-    const responseTime = Date.now() - startTime;
+    let currentPause = 0;
+    if (contextPlayingAudio && lastPauseStartRef.current) {
+        currentPause = Date.now() - lastPauseStartRef.current;
+    }
+    const responseTime = Date.now() - startTime - timerPausedTime - currentPause;
 
     // Record as incorrect with Again rating
     const result = await recordReview({
@@ -1094,7 +1177,11 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
           setIsCorrect(correct);
           setShowResult(true);
 
-          const responseTime = Date.now() - startTime;
+          let currentPause = 0;
+          if (contextPlayingAudio && lastPauseStartRef.current) {
+              currentPause = Date.now() - lastPauseStartRef.current;
+          }
+          const responseTime = Date.now() - startTime - timerPausedTime - currentPause;
           
           // Record the review
           const result = await recordReview({
@@ -1404,40 +1491,62 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
                     '______' + 
                     sentenceContent.substring(ctxOcc.end_index);
                 } else {
-                  // Fallback: use all word forms from exchange field to match
-                  const wordForms = getAllWordForms(wordText, currentWord.exchange);
+                  // Fallback: try to find the word using regex
+                  const wordForms = getAllWordForms(currentWord.text, currentWord.exchange);
                   const wordFormsRegex = createWordFormsRegex(wordForms);
                   const match = sentenceContent.match(wordFormsRegex);
                   if (match) {
                     originalWordInSentence = match[0];
-                    // Replace only the first match
-                    sentenceWithBlank = sentenceContent.replace(wordFormsRegex, '______');
+                    sentenceWithBlank = sentenceContent.replace(match[0], '______');
                   }
                 }
-                
+
                 return (
                   <>
-                    {/* Sentence Audio Player */}
-                    <div className="text-center mb-6 flex-shrink-0">
-                      <div className="flex items-center justify-center gap-3 mb-4">
+                    <div className="flex-1 flex flex-col items-center justify-center text-center mb-4">
+                      {/* Playback Controls */}
+                      <div className="flex items-center justify-center gap-4 mb-4 bg-muted/30 py-4 rounded-xl">
+                        <Button 
+                            variant="outline" 
+                            size="icon"
+                            onClick={() => setIsLooping(!isLooping)}
+                            className={cn("rounded-full w-10 h-10", isLooping && "bg-primary text-primary-foreground hover:bg-primary/90")}
+                            title="Loop (Toggle)"
+                        >
+                            <RotateCw className={cn("h-4 w-4", isLooping && "animate-spin-slow")} />
+                        </Button>
+
                         <Button
                           variant={contextPlayingAudio ? "default" : "outline"}
                           size="lg"
-                          className="h-14 w-14 rounded-full"
+                          className="h-16 w-16 rounded-full shadow-md hover:scale-105 transition-transform"
                           onClick={() => playContextSentenceFromOccurrence(ctxOcc)}
                           title="Play sentence (Tab)"
                         >
                           {contextPlayingAudio ? (
-                            <Pause className="h-6 w-6" />
+                            <Pause className="h-8 w-8 fill-current" />
                           ) : (
-                            <Play className="h-6 w-6 ml-1" />
+                            <Play className="h-8 w-8 fill-current ml-1" />
                           )}
+                        </Button>
+                        
+                        <Button 
+                          variant="outline" 
+                          size="icon"
+                          className="h-10 w-10 rounded-full"
+                          onClick={() => playContextSentenceFromOccurrence(ctxOcc, true)}
+                          title="Replay sentence"
+                        >
+                          <RefreshCw className="h-4 w-4" />
                         </Button>
                       </div>
                       
-                      <p className="text-xs text-muted-foreground mb-2">
-                        From: {ctxOcc.sentence.material?.title || 'Material'}
-                      </p>
+                      <div className="text-xs text-muted-foreground mb-2">
+                        From: <Link href={`/study/sentences/${ctxOcc.sentence.id}`} className="hover:underline hover:text-primary inline-flex items-center gap-1">
+                          {ctxOcc.sentence.material?.title || 'Material'}
+                          <ExternalLink className="h-3 w-3" />
+                        </Link>
+                      </div>
                       
                       {/* Show sentence with blank */}
                       <div className="text-base md:text-lg font-medium min-h-[60px] flex items-center justify-center px-2 md:px-4">
@@ -1518,9 +1627,11 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
                                       : showResult && isCorrect
                                       ? "border-green-500 text-green-600"
                                       : isTyped
-                                      ? isCorrectChar
-                                        ? "border-primary text-foreground"
-                                        : "border-red-500 text-red-500"
+                                      ? (settings?.typingHintEnabled ?? true)
+                                        ? isCorrectChar
+                                          ? "border-primary text-foreground"
+                                          : "border-red-500 text-red-500"
+                                        : "border-primary text-foreground"
                                       : "border-muted-foreground/30"
                                   )}
                                 >
@@ -1532,20 +1643,22 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
                         </div>
 
                         {!showResult && (
-                          <div className="flex justify-center gap-3">
+                          <div className="flex justify-center gap-3 w-full mt-4">
                             <Button 
                               variant="outline" 
-                              onClick={() => playContextSentenceFromOccurrence(ctxOcc)}
-                              title="Replay sentence (Tab)"
+                              onClick={handleDontKnow} 
+                              className="flex-1 h-12 border-muted-foreground/20 hover:border-primary hover:bg-primary/5"
+                              title="I don't know (Ctrl+S)"
                             >
-                              <Volume2 className="mr-2 h-4 w-4" />
-                              Replay
-                            </Button>
-                            <Button variant="outline" onClick={handleDontKnow} title="I don't know (Ctrl+S)">
                               <SkipForward className="mr-2 h-4 w-4" />
                               I don&apos;t know
                             </Button>
-                            <Button variant="outline" onClick={handleMarkMastered} title="Mark as mastered (Ctrl+M)">
+                            <Button 
+                              variant="outline" 
+                              onClick={handleMarkMastered} 
+                              className="flex-1 h-12 border-muted-foreground/20 hover:border-green-600 hover:bg-green-50 dark:hover:bg-green-950/30"
+                              title="Mark as mastered (Ctrl+M)"
+                            >
                               <CheckCircle2 className="mr-2 h-4 w-4" />
                               Mastered
                             </Button>
@@ -1640,7 +1753,7 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
                   {/* Translation/Definition - hide in dictation mode and on mobile in choice mode */}
                   {!isDictationMode ? (
                     <div className={cn(
-                      "text-xl md:text-2xl font-medium mb-2 min-h-[40px] md:min-h-[60px] flex items-center justify-center",
+                      "text-xl md:text-2xl font-medium mb-2 min-h-[40px] md:min-h-[60px] flex items-center justify-center gap-2",
                       mode === 'multiple_choice' && "hidden md:flex"
                     )}>
                       <ScrollArea className="max-h-[80px] md:max-h-[100px]">
@@ -1649,14 +1762,36 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
                             <div className="leading-relaxed">{currentWord.text}</div>
                           </div>
                         ) : (
-                          formatTranslation(
-                            (mode === 'multiple_choice' && choiceModeDirection === 'en_to_zh')
-                              ? currentWord.text
-                              : (currentWord.translation || currentWord.definition || 'No definition'),
-                            currentWord.pos
-                          )
+                          (() => {
+                            const { tag, content } = getDisplayContent(
+                              (mode === 'multiple_choice' && choiceModeDirection === 'en_to_zh')
+                                ? currentWord.text
+                                : (currentWord.translation || currentWord.definition || 'No definition'),
+                              currentWord.pos
+                            );
+                            
+                            return (
+                              <div className="text-center">
+                                <div className="leading-relaxed">
+                                  {tag && <span className="italic font-serif mr-1 text-muted-foreground">{tag}</span>}
+                                  {content}
+                                </div>
+                              </div>
+                            );
+                          })()
                         )}
                       </ScrollArea>
+                      {mode === 'multiple_choice' && choiceModeDirection === 'en_to_zh' && (
+                        <Button 
+                          variant="ghost" 
+                          size="icon" 
+                          className="h-8 w-8 shrink-0"
+                          onClick={() => playPronunciation(currentWord.text)}
+                          title="Play pronunciation (Tab)"
+                        >
+                          <Volume2 className="h-4 w-4" />
+                        </Button>
+                      )}
                     </div>
                   ) : (
                     <div className="text-xl md:text-2xl font-medium mb-2 min-h-[40px] md:min-h-[60px] flex items-center justify-center text-muted-foreground/50">
@@ -1704,9 +1839,11 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
                                 : showResult && isCorrect
                                 ? "border-green-500 text-green-600"
                                 : isTyped
-                                ? isCorrectChar
-                                  ? "border-primary text-foreground"
-                                  : "border-red-500 text-red-500"
+                                ? (settings?.typingHintEnabled ?? true)
+                                  ? isCorrectChar
+                                    ? "border-primary text-foreground"
+                                    : "border-red-500 text-red-500"
+                                  : "border-primary text-foreground"
                                 : "border-muted-foreground/30"
                             )}
                           >
@@ -1755,6 +1892,11 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
                             if (selectedOption === option.id && !option.isCorrect) className += " bg-red-600 hover:bg-red-600";
                         }
 
+                        // Process option text for display (only for en_to_zh mode where we show Chinese translations)
+                        const displayContent = (choiceModeDirection === 'en_to_zh' && choiceModeType !== 'synonym')
+                          ? getDisplayContent(option.text, option.pos ?? null)
+                          : { tag: null, content: option.text };
+
                         return (
                         <Button
                           key={option.id}
@@ -1764,18 +1906,23 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
                           disabled={choiceModeType !== 'synonym' && !!selectedOption}
                           title={`Press ${idx + 1} to select`}
                         >
-                          <span className="w-5 h-5 md:w-6 md:h-6 rounded-full bg-muted/50 flex items-center justify-center mr-2 md:mr-3 text-xs md:text-sm">
+                          <span className="w-5 h-5 md:w-6 md:h-6 rounded-full bg-muted/50 flex items-center justify-center mr-2 md:mr-3 text-xs md:text-sm shrink-0">
                             {choiceModeType === 'synonym' && selectedOptions.includes(option.id) ? <Check className="h-3 w-3" /> : idx + 1}
                           </span>
-                          <span className="font-medium text-sm md:text-base">{option.text}</span>
+                          <span className="font-medium text-sm md:text-base text-left truncate">
+                            {displayContent.tag && (
+                              <span className="italic font-serif mr-1 text-muted-foreground">{displayContent.tag}</span>
+                            )}
+                            {displayContent.content}
+                          </span>
                           {showResult && option.isCorrect && (
-                            <Check className="ml-auto h-4 w-4" />
+                            <Check className="ml-auto h-4 w-4 shrink-0" />
                           )}
                           {showResult && choiceModeType === 'synonym' && selectedOptions.includes(option.id) && !option.isCorrect && (
-                            <X className="ml-auto h-4 w-4" />
+                            <X className="ml-auto h-4 w-4 shrink-0" />
                           )}
                           {showResult && choiceModeType !== 'synonym' && selectedOption === option.id && !option.isCorrect && (
-                            <X className="ml-auto h-4 w-4" />
+                            <X className="ml-auto h-4 w-4 shrink-0" />
                           )}
                         </Button>
                       )})}

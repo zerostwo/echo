@@ -146,10 +146,10 @@ export async function createDictionaryFromFilter(name: string, description: stri
   return dictionary
 }
 
-export async function addWordToDictionaryByText(dictionaryId: string, text: string) {
+export async function addWordToDictionaryByText(dictionaryId: string, text: string, translation?: string) {
   const session = await auth()
   if (!session?.user?.id) {
-    throw new Error("Unauthorized")
+    return { success: false, error: "Unauthorized" }
   }
 
   // Verify ownership
@@ -158,17 +158,42 @@ export async function addWordToDictionaryByText(dictionaryId: string, text: stri
   })
 
   if (!dictionary) {
-    throw new Error("Dictionary not found")
+    return { success: false, error: "Dictionary not found" }
   }
+
+  let wordId: string | undefined
 
   const result = await lookupWordByText(text)
   if ('error' in result || !result.word) {
-    throw new Error("Word not found")
+    if (translation) {
+      // Create word manually if translation is provided
+      const normalizedText = text.trim().toLowerCase()
+      const existing = await prisma.word.findUnique({
+          where: { text: normalizedText }
+      })
+      
+      if (existing) {
+          wordId = existing.id
+      } else {
+          const newWord = await prisma.word.create({
+            data: {
+              id: randomUUID(),
+              text: normalizedText,
+              translation: translation,
+              // Other fields will be null
+            },
+          })
+          wordId = newWord.id
+      }
+    } else {
+      return { success: false, error: "Word not found", code: "WORD_NOT_FOUND" }
+    }
+  } else {
+    wordId = result.word.id
   }
 
-  let wordId = result.word.id
-
   if (!wordId) {
+    // Should be covered above, but just in case
     // Create word in DB
     // We need to handle potential race condition where word is created by another process
     // upsert is better, but we don't have id.
@@ -176,7 +201,7 @@ export async function addWordToDictionaryByText(dictionaryId: string, text: stri
     
     // Let's try to find it again with prisma to be sure
     const existing = await prisma.word.findUnique({
-        where: { text: result.word.text }
+        where: { text: result.word!.text }
     })
     
     if (existing) {
@@ -185,18 +210,18 @@ export async function addWordToDictionaryByText(dictionaryId: string, text: stri
         const newWord = await prisma.word.create({
           data: {
             id: randomUUID(),
-            text: result.word.text,
-            phonetic: result.word.phonetic,
-            definition: result.word.definition,
-            translation: result.word.translation,
-            pos: result.word.pos,
-            collins: result.word.collins,
-            oxford: result.word.oxford,
-            tag: result.word.tag,
-            bnc: result.word.bnc,
-            frq: result.word.frq,
-            exchange: result.word.exchange,
-            audio: result.word.audio,
+            text: result.word!.text,
+            phonetic: result.word!.phonetic,
+            definition: result.word!.definition,
+            translation: result.word!.translation,
+            pos: result.word!.pos,
+            collins: result.word!.collins,
+            oxford: result.word!.oxford,
+            tag: result.word!.tag,
+            bnc: result.word!.bnc,
+            frq: result.word!.frq,
+            exchange: result.word!.exchange,
+            audio: result.word!.audio,
           },
         })
         wordId = newWord.id

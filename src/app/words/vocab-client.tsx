@@ -24,7 +24,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Button } from "@/components/ui/button"
-import { SlidersHorizontal, Loader2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Trash2, ChevronDown, ArrowUp, ArrowDown, ArrowUpDown, Pencil, Trophy, Link2 } from "lucide-react"
+import { SlidersHorizontal, Loader2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Trash2, ChevronDown, ArrowUp, ArrowDown, ArrowUpDown, Pencil, Trophy, Link2, BookMinus } from "lucide-react"
 import { WordDetailSheet } from "./word-detail-sheet"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
@@ -63,7 +63,7 @@ import {
 } from "@/components/ui/select"
 import { getVocabPaginated, VocabFilters, PaginatedVocabResult } from "@/actions/vocab-actions"
 import { updateWordsStatus, deleteWords, editWord, addWordRelation } from "@/actions/word-actions"
-import { addWordToDictionaryByText, getDictionaries } from "@/actions/dictionary-actions"
+import { addWordToDictionaryByText, getDictionaries, removeWordsFromDictionary } from "@/actions/dictionary-actions"
 import { useDebounce } from "@/hooks/use-debounce"
 import { toast } from "sonner"
 import { VocabFilterDrawer, FilterChips, VocabFilterState } from "./vocab-filter-drawer"
@@ -435,6 +435,25 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
     })
   }
 
+  // Handle context menu - remove from dictionary
+  const handleContextRemoveFromDictionary = async (wordId: string) => {
+    if (!dictionaryId) return
+
+    startTransition(async () => {
+      try {
+        const result = await removeWordsFromDictionary(dictionaryId, [wordId])
+        if (result?.success) {
+          toast.success('Word removed from dictionary')
+          fetchData(page)
+        } else {
+          toast.error('Failed to remove word from dictionary')
+        }
+      } catch (error) {
+        toast.error('Failed to remove word from dictionary')
+      }
+    })
+  }
+
   // Handle context menu - mark as mastered
   const handleContextMaster = async (wordId: string) => {
     startTransition(async () => {
@@ -511,10 +530,14 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
 
     startTransition(async () => {
       try {
-        await addWordToDictionaryByText(selectedDictionaryId, addToDictionaryWord.text)
-        toast.success(`Added "${addToDictionaryWord.text}" to dictionary`)
-        setIsAddToDictionaryOpen(false)
-        setAddToDictionaryWord(null)
+        const result = await addWordToDictionaryByText(selectedDictionaryId, addToDictionaryWord.text)
+        if (result.success) {
+          toast.success(`Added "${addToDictionaryWord.text}" to dictionary`)
+          setIsAddToDictionaryOpen(false)
+          setAddToDictionaryWord(null)
+        } else {
+          toast.error(result.error || "Failed to add word to dictionary")
+        }
       } catch (error) {
         console.error("Failed to add word to dictionary", error)
         toast.error("Failed to add word to dictionary")
@@ -767,6 +790,19 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
                         <Link2 className="mr-2 h-4 w-4" />
                         Add Synonym
                       </ContextMenuItem>
+                      {dictionaryId && (
+                        <ContextMenuItem
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleContextRemoveFromDictionary(row.original.id)
+                          }}
+                          disabled={isPending}
+                          className="text-destructive focus:text-destructive"
+                        >
+                          <BookMinus className="mr-2 h-4 w-4" />
+                          Remove from Dictionary
+                        </ContextMenuItem>
+                      )}
                       <ContextMenuItem
                         onClick={(e) => {
                           e.stopPropagation()
