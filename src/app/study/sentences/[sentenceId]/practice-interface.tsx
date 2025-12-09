@@ -31,9 +31,10 @@ interface Props {
   materialId: string;
   nextId?: string;
   prevId?: string;
+  displayIndex?: number;
 }
 
-export default function PracticeInterface({ sentence, materialId, nextId, prevId }: Props) {
+export default function PracticeInterface({ sentence, materialId, nextId, prevId, displayIndex }: Props) {
     const router = useRouter();
     const { setItems } = useBreadcrumb();
     const audioRef = useRef<HTMLAudioElement>(null);
@@ -80,11 +81,11 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
             { title: "Materials", href: "/materials" },
             ...(sentence.material?.folder ? [{ title: sentence.material.folder.name }] : []),
             { title: sentence.material?.title || 'Material', href: `/materials/${materialId}` },
-            { title: `#${sentence.order + 1}` }
+            { title: `#${displayIndex ?? (sentence.order + 1)}` }
         ];
         setItems(items);
         return () => setItems([]);
-    }, [sentence, materialId, setItems]);
+    }, [sentence, materialId, setItems, displayIndex]);
 
     // Reset timer on mount or sentence change
     useEffect(() => {
@@ -326,7 +327,7 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
                         <CardHeader className="flex flex-row items-center justify-between pb-2">
                             <div className="space-y-1">
                                 <div className="flex items-center gap-3">
-                                    <CardTitle className="text-xl">Sentence #{currentSentence.order + 1}</CardTitle>
+                                    <CardTitle className="text-xl">Sentence #{displayIndex ?? (currentSentence.order + 1)}</CardTitle>
                                     <div className="flex items-center gap-2 bg-secondary/50 rounded-md px-2 py-1">
                                         <div className="flex items-center gap-1">
                                             <Button 

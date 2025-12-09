@@ -38,6 +38,7 @@ export default async function StudySentencesPage() {
         .eq('material_id', lastMaterial.id)
         .is('deleted_at', null)
         .order('order', { ascending: true })
+        .order('start_time', { ascending: true })
         .limit(1)
         .single()
       

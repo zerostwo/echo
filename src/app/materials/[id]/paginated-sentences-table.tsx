@@ -20,12 +20,12 @@ import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-import { Check, Loader2, PenSquare, PlayCircle, RotateCcw, Trash2, X, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Search } from "lucide-react"
+import { Check, Loader2, PenSquare, PlayCircle, RotateCcw, Trash2, X, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Search, Split, Merge } from "lucide-react"
 import Link from "next/link"
 import { useMemo, useRef, useState, useEffect, useCallback, type SetStateAction } from "react"
 import { toast } from "sonner"
 import { useRouter } from "next/navigation"
-import { updateSentence, deleteSentence, restoreSentenceContent, getSentencesPaginated, SentenceFilters, PaginatedSentenceResult } from "@/actions/sentence-actions"
+import { updateSentence, deleteSentence, restoreSentenceContent, getSentencesPaginated, mergeSentences, splitSentence, SentenceFilters, PaginatedSentenceResult } from "@/actions/sentence-actions"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -43,7 +43,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Checkbox } from "@/components/ui/checkbox"
 import { useDebounce } from "@/hooks/use-debounce"
+import { SplitSentenceDialog } from "@/components/materials/split-sentence-dialog"
 
 type SentenceRow = {
   id: string
@@ -90,6 +92,12 @@ export function PaginatedSentencesTable({ materialId, initialData }: PaginatedSe
   const draftsRef = useRef(drafts)
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null)
   const [restoringId, setRestoringId] = useState<string | null>(null)
+  
+  // New state for selection and split
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [merging, setMerging] = useState(false)
+  const [splittingSentence, setSplittingSentence] = useState<SentenceRow | null>(null)
+  
   const router = useRouter()
 
   const setDrafts = (updater: SetStateAction<DraftMap>) => {
@@ -125,6 +133,7 @@ export function PaginatedSentencesTable({ materialId, initialData }: PaginatedSe
       setTotal(result.total)
       setPage(result.page)
       setTotalPages(result.totalPages)
+      setSelectedIds(new Set()) // Clear selection on page change/refresh
     } catch (error) {
       console.error('Failed to fetch sentences:', error)
     } finally {
@@ -243,11 +252,87 @@ export function PaginatedSentencesTable({ materialId, initialData }: PaginatedSe
     }
   }
 
+  const handleMerge = async () => {
+    if (selectedIds.size < 2) return
+    setMerging(true)
+    try {
+      const res = await mergeSentences(Array.from(selectedIds))
+      if (res?.error) {
+        toast.error(res.error)
+        return
+      }
+      toast.success("Sentences merged")
+      setSelectedIds(new Set())
+      fetchData(page)
+    } catch (e) {
+      console.error(e)
+      toast.error("Failed to merge sentences")
+    } finally {
+      setMerging(false)
+    }
+  }
+
+  const handleSplit = async (index: number) => {
+    if (!splittingSentence) return
+    try {
+      const res = await splitSentence(splittingSentence.id, index)
+      if (res?.error) {
+        toast.error(res.error)
+        return
+      }
+      toast.success("Sentence split")
+      setSplittingSentence(null)
+      fetchData(page)
+    } catch (e) {
+      console.error(e)
+      toast.error("Failed to split sentence")
+    }
+  }
+
+  const toggleSelection = (id: string) => {
+    const newSelected = new Set(selectedIds)
+    if (newSelected.has(id)) {
+      newSelected.delete(id)
+    } else {
+      newSelected.add(id)
+    }
+    setSelectedIds(newSelected)
+  }
+
+  const toggleAll = () => {
+    if (selectedIds.size === data.length) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(data.map(d => d.id)))
+    }
+  }
+
   const columns = useMemo<ColumnDef<SentenceRow>[]>(() => [
+    {
+      id: "select",
+      header: ({ table }) => (
+        <Checkbox
+          checked={data.length > 0 && selectedIds.size === data.length}
+          onCheckedChange={toggleAll}
+          aria-label="Select all"
+        />
+      ),
+      cell: ({ row }) => (
+        <Checkbox
+          checked={selectedIds.has(row.original.id)}
+          onCheckedChange={() => toggleSelection(row.original.id)}
+          aria-label="Select row"
+        />
+      ),
+      size: 30,
+    },
     {
       accessorKey: "order",
       header: "#",
-      cell: ({ row }) => <span className="text-muted-foreground font-mono text-xs">#{row.original.order + 1}</span>,
+      cell: ({ row }) => {
+        const index = (page - 1) * pageSize + row.index + 1
+        return <span className="text-muted-foreground font-mono text-xs">#{index}</span>
+      },
       size: 40,
     },
     {
@@ -408,6 +493,19 @@ export function PaginatedSentencesTable({ materialId, initialData }: PaginatedSe
                       <TooltipContent>Restore original text</TooltipContent>
                     </Tooltip>
                   ) : null}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button 
+                        size="icon" 
+                        variant="ghost" 
+                        className="h-8 w-8"
+                        onClick={() => setSplittingSentence(row.original)}
+                      >
+                        <Split className="h-4 w-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Split sentence</TooltipContent>
+                  </Tooltip>
                   <Button 
                     size="icon" 
                     variant="ghost" 
@@ -456,7 +554,7 @@ export function PaginatedSentencesTable({ materialId, initialData }: PaginatedSe
     },
     size: 150,
     },
-  ], [confirmingDeleteId, editingId, savingId, deletingId, restoringId])
+  ], [confirmingDeleteId, editingId, savingId, deletingId, restoringId, selectedIds, data])
 
   const table = useReactTable({
     data,
@@ -469,7 +567,7 @@ export function PaginatedSentencesTable({ materialId, initialData }: PaginatedSe
   return (
     <TooltipProvider>
     <div className="space-y-4">
-      {/* Search */}
+      {/* Search and Actions */}
       <div className="flex items-center gap-2">
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -480,6 +578,16 @@ export function PaginatedSentencesTable({ materialId, initialData }: PaginatedSe
             className="pl-9"
           />
         </div>
+        {selectedIds.size > 1 && (
+          <Button 
+            variant="secondary" 
+            onClick={handleMerge}
+            disabled={merging}
+          >
+            {merging ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Merge className="mr-2 h-4 w-4" />}
+            Merge {selectedIds.size} Sentences
+          </Button>
+        )}
       </div>
 
       <div className="rounded-md border bg-card overflow-x-auto relative">
@@ -598,6 +706,15 @@ export function PaginatedSentencesTable({ materialId, initialData }: PaginatedSe
           </div>
         </div>
       </div>
+
+      {splittingSentence && (
+        <SplitSentenceDialog
+          open={!!splittingSentence}
+          onOpenChange={(open) => !open && setSplittingSentence(null)}
+          content={splittingSentence.editedContent ?? splittingSentence.content}
+          onSplit={handleSplit}
+        />
+      )}
     </div>
     </TooltipProvider>
   )

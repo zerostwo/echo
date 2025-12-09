@@ -30,17 +30,20 @@ export default async function ListeningPage({ params }: { params: Promise<{ sent
   // This avoids complex RLS/query issues with single item fetching
   const { data: allSentences } = await client
     .from('sentences')
-    .select('id, order')
+    .select('id, order, start_time')
     .eq('material_id', sentence.material_id)
     .is('deleted_at', null)
-    .order('order', { ascending: true });
+    .order('order', { ascending: true })
+    .order('start_time', { ascending: true });
 
   let nextId = undefined;
   let prevId = undefined;
+  let displayIndex = sentence.order + 1;
 
   if (allSentences && allSentences.length > 0) {
       const currentIndex = allSentences.findIndex(s => s.id === sentenceId);
       if (currentIndex !== -1) {
+          displayIndex = currentIndex + 1;
           if (currentIndex > 0) {
               prevId = allSentences[currentIndex - 1].id;
           }
@@ -79,6 +82,7 @@ export default async function ListeningPage({ params }: { params: Promise<{ sent
         materialId={sentence.material_id}
         nextId={nextId}
         prevId={prevId}
+        displayIndex={displayIndex}
     />
   );
 }
