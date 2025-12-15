@@ -265,6 +265,7 @@ async function processImportJob(jobId: string, mode: "merge" | "overwrite") {
     // 3. Materials & Folders
     const folders = readJson("materials/folders.json")
     const folderIdMap = new Map<string, string>()
+    const sentenceIdMap = new Map<string, string>()
 
     if (folders) {
         // Sort by order or parent to ensure parents exist? 
@@ -341,17 +342,22 @@ async function processImportJob(jobId: string, mode: "merge" | "overwrite") {
                     userId,
                     folderId: newFolderId,
                     filePath,
-                    sentences: {
-                        create: sentences.map((s: any) => ({
-                            startTime: s.startTime,
-                            endTime: s.endTime,
-                            content: s.content,
-                            order: s.order,
-                            // ... other fields
-                        }))
-                    }
                 }
             })
+
+            // Create sentences and map IDs
+            if (sentences && Array.isArray(sentences)) {
+                for (const s of sentences) {
+                    const { id: oldSentenceId, materialId: oldMatId, ...sData } = s
+                    const newSentence = await prisma.sentence.create({
+                        data: {
+                            ...sData,
+                            materialId: material.id
+                        }
+                    })
+                    sentenceIdMap.set(oldSentenceId, newSentence.id)
+                }
+            }
         }
     }
 
@@ -401,6 +407,37 @@ async function processImportJob(jobId: string, mode: "merge" | "overwrite") {
                     }
                 })
             }
+        }
+    }
+
+    // 5. Practice Progress
+    const practices = readJson("study/practices.json")
+    if (practices) {
+        for (const p of practices) {
+            const { id, userId: oldUserId, sentenceId, ...data } = p
+            const newSentenceId = sentenceIdMap.get(sentenceId)
+            
+            if (newSentenceId) {
+                await prisma.practiceProgress.upsert({
+                    where: { userId_sentenceId: { userId, sentenceId: newSentenceId } },
+                    update: { ...data },
+                    create: { ...data, userId, sentenceId: newSentenceId }
+                })
+            }
+        }
+    }
+
+    // 6. Daily Stats
+    const stats = readJson("study/daily_stats.json")
+    if (stats) {
+        for (const s of stats) {
+            const { id, userId: oldUserId, date, ...data } = s
+            
+            await prisma.dailyStudyStat.upsert({
+                where: { userId_date: { userId, date: new Date(date) } },
+                update: { ...data },
+                create: { ...data, userId, date: new Date(date) }
+            })
         }
     }
 

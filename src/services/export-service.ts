@@ -5,6 +5,7 @@ import fs from "fs"
 import path from "path"
 import os from "os"
 import { Readable } from "stream"
+import { format } from "date-fns"
 
 interface ExportOptions {
   include: {
@@ -59,15 +60,56 @@ export async function getExportDownloadUrl(jobId: string, userId: string) {
     throw new Error("Supabase admin client not initialized")
   }
 
+  const timestamp = format(new Date(), "yyyy-MM-dd-HH-mm")
+  const filename = `echo-export-${timestamp}.zip`
+
   const { data, error } = await supabaseAdmin.storage
-    .from("exports")
-    .createSignedUrl(job.filePath, 3600) // 1 hour expiry
+    .from(job.filePath.startsWith("exports-large/") ? "exports-large" : "exports")
+    .createSignedUrl(
+      job.filePath.startsWith("exports-large/") 
+        ? job.filePath.replace("exports-large/", "") 
+        : job.filePath, 
+      3600, 
+      {
+        download: filename,
+      }
+    )
 
   if (error) {
     throw error
   }
 
   return data.signedUrl
+}
+
+export async function deleteExportJob(jobId: string, userId: string) {
+  const job = await prisma.exportJob.findFirst({
+    where: {
+      id: jobId,
+      userId,
+    },
+  })
+
+  if (!job) {
+    throw new Error("Export job not found")
+  }
+
+  // Delete file from Supabase if it exists
+  if (job.filePath && supabaseAdmin) {
+    try {
+      const bucket = job.filePath.startsWith("exports-large/") ? "exports-large" : "exports"
+      const path = job.filePath.startsWith("exports-large/") ? job.filePath.replace("exports-large/", "") : job.filePath
+      await supabaseAdmin.storage.from(bucket).remove([path])
+    } catch (error) {
+      console.error("Failed to delete export file from storage:", error)
+      // Continue to delete the job record even if storage deletion fails
+    }
+  }
+
+  // Delete job record
+  await prisma.exportJob.delete({
+    where: { id: jobId },
+  })
 }
 
 // Helper for BigInt serialization
@@ -298,46 +340,85 @@ async function processExportJob(jobId: string) {
         throw new Error("Supabase admin not configured")
     }
 
-    const fileContent = fs.readFileSync(zipPath)
+    // Use stream for upload to avoid memory issues with large files
+    // const fileContent = fs.readFileSync(zipPath)
     const storagePath = `${userId}/${jobId}.zip`
     const BUCKET_NAME = "exports"
 
-    let { error: uploadError } = await supabaseAdmin.storage
-      .from(BUCKET_NAME)
-      .upload(storagePath, fileContent, {
-        contentType: "application/zip",
-        upsert: true
-      })
+    // Helper to upload with stream
+    const uploadFile = async (bucket: string, path: string, filePath: string) => {
+        const fileStream = fs.createReadStream(filePath)
+        // @ts-ignore - supabase-js supports stream but types might be strict
+        return await supabaseAdmin.storage
+            .from(bucket)
+            .upload(path, fileStream, {
+                contentType: "application/zip",
+                upsert: true,
+                duplex: 'half' // Required for Node.js streams in some environments
+            })
+    }
 
-    // If bucket doesn't exist, create it
-    if (uploadError && (uploadError.message.includes("Bucket not found") || (uploadError as any).statusCode === "404")) {
-      console.log(`Bucket '${BUCKET_NAME}' not found. Attempting to create it...`)
-      const { error: createError } = await supabaseAdmin.storage.createBucket(BUCKET_NAME, {
-        public: false, // Exports should be private
-        fileSizeLimit: undefined // No limit
-      })
+    let { error: uploadError } = await uploadFile(BUCKET_NAME, storagePath, zipPath)
 
-      if (createError) {
-        console.error("Failed to create bucket:", createError)
-        // Update uploadError to reflect the creation failure
-        uploadError = new Error(`Failed to create bucket 'exports': ${createError.message}`) as any
-      } else {
-        console.log(`Bucket '${BUCKET_NAME}' created successfully. Retrying upload...`)
-        // Add a small delay to ensure bucket is ready
-        await new Promise(resolve => setTimeout(resolve, 1000))
+    let finalFilePath = storagePath
+    
+    // Handle errors: Bucket not found or Size limit exceeded
+    if (uploadError) {
+      const isSizeLimit = (uploadError as any).statusCode === '413' || uploadError.message.includes("exceeded the maximum allowed size");
+      const isNotFound = (uploadError as any).statusCode === '404' || uploadError.message.includes("Bucket not found");
+
+      if (isNotFound) {
+        console.log(`Bucket '${BUCKET_NAME}' not found. Attempting to create it...`)
+        const { error: createError } = await supabaseAdmin.storage.createBucket(BUCKET_NAME, {
+          public: false, // Exports should be private
+          fileSizeLimit: undefined // No limit
+        })
+
+        if (createError) {
+          console.error("Failed to create bucket:", createError)
+          uploadError = new Error(`Failed to create bucket 'exports': ${createError.message}`) as any
+        } else {
+          console.log(`Bucket '${BUCKET_NAME}' created successfully. Retrying upload...`)
+          await new Promise(resolve => setTimeout(resolve, 1000))
+          
+          const retryResult = await uploadFile(BUCKET_NAME, storagePath, zipPath)
+          
+          uploadError = retryResult.error
+        }
+      } else if (isSizeLimit) {
+        console.log(`Bucket '${BUCKET_NAME}' size limit exceeded. Attempting to use 'exports-large' bucket...`)
         
-        const retryResult = await supabaseAdmin.storage
-          .from(BUCKET_NAME)
-          .upload(storagePath, fileContent, {
-            contentType: "application/zip",
-            upsert: true
-          })
+        const LARGE_BUCKET = "exports-large"
+        // Set a very large limit (e.g. 50GB) or null if supported, but let's use a safe large number
+        const MAX_SIZE = 53687091200 // 50GB
         
-        if (retryResult.error) {
-            console.error("Retry upload failed:", retryResult.error)
-            uploadError = retryResult.error
+        // Check if large bucket exists, if not create it
+        const { data: bucketData, error: bucketError } = await supabaseAdmin.storage.getBucket(LARGE_BUCKET)
+        
+        if (bucketError && bucketError.message.includes("not found")) {
+             console.log(`Bucket '${LARGE_BUCKET}' not found. Creating...`)
+             await supabaseAdmin.storage.createBucket(LARGE_BUCKET, {
+                public: false,
+                fileSizeLimit: MAX_SIZE
+             })
+        } else {
+             // Bucket exists, ensure limit is high enough
+             console.log(`Bucket '${LARGE_BUCKET}' exists. Updating limit...`)
+             await supabaseAdmin.storage.updateBucket(LARGE_BUCKET, {
+                public: false,
+                fileSizeLimit: MAX_SIZE
+             })
+        }
+
+        // Upload to large bucket
+        const { error: largeUploadError } = await uploadFile(LARGE_BUCKET, storagePath, zipPath)
+        
+        if (largeUploadError) {
+            console.error("Failed to upload to large bucket:", largeUploadError)
+            uploadError = largeUploadError
         } else {
             uploadError = null
+            finalFilePath = `exports-large/${storagePath}`
         }
       }
     }
@@ -353,7 +434,7 @@ async function processExportJob(jobId: string) {
       where: { id: jobId },
       data: {
         status: "finished",
-        filePath: storagePath,
+        filePath: finalFilePath,
       },
     })
 
