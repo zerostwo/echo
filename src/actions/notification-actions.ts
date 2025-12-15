@@ -1,8 +1,11 @@
 'use server';
 
 import { auth } from '@/auth';
-import { supabaseAdmin, supabase } from '@/lib/supabase';
-import { randomUUID } from 'crypto';
+import { createSessionClient, getAdminClient } from '@/lib/appwrite';
+import { DATABASE_ID } from '@/lib/appwrite_client';
+import { ID, Query } from 'node-appwrite';
+
+const NOTIFICATIONS_COLLECTION_ID = 'notifications';
 
 export type NotificationType = 
   | 'MATERIAL_UPLOADED'
@@ -28,19 +31,20 @@ export async function getNotifications(limit: number = 50): Promise<{ notificati
   if (!session?.user?.id) return { error: 'Unauthorized' };
 
   try {
-    const client = supabaseAdmin || supabase;
+    const { databases } = await createSessionClient();
     
-    const { data, error } = await client
-      .from('notifications')
-      .select('*')
-      .eq('user_id', session.user.id)
-      .order('created_at', { ascending: false })
-      .limit(limit);
+    const { documents } = await databases.listDocuments(
+      DATABASE_ID,
+      NOTIFICATIONS_COLLECTION_ID,
+      [
+        Query.equal('user_id', session.user.id),
+        Query.orderDesc('created_at'),
+        Query.limit(limit)
+      ]
+    );
 
-    if (error) throw error;
-
-    const notifications: Notification[] = (data || []).map(n => ({
-      id: n.id,
+    const notifications: Notification[] = documents.map((n: any) => ({
+      id: n.$id,
       userId: n.user_id,
       type: n.type as NotificationType,
       title: n.title,
@@ -63,17 +67,19 @@ export async function getUnreadCount(): Promise<{ count?: number, error?: string
   if (!session?.user?.id) return { error: 'Unauthorized' };
 
   try {
-    const client = supabaseAdmin || supabase;
+    const { databases } = await createSessionClient();
     
-    const { count, error } = await client
-      .from('notifications')
-      .select('*', { count: 'exact', head: true })
-      .eq('user_id', session.user.id)
-      .eq('is_read', false);
+    const { total } = await databases.listDocuments(
+      DATABASE_ID,
+      NOTIFICATIONS_COLLECTION_ID,
+      [
+        Query.equal('user_id', session.user.id),
+        Query.equal('is_read', false),
+        Query.limit(0)
+      ]
+    );
 
-    if (error) throw error;
-
-    return { count: count || 0 };
+    return { count: total };
   } catch (e) {
     console.error('Failed to get unread count:', e);
     return { error: 'Failed to get unread count' };
@@ -89,12 +95,13 @@ export async function createNotification(
   relatedType?: string
 ): Promise<{ success?: boolean, error?: string }> {
   try {
-    const client = supabaseAdmin || supabase;
+    const { databases } = await getAdminClient();
     
-    const { error } = await client
-      .from('notifications')
-      .insert({
-        id: randomUUID(),
+    await databases.createDocument(
+      DATABASE_ID,
+      NOTIFICATIONS_COLLECTION_ID,
+      ID.unique(),
+      {
         user_id: userId,
         type,
         title,
@@ -103,9 +110,8 @@ export async function createNotification(
         related_id: relatedId || null,
         related_type: relatedType || null,
         created_at: new Date().toISOString(),
-      });
-
-    if (error) throw error;
+      }
+    );
 
     return { success: true };
   } catch (e) {
@@ -119,15 +125,14 @@ export async function markAsRead(notificationId: string): Promise<{ success?: bo
   if (!session?.user?.id) return { error: 'Unauthorized' };
 
   try {
-    const client = supabaseAdmin || supabase;
+    const { databases } = await createSessionClient();
     
-    const { error } = await client
-      .from('notifications')
-      .update({ is_read: true })
-      .eq('id', notificationId)
-      .eq('user_id', session.user.id);
-
-    if (error) throw error;
+    await databases.updateDocument(
+      DATABASE_ID,
+      NOTIFICATIONS_COLLECTION_ID,
+      notificationId,
+      { is_read: true }
+    );
 
     return { success: true };
   } catch (e) {
@@ -141,15 +146,36 @@ export async function markAllAsRead(): Promise<{ success?: boolean, error?: stri
   if (!session?.user?.id) return { error: 'Unauthorized' };
 
   try {
-    const client = supabaseAdmin || supabase;
+    const { databases } = await createSessionClient();
     
-    const { error } = await client
-      .from('notifications')
-      .update({ is_read: true })
-      .eq('user_id', session.user.id)
-      .eq('is_read', false);
-
-    if (error) throw error;
+    let cursor = null;
+    do {
+        const queries = [
+            Query.equal('user_id', session.user.id),
+            Query.equal('is_read', false),
+            Query.limit(100)
+        ];
+        if (cursor) queries.push(Query.cursorAfter(cursor));
+        
+        const { documents } = await databases.listDocuments(
+            DATABASE_ID, 
+            NOTIFICATIONS_COLLECTION_ID, 
+            queries
+        );
+        
+        if (documents.length === 0) break;
+        
+        await Promise.all(documents.map(doc => 
+            databases.updateDocument(
+                DATABASE_ID, 
+                NOTIFICATIONS_COLLECTION_ID, 
+                doc.$id, 
+                { is_read: true }
+            )
+        ));
+        
+        cursor = documents[documents.length - 1].$id;
+    } while (true);
 
     return { success: true };
   } catch (e) {
@@ -163,15 +189,13 @@ export async function deleteNotification(notificationId: string): Promise<{ succ
   if (!session?.user?.id) return { error: 'Unauthorized' };
 
   try {
-    const client = supabaseAdmin || supabase;
+    const { databases } = await createSessionClient();
     
-    const { error } = await client
-      .from('notifications')
-      .delete()
-      .eq('id', notificationId)
-      .eq('user_id', session.user.id);
-
-    if (error) throw error;
+    await databases.deleteDocument(
+      DATABASE_ID,
+      NOTIFICATIONS_COLLECTION_ID,
+      notificationId
+    );
 
     return { success: true };
   } catch (e) {
@@ -185,14 +209,34 @@ export async function clearAllNotifications(): Promise<{ success?: boolean, erro
   if (!session?.user?.id) return { error: 'Unauthorized' };
 
   try {
-    const client = supabaseAdmin || supabase;
+    const { databases } = await createSessionClient();
     
-    const { error } = await client
-      .from('notifications')
-      .delete()
-      .eq('user_id', session.user.id);
-
-    if (error) throw error;
+    let cursor = null;
+    do {
+        const queries = [
+            Query.equal('user_id', session.user.id),
+            Query.limit(100)
+        ];
+        if (cursor) queries.push(Query.cursorAfter(cursor));
+        
+        const { documents } = await databases.listDocuments(
+            DATABASE_ID, 
+            NOTIFICATIONS_COLLECTION_ID, 
+            queries
+        );
+        
+        if (documents.length === 0) break;
+        
+        await Promise.all(documents.map(doc => 
+            databases.deleteDocument(
+                DATABASE_ID, 
+                NOTIFICATIONS_COLLECTION_ID, 
+                doc.$id
+            )
+        ));
+        
+        cursor = documents[documents.length - 1].$id;
+    } while (true);
 
     return { success: true };
   } catch (e) {

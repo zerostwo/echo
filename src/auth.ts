@@ -1,6 +1,6 @@
 import { NextAuthOptions, DefaultSession } from 'next-auth';
 import CredentialsProvider from 'next-auth/providers/credentials';
-import { supabase, supabaseAdmin } from '@/lib/supabase';
+import { getAdminClient, APPWRITE_DATABASE_ID, Query } from '@/lib/appwrite';
 import { z } from 'zod';
 import bcrypt from 'bcrypt';
 import { authenticator } from 'otplib';
@@ -45,53 +45,59 @@ export const authOptions: NextAuthOptions = {
         if (parsedCredentials.success) {
           const { email, password } = parsedCredentials.data;
           
-          const client = supabaseAdmin || supabase;
-          console.log('[Auth] Using Supabase URL:', process.env.NEXT_PUBLIC_SUPABASE_URL);
+          const admin = getAdminClient();
+          console.log('[Auth] Using Appwrite Endpoint:', process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT);
           
-          const { data: user, error } = await client
-            .from('users')
-            .select('*')
-            .eq('email', email)
-            .single();
+          try {
+            const { documents } = await admin.databases.listDocuments(
+                APPWRITE_DATABASE_ID,
+                'users',
+                [Query.equal('email', email)]
+            );
+            const user = documents[0];
 
-          if (error || !user) {
-            console.log('[Auth] User not found or error:', email, error);
-            return null;
-          }
-          
-          console.log('[Auth] Found user:', user.email, 'Verified:', user.email_verified);
+            if (!user) {
+                console.log('[Auth] User not found:', email);
+                return null;
+            }
+            
+            console.log('[Auth] Found user:', user.email, 'Verified:', user.email_verified);
 
-          // Check if user is active
-          if (!user.is_active) {
-            return null;
-          }
-          
-          // Check if email is verified
-          if (!user.email_verified) {
-            console.log('[Auth] Throwing EMAIL_NOT_VERIFIED for:', user.email);
-            throw new Error('EMAIL_NOT_VERIFIED');
-          }
+            // Check if user is active
+            if (!user.is_active) {
+                return null;
+            }
+            
+            // Check if email is verified
+            if (!user.email_verified) {
+                console.log('[Auth] Throwing EMAIL_NOT_VERIFIED for:', user.email);
+                throw new Error('EMAIL_NOT_VERIFIED');
+            }
 
-          const passwordsMatch = await bcrypt.compare(password, user.password);
-          
-          if (passwordsMatch) {
-             if (user.two_factor_enabled) {
-                 const code = (credentials as any).code as string | undefined;
-                 if (!code) {
-                     throw new Error('2FA_REQUIRED');
-                 }
-                 const isValid = authenticator.check(code, user.two_factor_secret);
-                 if (!isValid) {
-                     throw new Error('Invalid 2FA code');
-                 }
-             }
-             return {
-                 id: user.id,
-                 email: user.email,
-                 role: user.role,
-                 image: user.image,
-                 name: user.display_name || user.username
-             } as any;
+            const passwordsMatch = await bcrypt.compare(password, user.password);
+            
+            if (passwordsMatch) {
+                if (user.two_factor_enabled) {
+                    const code = (credentials as any).code as string | undefined;
+                    if (!code) {
+                        throw new Error('2FA_REQUIRED');
+                    }
+                    const isValid = authenticator.check(code, user.two_factor_secret);
+                    if (!isValid) {
+                        throw new Error('Invalid 2FA code');
+                    }
+                }
+                return {
+                    id: user.$id,
+                    email: user.email,
+                    role: user.role,
+                    image: user.image,
+                    name: user.display_name || user.username
+                } as any;
+            }
+          } catch (error) {
+              console.error('[Auth] Error:', error);
+              return null;
           }
         }
         return null;
@@ -111,13 +117,13 @@ export const authOptions: NextAuthOptions = {
             session.user.id = token.id as string;
             session.user.role = token.role as string;
             // Always hydrate session with the latest profile data so UI (avatar/email/username) stays fresh
-            const client = supabaseAdmin || supabase;
+            const admin = getAdminClient();
             try {
-              const { data: userData } = await client
-                .from('users')
-                .select('email, image, display_name, username, quota, used_space, role')
-                .eq('id', token.id)
-                .single();
+              const userData = await admin.databases.getDocument(
+                  APPWRITE_DATABASE_ID,
+                  'users',
+                  token.id as string
+              );
 
               if (userData) {
                 session.user.email = userData.email;

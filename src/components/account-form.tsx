@@ -38,7 +38,7 @@ export function AccountForm({ user }: { user: any }) {
 
   const getErrorMessage = (field: string) => {
       if (state?.error && typeof state.error !== 'string') {
-          return state.error[field]?.[0]
+          return (state.error as Record<string, string[]>)[field]?.[0]
       }
       return null
   }
@@ -81,7 +81,10 @@ export function AccountForm({ user }: { user: any }) {
       } else if (result.url) {
         setAvatarUrl(result.url)
         toast.success("Avatar updated successfully")
-        router.refresh()
+        // Small delay to ensure DB propagation before refresh
+        setTimeout(() => {
+          router.refresh()
+        }, 1000)
       }
     } catch (error) {
       toast.error("Failed to upload avatar")

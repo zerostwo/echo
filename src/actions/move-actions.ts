@@ -1,7 +1,8 @@
 'use server';
 
 import { auth } from '@/auth';
-import { supabase } from '@/lib/supabase';
+import { createSessionClient } from '@/lib/appwrite_client';
+import { DATABASE_IDS, COLLECTION_IDS } from '@/lib/appwrite_client';
 import { revalidatePath } from 'next/cache';
 
 export async function moveMaterial(materialId: string, targetFolderId: string | null) {
@@ -9,17 +10,21 @@ export async function moveMaterial(materialId: string, targetFolderId: string | 
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
     try {
-        const { error } = await supabase
-            .from('materials')
-            .update({ folder_id: targetFolderId })
-            .eq('id', materialId)
-            .eq('user_id', session.user.id);
-
-        if (error) throw error;
+        const { databases } = await createSessionClient();
+        
+        await databases.updateDocument(
+            DATABASE_IDS.main,
+            COLLECTION_IDS.materials,
+            materialId,
+            {
+                folder_id: targetFolderId
+            }
+        );
         
         revalidatePath('/materials');
         return { success: true };
     } catch (e) {
+        console.error('Failed to move material:', e);
         return { error: 'Failed to move material' };
     }
 }

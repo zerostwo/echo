@@ -5,7 +5,8 @@ import { LearnClient } from './learn-client';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { ArrowLeft } from 'lucide-react';
-import { supabaseAdmin, supabase } from '@/lib/supabase';
+import { getAdminClient } from '@/lib/appwrite';
+import { DATABASE_ID } from '@/lib/appwrite_client';
 
 export default async function LearnPage({ 
   searchParams 
@@ -24,21 +25,25 @@ export default async function LearnPage({
   const params = await searchParams;
   
   // Get user settings for session size
-  const client = supabaseAdmin || supabase;
-  const { data: user } = await client
-    .from('users')
-    .select('settings')
-    .eq('id', session.user.id)
-    .single();
-
   let sessionSize = 50; // Default
-  if (user?.settings) {
-    try {
-      const settings = JSON.parse(user.settings);
-      sessionSize = settings.sessionSize || 50;
-    } catch {
-      // Use default if parsing fails
+  try {
+    const { databases } = await getAdminClient();
+    const user = await databases.getDocument(
+      DATABASE_ID,
+      'users',
+      session.user.id
+    );
+
+    if (user?.settings) {
+      try {
+        const settings = JSON.parse(user.settings);
+        sessionSize = settings.sessionSize || 50;
+      } catch {
+        // Use default if parsing fails
+      }
     }
+  } catch (e) {
+    console.error("Failed to fetch user settings", e);
   }
 
   // Build filters from search params

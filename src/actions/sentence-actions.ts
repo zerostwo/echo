@@ -1,10 +1,19 @@
 'use server';
 
 import { auth } from '@/auth';
-import { supabase, supabaseAdmin } from '@/lib/supabase';
+import { getAdminClient, createSessionClient } from '@/lib/appwrite';
+import { 
+    DATABASE_ID, 
+    SENTENCES_COLLECTION_ID, 
+    MATERIALS_COLLECTION_ID, 
+    WORDS_COLLECTION_ID, 
+    WORD_OCCURRENCES_COLLECTION_ID, 
+    PRACTICE_PROGRESS_COLLECTION_ID,
+    USER_WORD_STATUSES_COLLECTION_ID
+} from '@/lib/appwrite_client';
+import { ID, Query } from 'node-appwrite';
 import { queryDictionary } from './vocab-actions';
 import { revalidatePath } from 'next/cache';
-import { randomUUID } from 'crypto';
 
 type SentenceUpdatePayload = {
     content: string;
@@ -50,25 +59,49 @@ function tokenizeWithPositions(content: string): TokenWithPosition[] {
     return tokens;
 }
 
-async function cleanupOrphanWords(client: typeof supabase, wordIds: string[]) {
+async function cleanupOrphanWords(wordIds: string[]) {
+    const { databases } = await getAdminClient();
     const unique = Array.from(new Set(wordIds));
+    
     for (const wordId of unique) {
-        const { count } = await client
-            .from('word_occurrences')
-            .select('id', { count: 'exact', head: true })
-            .eq('word_id', wordId);
+        // Check if there are any occurrences left for this word
+        const { total } = await databases.listDocuments(
+            DATABASE_ID,
+            WORD_OCCURRENCES_COLLECTION_ID,
+            [
+                Query.equal('word_id', wordId),
+                Query.limit(1)
+            ]
+        );
 
-        if ((count ?? 0) === 0) {
-            await client
-                .from('words')
-                .update({ deleted_at: new Date().toISOString() })
-                .eq('id', wordId)
-                .is('deleted_at', null);
+        if (total === 0) {
+            // Soft delete the word if no occurrences found
+            // Check if it's already deleted to avoid redundant updates
+            try {
+                const word = await databases.getDocument(
+                    DATABASE_ID,
+                    WORDS_COLLECTION_ID,
+                    wordId
+                );
+                
+                if (!word.deleted_at) {
+                    await databases.updateDocument(
+                        DATABASE_ID,
+                        WORDS_COLLECTION_ID,
+                        wordId,
+                        { deleted_at: new Date().toISOString() }
+                    );
+                }
+            } catch (e) {
+                // Word might not exist
+                console.error(`Failed to cleanup orphan word ${wordId}`, e);
+            }
         }
     }
 }
 
-async function upsertWordsForTokens(client: typeof supabase, userId: string, rawWords: string[]) {
+async function upsertWordsForTokens(userId: string, rawWords: string[]) {
+    const { databases } = await getAdminClient();
     const rawWordList = Array.from(new Set(rawWords));
     if (rawWordList.length === 0) return new Map<string, string>();
 
@@ -83,43 +116,97 @@ async function upsertWordsForTokens(client: typeof supabase, userId: string, raw
         const lemmaKey = lemma.toLowerCase();
 
         if (!lemmaCache.has(lemmaKey)) {
-            const wordData = {
-                id: randomUUID(),
-                text: lemma,
-                phonetic: data?.phonetic,
-                translation: data?.translation,
-                pos: data?.pos,
-                definition: data?.definition,
-                collins: data?.collins ? Number(data.collins) : null,
-                oxford: data?.oxford ? Number(data.oxford) : null,
-                tag: data?.tag,
-                bnc: data?.bnc ? Number(data.bnc) : null,
-                frq: data?.frq ? Number(data.frq) : null,
-                exchange: data?.exchange,
-                audio: data?.audio,
-                detail: data?.detail ? JSON.stringify(data.detail) : null,
-                deleted_at: null,
-            };
+            let wordId: string | null = null;
 
-            const { data: word } = await client
-                .from('words')
-                .upsert(wordData, { onConflict: 'text' })
-                .select('id')
-                .single();
+            // 1. Try to find existing word by text
+            const existingWords = await databases.listDocuments(
+                DATABASE_ID,
+                WORDS_COLLECTION_ID,
+                [Query.equal('text', lemma)]
+            );
 
-            if (word?.id) {
-                lemmaCache.set(lemmaKey, word.id);
-                await client
-                    .from('user_word_statuses')
-                    .upsert(
-                        {
-                            id: randomUUID(),
-                            user_id: userId,
-                            word_id: word.id,
-                            status: 'NEW',
-                        },
-                        { onConflict: 'user_id, word_id', ignoreDuplicates: true }
+            if (existingWords.total > 0) {
+                wordId = existingWords.documents[0].$id;
+                // If it was soft deleted, restore it? The original logic didn't explicitly restore, 
+                // but `upsert` in Supabase would update it. 
+                // Let's ensure it's not deleted.
+                if (existingWords.documents[0].deleted_at) {
+                    await databases.updateDocument(
+                        DATABASE_ID,
+                        WORDS_COLLECTION_ID,
+                        wordId,
+                        { deleted_at: null }
                     );
+                }
+            } else {
+                // 2. Create new word
+                const wordData = {
+                    text: lemma,
+                    phonetic: data?.phonetic,
+                    translation: data?.translation,
+                    pos: data?.pos,
+                    definition: data?.definition,
+                    collins: data?.collins ? Number(data.collins) : null,
+                    oxford: data?.oxford ? Number(data.oxford) : null,
+                    tag: data?.tag,
+                    bnc: data?.bnc ? Number(data.bnc) : null,
+                    frq: data?.frq ? Number(data.frq) : null,
+                    exchange: data?.exchange,
+                    audio: data?.audio,
+                    detail: data?.detail ? JSON.stringify(data.detail) : null,
+                    deleted_at: null,
+                };
+
+                try {
+                    const newWord = await databases.createDocument(
+                        DATABASE_ID,
+                        WORDS_COLLECTION_ID,
+                        ID.unique(),
+                        wordData
+                    );
+                    wordId = newWord.$id;
+                } catch (e) {
+                    // Handle race condition where word might have been created by another process
+                    const retryWords = await databases.listDocuments(
+                        DATABASE_ID,
+                        WORDS_COLLECTION_ID,
+                        [Query.equal('text', lemma)]
+                    );
+                    if (retryWords.total > 0) {
+                        wordId = retryWords.documents[0].$id;
+                    }
+                }
+            }
+
+            if (wordId) {
+                lemmaCache.set(lemmaKey, wordId);
+                
+                // 3. Ensure user_word_status exists
+                const existingStatus = await databases.listDocuments(
+                    DATABASE_ID,
+                    USER_WORD_STATUSES_COLLECTION_ID,
+                    [
+                        Query.equal('user_id', userId),
+                        Query.equal('word_id', wordId)
+                    ]
+                );
+
+                if (existingStatus.total === 0) {
+                    try {
+                        await databases.createDocument(
+                            DATABASE_ID,
+                            USER_WORD_STATUSES_COLLECTION_ID,
+                            ID.unique(),
+                            {
+                                user_id: userId,
+                                word_id: wordId,
+                                status: 'NEW',
+                            }
+                        );
+                    } catch (e) {
+                        // Ignore duplicate error
+                    }
+                }
             }
         }
 
@@ -134,306 +221,323 @@ export async function updateSentence(sentenceId: string, payload: SentenceUpdate
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
-    const client = supabaseAdmin || supabase;
-    if (!supabaseAdmin) {
-        console.warn('updateSentence: SUPABASE_SERVICE_ROLE_KEY missing, falling back to RLS client which may block updates.');
-    }
+    const { databases } = await getAdminClient(); // Use admin client for updates to ensure permissions
 
-    const { data: sentence, error } = await client
-        .from('sentences')
-        .select('id, content, edited_content, deleted_at, start_time, end_time, order, material_id')
-        .eq('id', sentenceId)
-        .single();
+    try {
+        const sentence = await databases.getDocument(
+            DATABASE_ID,
+            SENTENCES_COLLECTION_ID,
+            sentenceId
+        );
 
-    if (error || !sentence) {
-        return { error: 'Sentence not found' };
-    }
-
-    if (sentence.deleted_at) {
-        return { error: 'Sentence is in trash. Restore it before editing.' };
-    }
-
-    const { data: material } = await client
-        .from('materials')
-        .select('id, user_id')
-        .eq('id', sentence.material_id)
-        .single();
-
-    if (!material || material.user_id !== session.user.id) {
-        return { error: 'Unauthorized' };
-    }
-
-    const safeStart = Number.isFinite(payload.startTime) ? Math.max(0, payload.startTime) : sentence.start_time;
-    const safeEnd = Number.isFinite(payload.endTime) ? Math.max(0, payload.endTime) : sentence.end_time;
-    const endTime = safeEnd >= safeStart ? safeEnd : safeStart;
-
-    const trimmedContent = typeof payload.content === 'string' ? payload.content.trim() : undefined;
-    if (trimmedContent !== undefined && trimmedContent.length === 0 && !payload.restoreOriginal) {
-        return { error: 'Content cannot be empty' };
-    }
-
-    const editedContent = payload.restoreOriginal
-        ? null
-        : trimmedContent !== undefined
-            ? (trimmedContent === sentence.content ? null : trimmedContent)
-            : (sentence.edited_content ?? null);
-
-    const effectiveContent = editedContent ?? sentence.content;
-
-    const { error: updateError, data: updated } = await client
-        .from('sentences')
-        .update({
-            edited_content: editedContent,
-            start_time: safeStart,
-            end_time: endTime,
-            order: payload.order ?? sentence.order,
-            updated_at: new Date().toISOString(),
-        })
-        .eq('id', sentenceId)
-        .select('id, content, edited_content, start_time, end_time, order, material_id, updated_at')
-        .single();
-
-    if (updateError || !updated) {
-        console.error('Failed to update sentence', updateError);
-        return { error: 'Failed to update sentence' };
-    }
-
-    // Only update vocabulary if content has changed
-    const oldEffectiveContent = sentence.edited_content ?? sentence.content;
-    if (effectiveContent !== oldEffectiveContent) {
-        const { data: existingOccurrences } = await client
-            .from('word_occurrences')
-            .select('word_id')
-            .eq('sentence_id', sentenceId);
-        const oldWordIds = existingOccurrences?.map((o: any) => o.word_id) || [];
-
-        const { error: deleteError } = await client.from('word_occurrences').delete().eq('sentence_id', sentenceId);
-        if (deleteError) {
-            console.error('Failed to delete old occurrences', deleteError);
-            return { error: 'Failed to update vocabulary for sentence' };
+        if (sentence.deleted_at) {
+            return { error: 'Sentence is in trash. Restore it before editing.' };
         }
 
-        // Use tokenizeWithPositions to get word positions for fill-in-blank feature
-        const tokensWithPositions = tokenizeWithPositions(effectiveContent);
-        const tokens = tokensWithPositions.map(t => t.word);
-        const rawToWordId = await upsertWordsForTokens(client, session.user.id, tokens);
+        // Verify material ownership
+        const material = await databases.getDocument(
+            DATABASE_ID,
+            MATERIALS_COLLECTION_ID,
+            sentence.material_id
+        );
 
-        const occurrences = tokensWithPositions
-            .map((token) => {
-                const wordId = rawToWordId.get(token.word);
-                if (!wordId) return null;
-                return { 
-                    id: randomUUID(), 
-                    word_id: wordId, 
-                    sentence_id: sentenceId,
-                    start_index: token.startIndex,
-                    end_index: token.endIndex,
-                };
-            })
-            .filter(Boolean) as { id: string; word_id: string; sentence_id: string; start_index: number; end_index: number }[];
+        if (!material || material.user_id !== session.user.id) {
+            return { error: 'Unauthorized' };
+        }
 
-        if (occurrences.length > 0) {
-            const { error: occError } = await client.from('word_occurrences').insert(occurrences);
-            if (occError) {
-                console.error('Failed to insert occurrences', occError);
-                return { error: 'Failed to update vocabulary for sentence' };
+        const safeStart = Number.isFinite(payload.startTime) ? Math.max(0, payload.startTime) : sentence.start_time;
+        const safeEnd = Number.isFinite(payload.endTime) ? Math.max(0, payload.endTime) : sentence.end_time;
+        const endTime = safeEnd >= safeStart ? safeEnd : safeStart;
+
+        const trimmedContent = typeof payload.content === 'string' ? payload.content.trim() : undefined;
+        if (trimmedContent !== undefined && trimmedContent.length === 0 && !payload.restoreOriginal) {
+            return { error: 'Content cannot be empty' };
+        }
+
+        const editedContent = payload.restoreOriginal
+            ? null
+            : trimmedContent !== undefined
+                ? (trimmedContent === sentence.content ? null : trimmedContent)
+                : (sentence.edited_content ?? null);
+
+        const effectiveContent = editedContent ?? sentence.content;
+
+        const updated = await databases.updateDocument(
+            DATABASE_ID,
+            SENTENCES_COLLECTION_ID,
+            sentenceId,
+            {
+                edited_content: editedContent,
+                start_time: safeStart,
+                end_time: endTime,
+                order: payload.order ?? sentence.order,
+                updated_at: new Date().toISOString(),
+            }
+        );
+
+        // Only update vocabulary if content has changed
+        const oldEffectiveContent = sentence.edited_content ?? sentence.content;
+        if (effectiveContent !== oldEffectiveContent) {
+            // Get old occurrences to identify removed words
+            const oldOccurrencesList = await databases.listDocuments(
+                DATABASE_ID,
+                WORD_OCCURRENCES_COLLECTION_ID,
+                [Query.equal('sentence_id', sentenceId)]
+            );
+            
+            const oldWordIds = oldOccurrencesList.documents.map((o: any) => o.word_id);
+
+            // Delete old occurrences
+            // Appwrite doesn't support bulk delete, so we loop
+            await Promise.all(oldOccurrencesList.documents.map(doc => 
+                databases.deleteDocument(DATABASE_ID, WORD_OCCURRENCES_COLLECTION_ID, doc.$id)
+            ));
+
+            // Use tokenizeWithPositions to get word positions for fill-in-blank feature
+            const tokensWithPositions = tokenizeWithPositions(effectiveContent);
+            const tokens = tokensWithPositions.map(t => t.word);
+            const rawToWordId = await upsertWordsForTokens(session.user.id, tokens);
+
+            const occurrences = tokensWithPositions
+                .map((token) => {
+                    const wordId = rawToWordId.get(token.word);
+                    if (!wordId) return null;
+                    return { 
+                        word_id: wordId, 
+                        sentence_id: sentenceId,
+                        start_index: token.startIndex,
+                        end_index: token.endIndex,
+                    };
+                })
+                .filter(Boolean) as { word_id: string; sentence_id: string; start_index: number; end_index: number }[];
+
+            if (occurrences.length > 0) {
+                await Promise.all(occurrences.map(occ => 
+                    databases.createDocument(
+                        DATABASE_ID,
+                        WORD_OCCURRENCES_COLLECTION_ID,
+                        ID.unique(),
+                        occ
+                    )
+                ));
+            }
+
+            const newWordIds = Array.from(new Set(occurrences.map((o) => o.word_id)));
+            const removedWordIds = oldWordIds.filter((id) => !newWordIds.includes(id));
+            if (removedWordIds.length > 0) {
+                await cleanupOrphanWords(removedWordIds);
             }
         }
 
-        const newWordIds = Array.from(new Set(occurrences.map((o) => o.word_id)));
-        const removedWordIds = oldWordIds.filter((id) => !newWordIds.includes(id));
-        if (removedWordIds.length > 0) {
-            await cleanupOrphanWords(client, removedWordIds);
-        }
+        revalidatePath('/materials');
+        revalidatePath(`/materials/${sentence.material_id}`);
+        revalidatePath(`/study/sentences/${sentenceId}`);
+        revalidatePath('/words');
+
+        return {
+            success: true,
+            sentence: {
+                id: updated.$id,
+                content: effectiveContent,
+                original_content: sentence.content,
+                edited_content: editedContent,
+                startTime: updated.start_time,
+                endTime: updated.end_time,
+                order: updated.order,
+                materialId: updated.material_id,
+            },
+        };
+
+    } catch (error) {
+        console.error('Failed to update sentence', error);
+        return { error: 'Failed to update sentence' };
     }
-
-    revalidatePath('/materials');
-    revalidatePath(`/materials/${sentence.material_id}`);
-    revalidatePath(`/study/sentences/${sentenceId}`);
-    revalidatePath('/words');
-    revalidatePath('/words');
-
-    return {
-        success: true,
-        sentence: {
-            ...updated,
-            content: effectiveContent,
-            original_content: sentence.content,
-            edited_content: editedContent,
-            startTime: updated.start_time,
-            endTime: updated.end_time,
-        },
-    };
 }
 
 export async function restoreSentenceContent(sentenceId: string) {
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
-    const client = supabaseAdmin || supabase;
+    const { databases } = await getAdminClient();
 
-    const { data: sentence } = await client
-        .from('sentences')
-        .select('id, content, start_time, end_time, order, deleted_at, material_id')
-        .eq('id', sentenceId)
-        .single();
+    try {
+        const sentence = await databases.getDocument(
+            DATABASE_ID,
+            SENTENCES_COLLECTION_ID,
+            sentenceId
+        );
 
-    if (!sentence) return { error: 'Sentence not found' };
-    if (sentence.deleted_at) return { error: 'Sentence is in trash. Restore it first.' };
+        if (sentence.deleted_at) return { error: 'Sentence is in trash. Restore it first.' };
 
-    return updateSentence(sentenceId, {
-        content: sentence.content,
-        startTime: sentence.start_time,
-        endTime: sentence.end_time,
-        order: sentence.order,
-        restoreOriginal: true,
-    });
+        return updateSentence(sentenceId, {
+            content: sentence.content,
+            startTime: sentence.start_time,
+            endTime: sentence.end_time,
+            order: sentence.order,
+            restoreOriginal: true,
+        });
+    } catch (error) {
+        return { error: 'Sentence not found' };
+    }
 }
 
 export async function deleteSentence(sentenceId: string) {
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
-    const client = supabaseAdmin || supabase;
+    const { databases } = await getAdminClient();
 
-    const { data: sentence, error } = await client
-        .from('sentences')
-        .select('id, material_id, deleted_at')
-        .eq('id', sentenceId)
-        .single();
+    try {
+        const sentence = await databases.getDocument(
+            DATABASE_ID,
+            SENTENCES_COLLECTION_ID,
+            sentenceId
+        );
 
-    if (error || !sentence) {
-        return { error: 'Sentence not found' };
-    }
+        const material = await databases.getDocument(
+            DATABASE_ID,
+            MATERIALS_COLLECTION_ID,
+            sentence.material_id
+        );
 
-    const { data: material } = await client
-        .from('materials')
-        .select('id, user_id')
-        .eq('id', sentence.material_id)
-        .single();
+        if (!material || material.user_id !== session.user.id) {
+            return { error: 'Unauthorized' };
+        }
 
-    if (!material || material.user_id !== session.user.id) {
-        return { error: 'Unauthorized' };
-    }
+        if (sentence.deleted_at) {
+            return { error: 'Sentence already in trash' };
+        }
 
-    if (sentence.deleted_at) {
-        return { error: 'Sentence already in trash' };
-    }
+        await databases.updateDocument(
+            DATABASE_ID,
+            SENTENCES_COLLECTION_ID,
+            sentenceId,
+            { deleted_at: new Date().toISOString() }
+        );
 
-    const { error: softDeleteError } = await client
-        .from('sentences')
-        .update({ deleted_at: new Date().toISOString() })
-        .eq('id', sentenceId);
+        revalidatePath('/materials');
+        revalidatePath(`/materials/${sentence.material_id}`);
+        revalidatePath(`/study/sentences/${sentenceId}`);
+        revalidatePath('/trash');
 
-    if (softDeleteError) {
-        console.error('Failed to move sentence to trash', softDeleteError);
+        return { success: true };
+    } catch (error) {
+        console.error('Failed to delete sentence', error);
         return { error: 'Failed to delete sentence' };
     }
-
-    revalidatePath('/materials');
-    revalidatePath(`/materials/${sentence.material_id}`);
-    revalidatePath(`/study/sentences/${sentenceId}`);
-    revalidatePath('/trash');
-
-    return { success: true };
 }
 
 export async function restoreSentence(sentenceId: string) {
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
-    const client = supabaseAdmin || supabase;
+    const { databases } = await getAdminClient();
 
-    const { data: sentence, error } = await client
-        .from('sentences')
-        .select('id, material_id, deleted_at')
-        .eq('id', sentenceId)
-        .single();
+    try {
+        const sentence = await databases.getDocument(
+            DATABASE_ID,
+            SENTENCES_COLLECTION_ID,
+            sentenceId
+        );
 
-    if (error || !sentence) return { error: 'Sentence not found' };
+        const material = await databases.getDocument(
+            DATABASE_ID,
+            MATERIALS_COLLECTION_ID,
+            sentence.material_id
+        );
 
-    const { data: material } = await client
-        .from('materials')
-        .select('id, user_id')
-        .eq('id', sentence.material_id)
-        .single();
+        if (!material || material.user_id !== session.user.id) return { error: 'Unauthorized' };
 
-    if (!material || material.user_id !== session.user.id) return { error: 'Unauthorized' };
+        if (!sentence.deleted_at) {
+            return { success: true };
+        }
 
-    if (!sentence.deleted_at) {
+        await databases.updateDocument(
+            DATABASE_ID,
+            SENTENCES_COLLECTION_ID,
+            sentenceId,
+            { deleted_at: null }
+        );
+
+        revalidatePath('/materials');
+        revalidatePath(`/materials/${sentence.material_id}`);
+        revalidatePath(`/study/sentences/${sentenceId}`);
+        revalidatePath('/trash');
+
         return { success: true };
-    }
-
-    const { error: restoreError } = await client
-        .from('sentences')
-        .update({ deleted_at: null })
-        .eq('id', sentenceId);
-
-    if (restoreError) {
-        console.error('Failed to restore sentence', restoreError);
+    } catch (error) {
+        console.error('Failed to restore sentence', error);
         return { error: 'Failed to restore sentence' };
     }
-
-    revalidatePath('/materials');
-    revalidatePath(`/materials/${sentence.material_id}`);
-    revalidatePath(`/study/sentences/${sentenceId}`);
-    revalidatePath('/trash');
-
-    return { success: true };
 }
 
 export async function permanentlyDeleteSentence(sentenceId: string) {
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
-    const client = supabaseAdmin || supabase;
+    const { databases } = await getAdminClient();
 
-    const { data: sentence, error } = await client
-        .from('sentences')
-        .select('id, material_id')
-        .eq('id', sentenceId)
-        .single();
+    try {
+        const sentence = await databases.getDocument(
+            DATABASE_ID,
+            SENTENCES_COLLECTION_ID,
+            sentenceId
+        );
 
-    if (error || !sentence) {
-        return { error: 'Sentence not found' };
-    }
+        const material = await databases.getDocument(
+            DATABASE_ID,
+            MATERIALS_COLLECTION_ID,
+            sentence.material_id
+        );
 
-    const { data: material } = await client
-        .from('materials')
-        .select('id, user_id')
-        .eq('id', sentence.material_id)
-        .single();
+        if (!material || material.user_id !== session.user.id) {
+            return { error: 'Unauthorized' };
+        }
 
-    if (!material || material.user_id !== session.user.id) {
-        return { error: 'Unauthorized' };
-    }
+        // Get occurrences to cleanup orphan words later
+        const occurrencesList = await databases.listDocuments(
+            DATABASE_ID,
+            WORD_OCCURRENCES_COLLECTION_ID,
+            [Query.equal('sentence_id', sentenceId)]
+        );
+        const oldWordIds = occurrencesList.documents.map((o: any) => o.word_id);
 
-    const { data: existingOccurrences } = await client
-        .from('word_occurrences')
-        .select('word_id')
-        .eq('sentence_id', sentenceId);
-    const oldWordIds = existingOccurrences?.map((o: any) => o.word_id) || [];
+        // Delete occurrences
+        await Promise.all(occurrencesList.documents.map(doc => 
+            databases.deleteDocument(DATABASE_ID, WORD_OCCURRENCES_COLLECTION_ID, doc.$id)
+        ));
 
-    await client.from('word_occurrences').delete().eq('sentence_id', sentenceId);
-    await client.from('practice_progress').delete().eq('sentence_id', sentenceId);
+        // Delete practice progress
+        const practicesList = await databases.listDocuments(
+            DATABASE_ID,
+            PRACTICE_PROGRESS_COLLECTION_ID,
+            [Query.equal('sentence_id', sentenceId)]
+        );
+        await Promise.all(practicesList.documents.map(doc => 
+            databases.deleteDocument(DATABASE_ID, PRACTICE_PROGRESS_COLLECTION_ID, doc.$id)
+        ));
 
-    const { error: deleteError } = await client.from('sentences').delete().eq('id', sentenceId);
+        // Delete sentence
+        await databases.deleteDocument(
+            DATABASE_ID,
+            SENTENCES_COLLECTION_ID,
+            sentenceId
+        );
 
-    if (deleteError) {
-        console.error('Failed to delete sentence', deleteError);
+        if (oldWordIds.length > 0) {
+            await cleanupOrphanWords(oldWordIds);
+        }
+
+        revalidatePath('/materials');
+        revalidatePath(`/materials/${sentence.material_id}`);
+        revalidatePath(`/study/sentences/${sentenceId}`);
+        revalidatePath('/trash');
+
+        return { success: true };
+    } catch (error) {
+        console.error('Failed to delete sentence', error);
         return { error: 'Failed to delete sentence' };
     }
-
-    if (oldWordIds.length > 0) {
-        await cleanupOrphanWords(client, oldWordIds);
-    }
-
-    revalidatePath('/materials');
-    revalidatePath(`/materials/${sentence.material_id}`);
-    revalidatePath(`/study/sentences/${sentenceId}`);
-    revalidatePath('/trash');
-
-    return { success: true };
 }
 
 /**
@@ -462,64 +566,86 @@ export async function getSentencesPaginated(
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
-    const client = supabaseAdmin || supabase;
+    const { databases } = await createSessionClient();
     const userId = session.user.id;
     const offset = (page - 1) * pageSize;
 
     try {
         // Verify material belongs to user
-        const { data: material, error: materialError } = await client
-            .from('materials')
-            .select('id, user_id')
-            .eq('id', materialId)
-            .single();
+        const material = await databases.getDocument(
+            DATABASE_ID,
+            MATERIALS_COLLECTION_ID,
+            materialId
+        );
 
-        if (materialError || !material || material.user_id !== userId) {
+        if (!material || material.user_id !== userId) {
             return { error: 'Material not found or unauthorized' };
         }
 
-        // Build base query
-        let query = client
-            .from('sentences')
-            .select(`
-                *,
-                practices:practice_progress(score, attempts, user_id),
-                occurrences:word_occurrences(word_id)
-            `, { count: 'exact' })
-            .eq('material_id', materialId)
-            .is('deleted_at', null);
+        // Build queries
+        const queries = [
+            Query.equal('material_id', materialId),
+            Query.isNull('deleted_at'),
+        ];
 
         // Apply search filter
         if (filters.search) {
-            query = query.or(`content.ilike.%${filters.search}%,edited_content.ilike.%${filters.search}%`);
+            queries.push(Query.or([
+                Query.search('content', filters.search),
+                Query.search('edited_content', filters.search)
+            ]));
         }
 
         // Apply sorting
         const orderColumn = sortBy === 'order' ? 'order' : sortBy === 'start_time' ? 'start_time' : 'order';
-        query = query.order(orderColumn, { ascending: sortOrder === 'asc' });
-        
-        // Secondary sort by start_time to handle split sentences with same order
-        if (orderColumn === 'order') {
-            query = query.order('start_time', { ascending: true });
+        if (sortOrder === 'asc') {
+            queries.push(Query.orderAsc(orderColumn));
+            if (orderColumn === 'order') queries.push(Query.orderAsc('start_time'));
+        } else {
+            queries.push(Query.orderDesc(orderColumn));
+            if (orderColumn === 'order') queries.push(Query.orderDesc('start_time'));
         }
 
         // Apply pagination
-        query = query.range(offset, offset + pageSize - 1);
+        queries.push(Query.limit(pageSize));
+        queries.push(Query.offset(offset));
 
-        const { data: sentences, count, error } = await query;
+        const { documents: sentences, total } = await databases.listDocuments(
+            DATABASE_ID,
+            SENTENCES_COLLECTION_ID,
+            queries
+        );
 
-        if (error) {
-            console.error('[getSentencesPaginated] Error:', error);
-            return { error: 'Failed to fetch sentences' };
+        // Fetch practice progress for these sentences
+        const sentenceIds = sentences.map(s => s.$id);
+        let practices: any[] = [];
+        
+        if (sentenceIds.length > 0) {
+            // We need to fetch practice progress for these sentences AND this user
+            // Appwrite doesn't support "IN" query for multiple attributes easily combined with other filters in a single go if not carefully structured
+            // But here we can just query practice_progress where sentence_id is in list AND user_id is current user
+            
+            // Since we can't do "IN" with a large list easily if it exceeds limits, but page size is 10, so it's fine.
+            const practiceQueries = [
+                Query.equal('user_id', userId),
+                Query.equal('sentence_id', sentenceIds)
+            ];
+            
+            const practiceResult = await databases.listDocuments(
+                DATABASE_ID,
+                PRACTICE_PROGRESS_COLLECTION_ID,
+                practiceQueries
+            );
+            practices = practiceResult.documents;
         }
 
         // Process sentences
-        const processedSentences = (sentences || []).map((s: any) => {
+        const processedSentences = sentences.map((s: any) => {
             const displayContent = s.edited_content ?? s.content;
-            const userPractice = (s.practices || []).find((p: any) => p.user_id === userId);
+            const userPractice = practices.find((p: any) => p.sentence_id === s.$id);
             
             return {
-                id: s.id,
+                id: s.$id,
                 order: s.order,
                 content: displayContent,
                 originalContent: s.content,
@@ -527,14 +653,13 @@ export async function getSentencesPaginated(
                 startTime: s.start_time,
                 endTime: s.end_time,
                 materialId: s.material_id,
-                createdAt: s.created_at,
-                updatedAt: s.updated_at,
+                createdAt: s.$createdAt,
+                updatedAt: s.$updatedAt,
                 practiceAttempts: userPractice?.attempts || 0,
                 practiceScore: userPractice?.score ?? null,
             };
         });
 
-        const total = count || 0;
         const totalPages = Math.ceil(total / pageSize);
 
         return {
@@ -554,216 +679,247 @@ export async function mergeSentences(sentenceIds: string[]) {
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
-    const client = supabaseAdmin || supabase;
+    const { databases } = await getAdminClient();
     
     if (sentenceIds.length < 2) {
         return { error: 'Select at least 2 sentences to merge' };
     }
 
-    // Fetch all sentences
-    const { data: sentences, error } = await client
-        .from('sentences')
-        .select('id, content, edited_content, start_time, end_time, order, material_id')
-        .in('id', sentenceIds)
-        .is('deleted_at', null)
-        .order('order', { ascending: true });
+    try {
+        // Fetch all sentences
+        // Appwrite limit for "equal" array is usually around 100, which should be fine for merge
+        const { documents: sentences } = await databases.listDocuments(
+            DATABASE_ID,
+            SENTENCES_COLLECTION_ID,
+            [
+                Query.equal('$id', sentenceIds),
+                Query.isNull('deleted_at'),
+                Query.orderAsc('order')
+            ]
+        );
 
-    if (error || !sentences || sentences.length !== sentenceIds.length) {
-        return { error: 'Some sentences not found or already deleted' };
-    }
+        if (!sentences || sentences.length !== sentenceIds.length) {
+            return { error: 'Some sentences not found or already deleted' };
+        }
 
-    // Verify same material
-    const materialId = sentences[0].material_id;
-    if (sentences.some(s => s.material_id !== materialId)) {
-        return { error: 'Cannot merge sentences from different materials' };
-    }
+        // Verify same material
+        const materialId = sentences[0].material_id;
+        if (sentences.some(s => s.material_id !== materialId)) {
+            return { error: 'Cannot merge sentences from different materials' };
+        }
 
-    // Verify ownership
-    const { data: material } = await client
-        .from('materials')
-        .select('user_id')
-        .eq('id', materialId)
-        .single();
+        // Verify ownership
+        const material = await databases.getDocument(
+            DATABASE_ID,
+            MATERIALS_COLLECTION_ID,
+            materialId
+        );
 
-    if (!material || material.user_id !== session.user.id) {
-        return { error: 'Unauthorized' };
-    }
+        if (!material || material.user_id !== session.user.id) {
+            return { error: 'Unauthorized' };
+        }
 
-    // Calculate new values
-    const sortedSentences = sentences.sort((a, b) => a.order - b.order);
-    const firstSentence = sortedSentences[0];
-    const otherSentences = sortedSentences.slice(1);
+        // Calculate new values
+        const sortedSentences = sentences.sort((a, b) => a.order - b.order);
+        const firstSentence = sortedSentences[0];
+        const otherSentences = sortedSentences.slice(1);
 
-    const newStartTime = Math.min(...sentences.map(s => s.start_time));
-    const newEndTime = Math.max(...sentences.map(s => s.end_time));
-    
-    // Merge content
-    // Use edited_content if available, otherwise content
-    const mergedContent = sortedSentences
-        .map(s => (s.edited_content ?? s.content).trim())
-        .join(' ');
+        const newStartTime = Math.min(...sentences.map(s => s.start_time));
+        const newEndTime = Math.max(...sentences.map(s => s.end_time));
+        
+        // Merge content
+        const mergedContent = sortedSentences
+            .map(s => (s.edited_content ?? s.content).trim())
+            .join(' ');
 
-    // Update first sentence
-    const { error: updateError } = await client
-        .from('sentences')
-        .update({
-            content: mergedContent, // We update content directly as this is a structural change
-            edited_content: null,   // Reset edited content
-            start_time: newStartTime,
-            end_time: newEndTime,
-            updated_at: new Date().toISOString(),
-        })
-        .eq('id', firstSentence.id);
+        // Update first sentence
+        await databases.updateDocument(
+            DATABASE_ID,
+            SENTENCES_COLLECTION_ID,
+            firstSentence.$id,
+            {
+                content: mergedContent,
+                edited_content: null,
+                start_time: newStartTime,
+                end_time: newEndTime,
+                updated_at: new Date().toISOString(),
+            }
+        );
 
-    if (updateError) {
-        console.error('Failed to update merged sentence', updateError);
+        // Soft delete others
+        await Promise.all(otherSentences.map(s => 
+            databases.updateDocument(
+                DATABASE_ID,
+                SENTENCES_COLLECTION_ID,
+                s.$id,
+                { deleted_at: new Date().toISOString() }
+            )
+        ));
+
+        // Update vocabulary for the new merged sentence
+        // First remove old occurrences for the first sentence
+        const oldOccurrences = await databases.listDocuments(
+            DATABASE_ID,
+            WORD_OCCURRENCES_COLLECTION_ID,
+            [Query.equal('sentence_id', firstSentence.$id)]
+        );
+        await Promise.all(oldOccurrences.documents.map(doc => 
+            databases.deleteDocument(DATABASE_ID, WORD_OCCURRENCES_COLLECTION_ID, doc.$id)
+        ));
+        
+        const tokensWithPositions = tokenizeWithPositions(mergedContent);
+        const tokens = tokensWithPositions.map(t => t.word);
+        const rawToWordId = await upsertWordsForTokens(session.user.id, tokens);
+
+        const occurrences = tokensWithPositions
+            .map((token) => {
+                const wordId = rawToWordId.get(token.word);
+                if (!wordId) return null;
+                return { 
+                    word_id: wordId, 
+                    sentence_id: firstSentence.$id,
+                    start_index: token.startIndex,
+                    end_index: token.endIndex,
+                };
+            })
+            .filter(Boolean) as { word_id: string; sentence_id: string; start_index: number; end_index: number }[];
+
+        if (occurrences.length > 0) {
+            await Promise.all(occurrences.map(occ => 
+                databases.createDocument(
+                    DATABASE_ID,
+                    WORD_OCCURRENCES_COLLECTION_ID,
+                    ID.unique(),
+                    occ
+                )
+            ));
+        }
+
+        revalidatePath('/materials');
+        revalidatePath(`/materials/${materialId}`);
+        
+        return { success: true };
+    } catch (error) {
+        console.error('Failed to merge sentences', error);
         return { error: 'Failed to merge sentences' };
     }
-
-    // Soft delete others
-    const { error: deleteError } = await client
-        .from('sentences')
-        .update({ deleted_at: new Date().toISOString() })
-        .in('id', otherSentences.map(s => s.id));
-
-    if (deleteError) {
-        console.error('Failed to delete merged sentences', deleteError);
-        return { error: 'Failed to cleanup merged sentences' };
-    }
-
-    // Update vocabulary for the new merged sentence
-    // First remove old occurrences for the first sentence
-    await client.from('word_occurrences').delete().eq('sentence_id', firstSentence.id);
-    
-    const tokensWithPositions = tokenizeWithPositions(mergedContent);
-    const tokens = tokensWithPositions.map(t => t.word);
-    const rawToWordId = await upsertWordsForTokens(client, session.user.id, tokens);
-
-    const occurrences = tokensWithPositions
-        .map((token) => {
-            const wordId = rawToWordId.get(token.word);
-            if (!wordId) return null;
-            return { 
-                id: randomUUID(), 
-                word_id: wordId, 
-                sentence_id: firstSentence.id,
-                start_index: token.startIndex,
-                end_index: token.endIndex,
-            };
-        })
-        .filter(Boolean) as { id: string; word_id: string; sentence_id: string; start_index: number; end_index: number }[];
-
-    if (occurrences.length > 0) {
-        await client.from('word_occurrences').insert(occurrences);
-    }
-
-    revalidatePath('/materials');
-    revalidatePath(`/materials/${materialId}`);
-    
-    return { success: true };
 }
 
 export async function splitSentence(sentenceId: string, splitIndex: number) {
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
-    const client = supabaseAdmin || supabase;
+    const { databases } = await getAdminClient();
 
-    const { data: sentence } = await client
-        .from('sentences')
-        .select('id, content, edited_content, start_time, end_time, order, material_id')
-        .eq('id', sentenceId)
-        .single();
+    try {
+        const sentence = await databases.getDocument(
+            DATABASE_ID,
+            SENTENCES_COLLECTION_ID,
+            sentenceId
+        );
 
-    if (!sentence) return { error: 'Sentence not found' };
+        const material = await databases.getDocument(
+            DATABASE_ID,
+            MATERIALS_COLLECTION_ID,
+            sentence.material_id
+        );
 
-    const { data: material } = await client
-        .from('materials')
-        .select('user_id')
-        .eq('id', sentence.material_id)
-        .single();
+        if (!material || material.user_id !== session.user.id) {
+            return { error: 'Unauthorized' };
+        }
 
-    if (!material || material.user_id !== session.user.id) {
-        return { error: 'Unauthorized' };
+        const currentContent = sentence.edited_content ?? sentence.content;
+        
+        if (splitIndex <= 0 || splitIndex >= currentContent.length) {
+            return { error: 'Invalid split position' };
+        }
+
+        const firstPart = currentContent.substring(0, splitIndex).trim();
+        const secondPart = currentContent.substring(splitIndex).trim();
+
+        if (!firstPart || !secondPart) {
+            return { error: 'Split results in empty sentence' };
+        }
+
+        // Estimate time split based on character count ratio
+        const totalDuration = sentence.end_time - sentence.start_time;
+        const splitRatio = firstPart.length / currentContent.length;
+        const splitTime = sentence.start_time + (totalDuration * splitRatio);
+
+        // Update first sentence
+        await databases.updateDocument(
+            DATABASE_ID,
+            SENTENCES_COLLECTION_ID,
+            sentenceId,
+            {
+                content: firstPart,
+                edited_content: null,
+                end_time: splitTime,
+                updated_at: new Date().toISOString(),
+            }
+        );
+
+        // Insert second sentence
+        const newSentence = await databases.createDocument(
+            DATABASE_ID,
+            SENTENCES_COLLECTION_ID,
+            ID.unique(),
+            {
+                material_id: sentence.material_id,
+                content: secondPart,
+                start_time: splitTime,
+                end_time: sentence.end_time,
+                order: sentence.order, // Same order, rely on start_time for secondary sort
+                updated_at: new Date().toISOString(),
+            }
+        );
+
+        // Update vocab for both
+        // 1. First sentence (already updated content, need to refresh vocab)
+        const oldOccurrences = await databases.listDocuments(
+            DATABASE_ID,
+            WORD_OCCURRENCES_COLLECTION_ID,
+            [Query.equal('sentence_id', sentenceId)]
+        );
+        await Promise.all(oldOccurrences.documents.map(doc => 
+            databases.deleteDocument(DATABASE_ID, WORD_OCCURRENCES_COLLECTION_ID, doc.$id)
+        ));
+
+        const tokens1 = tokenizeWithPositions(firstPart);
+        const rawToWordId1 = await upsertWordsForTokens(session.user.id, tokens1.map(t => t.word));
+        const occ1 = tokens1.map(t => {
+            const wordId = rawToWordId1.get(t.word);
+            if (!wordId) return null;
+            return { word_id: wordId, sentence_id: sentenceId, start_index: t.startIndex, end_index: t.endIndex };
+        }).filter(Boolean);
+        
+        if (occ1.length > 0) {
+            await Promise.all(occ1.map(o => 
+                databases.createDocument(DATABASE_ID, WORD_OCCURRENCES_COLLECTION_ID, ID.unique(), o as any)
+            ));
+        }
+
+        // 2. Second sentence
+        const tokens2 = tokenizeWithPositions(secondPart);
+        const rawToWordId2 = await upsertWordsForTokens(session.user.id, tokens2.map(t => t.word));
+        const occ2 = tokens2.map(t => {
+            const wordId = rawToWordId2.get(t.word);
+            if (!wordId) return null;
+            return { word_id: wordId, sentence_id: newSentence.$id, start_index: t.startIndex, end_index: t.endIndex };
+        }).filter(Boolean);
+        
+        if (occ2.length > 0) {
+            await Promise.all(occ2.map(o => 
+                databases.createDocument(DATABASE_ID, WORD_OCCURRENCES_COLLECTION_ID, ID.unique(), o as any)
+            ));
+        }
+
+        revalidatePath('/materials');
+        revalidatePath(`/materials/${sentence.material_id}`);
+
+        return { success: true };
+    } catch (error) {
+        console.error('Failed to split sentence', error);
+        return { error: 'Failed to split sentence' };
     }
-
-    const currentContent = sentence.edited_content ?? sentence.content;
-    
-    if (splitIndex <= 0 || splitIndex >= currentContent.length) {
-        return { error: 'Invalid split position' };
-    }
-
-    const firstPart = currentContent.substring(0, splitIndex).trim();
-    const secondPart = currentContent.substring(splitIndex).trim();
-
-    if (!firstPart || !secondPart) {
-        return { error: 'Split results in empty sentence' };
-    }
-
-    // Estimate time split based on character count ratio
-    const totalDuration = sentence.end_time - sentence.start_time;
-    const splitRatio = firstPart.length / currentContent.length;
-    const splitTime = sentence.start_time + (totalDuration * splitRatio);
-
-    // Update first sentence
-    const { error: updateError } = await client
-        .from('sentences')
-        .update({
-            content: firstPart,
-            edited_content: null,
-            end_time: splitTime,
-            updated_at: new Date().toISOString(),
-        })
-        .eq('id', sentenceId);
-
-    if (updateError) {
-        return { error: 'Failed to update sentence' };
-    }
-
-    // Insert second sentence
-    const { data: newSentence, error: insertError } = await client
-        .from('sentences')
-        .insert({
-            id: randomUUID(), // Explicitly generate ID
-            material_id: sentence.material_id,
-            content: secondPart,
-            start_time: splitTime,
-            end_time: sentence.end_time,
-            order: sentence.order, // Same order, rely on start_time for secondary sort
-            updated_at: new Date().toISOString(),
-        })
-        .select()
-        .single();
-
-    if (insertError) {
-        console.error('Failed to insert new sentence', insertError);
-        return { error: 'Failed to create new sentence' };
-    }
-
-    // Update vocab for both
-    // 1. First sentence (already updated content, need to refresh vocab)
-    await client.from('word_occurrences').delete().eq('sentence_id', sentenceId);
-    const tokens1 = tokenizeWithPositions(firstPart);
-    const rawToWordId1 = await upsertWordsForTokens(client, session.user.id, tokens1.map(t => t.word));
-    const occ1 = tokens1.map(t => {
-        const wordId = rawToWordId1.get(t.word);
-        if (!wordId) return null;
-        return { id: randomUUID(), word_id: wordId, sentence_id: sentenceId, start_index: t.startIndex, end_index: t.endIndex };
-    }).filter(Boolean);
-    if (occ1.length > 0) await client.from('word_occurrences').insert(occ1 as any);
-
-    // 2. Second sentence
-    const tokens2 = tokenizeWithPositions(secondPart);
-    const rawToWordId2 = await upsertWordsForTokens(client, session.user.id, tokens2.map(t => t.word));
-    const occ2 = tokens2.map(t => {
-        const wordId = rawToWordId2.get(t.word);
-        if (!wordId) return null;
-        return { id: randomUUID(), word_id: wordId, sentence_id: newSentence.id, start_index: t.startIndex, end_index: t.endIndex };
-    }).filter(Boolean);
-    if (occ2.length > 0) await client.from('word_occurrences').insert(occ2 as any);
-
-    revalidatePath('/materials');
-    revalidatePath(`/materials/${sentence.material_id}`);
-
-    return { success: true };
 }

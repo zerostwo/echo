@@ -1,6 +1,8 @@
 'use server';
 import { auth } from '@/auth';
-import { supabase } from '@/lib/supabase';
+import { getAdminClient } from '@/lib/appwrite';
+import { DATABASE_ID, COLLECTION_IDS } from '@/lib/appwrite_client';
+import { Query } from 'node-appwrite';
 import { revalidatePath } from 'next/cache';
 import fs from 'fs/promises';
 import path from 'path';
@@ -17,52 +19,60 @@ async function checkAdmin() {
 
 export async function getAdminStats() {
     await checkAdmin();
+    const { databases } = await getAdminClient();
     
     // Run queries in parallel
     const [users, materials, words] = await Promise.all([
-        supabase.from('users').select('*', { count: 'exact', head: true }),
-        supabase.from('materials').select('*', { count: 'exact', head: true }),
-        supabase.from('words').select('*', { count: 'exact', head: true })
+        databases.listDocuments(DATABASE_ID, 'users', [Query.limit(0)]),
+        databases.listDocuments(DATABASE_ID, COLLECTION_IDS.materials, [Query.limit(0)]),
+        databases.listDocuments(DATABASE_ID, COLLECTION_IDS.words, [Query.limit(0)])
     ]);
     
     return {
-        users: users.count || 0,
-        materials: materials.count || 0,
-        words: words.count || 0,
+        users: users.total,
+        materials: materials.total,
+        words: words.total,
     };
 }
 
 export async function getUsers(page = 1, limit = 20, search = '') {
     await checkAdmin();
+    const { databases } = await getAdminClient();
     
-    let query = supabase
-        .from('users')
-        .select('*', { count: 'exact' })
-        .range((page - 1) * limit, page * limit - 1)
-        .order('created_at', { ascending: false });
+    const queries = [
+        Query.limit(limit),
+        Query.offset((page - 1) * limit),
+        Query.orderDesc('created_at')
+    ];
 
     if (search) {
-        query = query.or(`email.ilike.%${search}%,username.ilike.%${search}%,display_name.ilike.%${search}%`);
+        queries.push(Query.or([
+            Query.search('email', search),
+            Query.search('display_name', search)
+        ]));
     }
 
-    const { data, error, count } = await query;
+    const { documents, total } = await databases.listDocuments(
+        DATABASE_ID, 
+        'users', 
+        queries
+    );
 
-    if (error) throw error;
-
-    return { users: data, total: count || 0 };
+    return { users: documents, total };
 }
 
 export async function updateQuota(userId: string, newQuotaGB: number) {
     try {
         await checkAdmin();
+        const { databases } = await getAdminClient();
         const quotaBytes = BigInt(newQuotaGB) * BigInt(1024 * 1024 * 1024);
         
-        const { error } = await supabase
-            .from('users')
-            .update({ quota: quotaBytes.toString() })
-            .eq('id', userId);
-
-        if (error) throw error;
+        await databases.updateDocument(
+            DATABASE_ID,
+            'users',
+            userId,
+            { quota: quotaBytes.toString() }
+        );
         
         revalidatePath('/admin/users');
         return { success: true };
@@ -74,13 +84,18 @@ export async function updateQuota(userId: string, newQuotaGB: number) {
 export async function toggleUserStatus(userId: string, isActive: boolean) {
     try {
         await checkAdmin();
+        const { databases, users } = await getAdminClient();
         
-        const { error } = await supabase
-            .from('users')
-            .update({ is_active: isActive })
-            .eq('id', userId);
+        // Update DB
+        await databases.updateDocument(
+            DATABASE_ID,
+            'users',
+            userId,
+            { is_active: isActive }
+        );
 
-        if (error) throw error;
+        // Update Appwrite Auth status
+        await users.updateStatus(userId, isActive);
 
         revalidatePath('/admin/users');
         return { success: true };
@@ -92,13 +107,14 @@ export async function toggleUserStatus(userId: string, isActive: boolean) {
 export async function updateUserRole(userId: string, role: string) {
     try {
         await checkAdmin();
+        const { databases } = await getAdminClient();
         
-        const { error } = await supabase
-            .from('users')
-            .update({ role })
-            .eq('id', userId);
-
-        if (error) throw error;
+        await databases.updateDocument(
+            DATABASE_ID,
+            'users',
+            userId,
+            { role }
+        );
 
         revalidatePath('/admin/users');
         return { success: true };
@@ -110,13 +126,13 @@ export async function updateUserRole(userId: string, role: string) {
 export async function deleteUser(userId: string) {
     try {
         await checkAdmin();
+        const { databases, users } = await getAdminClient();
         
-        const { error } = await supabase
-            .from('users')
-            .delete()
-            .eq('id', userId);
-
-        if (error) throw error;
+        // Delete from DB
+        await databases.deleteDocument(DATABASE_ID, 'users', userId);
+        
+        // Delete from Auth
+        await users.delete(userId);
 
         revalidatePath('/admin/users');
         return { success: true };

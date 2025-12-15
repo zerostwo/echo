@@ -2,28 +2,32 @@ import { auth } from '@/auth';
 import { getTrashItemsPaginated } from '@/actions/trash-actions';
 import { TrashClient } from './trash-client';
 import { redirect } from 'next/navigation';
-import { supabaseAdmin, supabase } from '@/lib/supabase';
+import { getAdminClient } from '@/lib/appwrite';
+import { DATABASE_ID } from '@/lib/appwrite_client';
 
 export default async function TrashPage() {
   const session = await auth();
   if (!session?.user?.id) redirect('/login');
 
-  const client = supabaseAdmin || supabase;
-
   // Fetch user settings
-  const { data: user } = await client
-    .from('users')
-    .select('settings')
-    .eq('id', session.user.id)
-    .single();
-
   let userSettings: any = {};
-  if (user?.settings) {
-    try {
-      userSettings = JSON.parse(user.settings);
-    } catch (e) {
-      console.error("Failed to parse user settings", e);
+  try {
+    const { databases } = await getAdminClient();
+    const user = await databases.getDocument(
+      DATABASE_ID,
+      'users',
+      session.user.id
+    );
+
+    if (user?.settings) {
+      try {
+        userSettings = JSON.parse(user.settings);
+      } catch (e) {
+        console.error("Failed to parse user settings", e);
+      }
     }
+  } catch (error) {
+    console.error("Failed to fetch user settings", error);
   }
 
   const pageSize = userSettings.trashPageSize || 10;

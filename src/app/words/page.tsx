@@ -1,5 +1,5 @@
 import { auth } from '@/auth';
-import { supabaseAdmin, supabase } from '@/lib/supabase';
+import { getAdminClient, APPWRITE_DATABASE_ID, Query } from '@/lib/appwrite';
 import { VocabClient } from './vocab-client';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { BookOpen, Trophy, Activity, Clock, GraduationCap, TrendingUp, AlertCircle } from "lucide-react";
@@ -15,15 +15,16 @@ export default async function VocabPage({ searchParams }: { searchParams: Promis
   const session = await auth();
   if (!session?.user?.id) redirect('/login');
 
-  const client = supabaseAdmin || supabase;
+  const admin = getAdminClient();
   const { materialId } = await searchParams;
 
   // Fetch user settings
-  const { data: userData } = await client
-    .from('users')
-    .select('settings')
-    .eq('id', session.user.id)
-    .single();
+  let userData;
+  try {
+      userData = await admin.databases.getDocument(APPWRITE_DATABASE_ID, 'users', session.user.id);
+  } catch (e) {
+      console.error("Failed to fetch user settings", e);
+  }
 
   let userSettings: any = {};
   if (userData?.settings) {
@@ -53,25 +54,26 @@ export default async function VocabPage({ searchParams }: { searchParams: Promis
   // Get material title if filtered
   let filteredMaterialTitle = '';
   if (materialId) {
-    const { data: material } = await client
-      .from('materials')
-      .select('title')
-      .eq('id', materialId)
-      .eq('user_id', session.user.id)
-      .single();
-    
-    filteredMaterialTitle = material?.title || '';
+    try {
+        const material = await admin.databases.getDocument(APPWRITE_DATABASE_ID, 'materials', materialId);
+        if (material && material.user_id === session.user.id) {
+            filteredMaterialTitle = material.title;
+        }
+    } catch (e) { /* ignore */ }
   }
 
   // Fetch all materials for the filter dropdown
-  const { data: materialsList } = await client
-    .from('materials')
-    .select('id, title')
-    .eq('user_id', session.user.id)
-    .is('deleted_at', null)
-    .order('title', { ascending: true });
+  const { documents: materialsList } = await admin.databases.listDocuments(
+    APPWRITE_DATABASE_ID,
+    'materials',
+    [
+        Query.equal('user_id', session.user.id),
+        Query.isNull('deleted_at'),
+        Query.orderAsc('title')
+    ]
+  );
 
-  const materials = materialsList?.map(m => ({ id: m.id, title: m.title })) || [];
+  const materials = materialsList?.map(m => ({ id: m.$id, title: m.title })) || [];
 
   const { stats, data } = initialResult;
   

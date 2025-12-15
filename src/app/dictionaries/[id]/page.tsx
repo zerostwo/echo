@@ -9,7 +9,8 @@ import { VocabClient } from "@/app/words/vocab-client"
 import { HeaderPortal } from "@/components/header-portal"
 import { SetBreadcrumbs } from "@/components/set-breadcrumbs"
 import { auth } from "@/auth"
-import { supabaseAdmin, supabase } from "@/lib/supabase"
+import { getAdminClient } from "@/lib/appwrite"
+import { DATABASE_ID } from "@/lib/appwrite_client"
 import { getVocabPaginated } from "@/actions/vocab-actions"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 
@@ -24,22 +25,25 @@ export default async function DictionaryPage({ params }: { params: Promise<{ id:
     notFound()
   }
 
-  const client = supabaseAdmin || supabase
-  
   // Fetch user settings
-  const { data: userData } = await client
-    .from('users')
-    .select('settings')
-    .eq('id', session.user.id)
-    .single();
-
   let userSettings: any = {};
-  if (userData?.settings) {
-    try {
-      userSettings = JSON.parse(userData.settings);
-    } catch (e) {
-      console.error("Failed to parse user settings", e);
+  try {
+    const { databases } = await getAdminClient();
+    const userData = await databases.getDocument(
+      DATABASE_ID,
+      'users',
+      session.user.id
+    );
+
+    if (userData?.settings) {
+      try {
+        userSettings = JSON.parse(userData.settings);
+      } catch (e) {
+        console.error("Failed to parse user settings", e);
+      }
     }
+  } catch (e) {
+    console.error("Failed to fetch user settings", e);
   }
 
   const pageSize = userSettings.vocabPageSize || 10;

@@ -1,5 +1,5 @@
 import { auth } from '@/auth';
-import { supabaseAdmin, supabase } from '@/lib/supabase';
+import { getAdminClient, APPWRITE_DATABASE_ID, Query } from '@/lib/appwrite';
 import { PaginatedDataTable } from '@/components/materials/paginated-data-table';
 import { MaterialsLiveRefresher } from '@/components/materials/materials-live-refresher';
 import { UploadMaterialDialog } from './upload-dialog';
@@ -14,22 +14,21 @@ export default async function MaterialsPage({ searchParams }: { searchParams: Pr
 
   if (!session?.user?.id) redirect('/login');
 
-  const client = supabaseAdmin || supabase;
+  const admin = getAdminClient();
 
   // Fetch user settings
-  const { data: userData } = await client
-    .from('users')
-    .select('settings')
-    .eq('id', session.user.id)
-    .single();
-
   let userSettings: any = {};
-  if (userData?.settings) {
-    try {
-      userSettings = JSON.parse(userData.settings);
-    } catch (e) {
-      console.error("Failed to parse user settings", e);
+  try {
+    const user = await admin.databases.getDocument(
+        APPWRITE_DATABASE_ID,
+        'users',
+        session.user.id
+    );
+    if (user.settings) {
+        userSettings = typeof user.settings === 'string' ? JSON.parse(user.settings) : user.settings;
     }
+  } catch (e) {
+    console.error("Failed to fetch user settings", e);
   }
 
   const pageSize = userSettings.materialsPageSize || 10;
@@ -37,12 +36,15 @@ export default async function MaterialsPage({ searchParams }: { searchParams: Pr
   const sortOrder = userSettings.materialsSortOrder || 'desc';
 
   // Fetch folders for the "Move to" action
-  const { data: folders } = await client
-    .from('folders')
-    .select('*')
-    .eq('user_id', session.user.id)
-    .is('deleted_at', null)
-    .order('name', { ascending: true });
+  const { documents: folders } = await admin.databases.listDocuments(
+      APPWRITE_DATABASE_ID,
+      'folders',
+      [
+          Query.equal('user_id', session.user.id),
+          Query.isNull('deleted_at'),
+          Query.orderAsc('name')
+      ]
+  );
 
   // Get initial paginated data
   const initialResult = await getMaterialsPaginated(
@@ -66,6 +68,15 @@ export default async function MaterialsPage({ searchParams }: { searchParams: Pr
       return stillProcessing || pendingCounts;
   }).map((m: any) => m.id);
 
+  // Map folders to match expected interface if needed (Appwrite returns documents with )
+  const mappedFolders = folders.map(f => ({
+      id: f.$id,
+      name: f.name,
+      user_id: f.user_id,
+      created_at: f.$createdAt,
+      updated_at: f.$updatedAt
+  }));
+
   return (
     <div className="py-8 h-full">
       <HeaderPortal>
@@ -76,7 +87,7 @@ export default async function MaterialsPage({ searchParams }: { searchParams: Pr
       
       <PaginatedDataTable 
         initialData={initialResult} 
-        folders={folders || []} 
+        folders={mappedFolders} 
         folderId={currentFolderId === 'unfiled' ? 'unfiled' : currentFolderId || undefined}
         initialSortBy={sortBy}
         initialSortOrder={sortOrder}

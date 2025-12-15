@@ -536,11 +536,11 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
         const { relations } = await getWordRelations(word.wordId);
         const { words: randomWords } = await getRandomWords([word.wordId], 3);
         
-        const correctOptions = relations?.map(r => ({
-            id: r.id,
-            text: r.customText || r.relatedWord?.text || 'Unknown',
+        const correctOptions = relations?.map((r: any) => ({
+            id: r.$id,
+            text: r.custom_text || r.relatedWord?.text || 'Unknown',
             isCorrect: true,
-            type: r.relationType
+            type: r.relation_type
         })) || [];
 
         // If no relations, fallback to standard mode but maybe show a toast?
@@ -613,11 +613,29 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
     try {
       const result = await getWordContext(word.wordId);
       if (result.occurrences && result.occurrences.length > 0) {
+        // Map to WordOccurrence
+        const mappedOccurrences: WordOccurrence[] = result.occurrences.map((o: any) => ({
+            id: o.$id,
+            start_index: o.start_index,
+            end_index: o.end_index,
+            sentence: {
+                id: o.sentence.$id,
+                content: o.sentence.content,
+                start_time: o.sentence.start_time,
+                end_time: o.sentence.end_time,
+                material_id: o.sentence.material_id,
+                material: {
+                    id: o.sentence.material.id,
+                    title: o.sentence.material.title
+                }
+            }
+        }));
+
         // Get the first occurrence that has audio
-        const occ = result.occurrences.find(o => 
+        const occ = mappedOccurrences.find(o => 
           o.sentence?.material_id && 
           o.sentence?.start_time !== undefined
-        ) || result.occurrences[0];
+        ) || mappedOccurrences[0];
         
         if (occ) {
           setContextSentences(prev => {
@@ -795,7 +813,23 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
     try {
       const result = await getWordContext(wordId);
       if (result.occurrences) {
-        setWordOccurrences(result.occurrences);
+        const mappedOccurrences: WordOccurrence[] = result.occurrences.map((o: any) => ({
+            id: o.$id,
+            start_index: o.start_index,
+            end_index: o.end_index,
+            sentence: {
+                id: o.sentence.$id,
+                content: o.sentence.content,
+                start_time: o.sentence.start_time,
+                end_time: o.sentence.end_time,
+                material_id: o.sentence.material_id,
+                material: {
+                    id: o.sentence.material.id,
+                    title: o.sentence.material.title
+                }
+            }
+        }));
+        setWordOccurrences(mappedOccurrences);
       }
     } catch (error) {
       console.error('Error loading word context:', error);

@@ -1,54 +1,88 @@
-import { prisma } from "@/lib/prisma"
-import { supabaseAdmin } from "@/lib/supabase"
+import { getAdminClient, APPWRITE_DATABASE_ID, Query } from "@/lib/appwrite"
+import { ID } from "node-appwrite"
 import AdmZip from "adm-zip"
 import fs from "fs"
 import path from "path"
 import os from "os"
+import { InputFile } from "node-appwrite/file"
 
 interface ImportOptions {
   mode: "merge" | "overwrite"
 }
 
+const EXPORT_BUCKET_ID = 'exports';
+
 export async function createImportJob(userId: string, filePath: string, mode: "merge" | "overwrite") {
-  const job = await prisma.importJob.create({
-    data: {
-      userId,
-      filePath,
+  const admin = getAdminClient();
+  
+  const job = await admin.databases.createDocument(
+    APPWRITE_DATABASE_ID,
+    'import_jobs',
+    ID.unique(),
+    {
+      user_id: userId,
+      file_path: filePath,
       status: "queued",
-    },
-  })
+      mode: mode,
+      created_at: new Date().toISOString(),
+    }
+  );
 
   // Trigger processing asynchronously
-  processImportJob(job.id, mode).catch((err) => {
-    console.error(`Failed to process import job ${job.id}:`, err)
+  processImportJob(job.$id, mode).catch((err) => {
+    console.error(`Failed to process import job ${job.$id}:`, err)
   })
 
-  return job
+  return {
+      id: job.$id,
+      userId: job.user_id,
+      status: job.status,
+      filePath: job.file_path
+  };
 }
 
 export async function getImportJobStatus(jobId: string, userId: string) {
-  return prisma.importJob.findFirst({
-    where: {
-      id: jobId,
-      userId,
-    },
-  })
+  const admin = getAdminClient();
+  try {
+      const job = await admin.databases.getDocument(
+          APPWRITE_DATABASE_ID,
+          'import_jobs',
+          jobId
+      );
+      
+      if (job.user_id !== userId) return null;
+      
+      return {
+          id: job.$id,
+          userId: job.user_id,
+          status: job.status,
+          error: job.error
+      };
+  } catch (e) {
+      return null;
+  }
 }
 
 async function processImportJob(jobId: string, mode: "merge" | "overwrite") {
+  const admin = getAdminClient();
+  
   try {
-    await prisma.importJob.update({
-      where: { id: jobId },
-      data: { status: "processing" },
-    })
+    await admin.databases.updateDocument(
+        APPWRITE_DATABASE_ID,
+        'import_jobs',
+        jobId,
+        { status: "processing" }
+    );
 
-    const job = await prisma.importJob.findUnique({
-      where: { id: jobId },
-    })
+    const job = await admin.databases.getDocument(
+        APPWRITE_DATABASE_ID,
+        'import_jobs',
+        jobId
+    );
 
-    if (!job || !job.filePath) return
+    if (!job || !job.file_path) return
 
-    const userId = job.userId
+    const userId = job.user_id
     const tmpDir = path.join(os.tmpdir(), `echo-import-${jobId}`)
     
     if (!fs.existsSync(tmpDir)) {
@@ -56,25 +90,14 @@ async function processImportJob(jobId: string, mode: "merge" | "overwrite") {
     }
 
     // Download ZIP
-    if (!supabaseAdmin) throw new Error("Supabase admin not configured")
-    
-    const { data, error } = await supabaseAdmin.storage
-      .from("exports") // Assuming uploads go here or a separate imports bucket. User said "Store ZIP in tmp/imports/{userId}/" but for API upload we might put it in storage first.
-      // The requirement says "Store ZIP in tmp/imports/{userId}/" for the API part. 
-      // But here I'm assuming the API uploaded it to storage or I have a path.
-      // If the API stores it locally in tmp, filePath would be local.
-      // Let's assume filePath is a storage path for scalability, but check if it looks like a local path.
-      .download(job.filePath)
-
+    const fileId = job.file_path;
     let zipPath = path.join(tmpDir, "import.zip")
     
-    if (data) {
-        const buffer = await data.arrayBuffer()
-        fs.writeFileSync(zipPath, Buffer.from(buffer))
-    } else {
-        // Maybe it's a local path if we skipped storage?
-        // For now assume storage download worked or throw
-        if (error) throw error
+    try {
+        const buffer = await admin.storage.getFileDownload(EXPORT_BUCKET_ID, fileId);
+        fs.writeFileSync(zipPath, Buffer.from(buffer));
+    } catch (e) {
+        throw new Error(`Failed to download import file: ${e}`);
     }
 
     // Extract
@@ -87,15 +110,6 @@ async function processImportJob(jobId: string, mode: "merge" | "overwrite") {
       throw new Error("Invalid export: metadata.json missing")
     }
     const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf-8"))
-
-    // Validate User (Optional: check if metadata.userId matches, but we allow importing own data)
-    if (metadata.userId !== userId) {
-       // Warning or strict check? Requirement: "Only allow exporting or importing data belonging to the current user"
-       // This usually means I can't import SOMEONE ELSE'S data. 
-       // But if I exported my data, userId matches.
-       // If I want to restore to a new account, userId won't match.
-       // Let's allow it but warn/log. The requirement is about ACCESS control (I can't trigger import for another user).
-    }
 
     // Helper to read JSON
     const readJson = (p: string) => {
@@ -116,14 +130,15 @@ async function processImportJob(jobId: string, mode: "merge" | "overwrite") {
                 settingsStr = JSON.stringify(settingsStr)
             }
             
-            await prisma.user.update({
-                where: { id: userId },
-                data: { settings: settingsStr }
-            })
+            await admin.databases.updateDocument(
+                APPWRITE_DATABASE_ID,
+                'users',
+                userId,
+                { settings: settingsStr }
+            );
         }
 
         // Restore Avatar
-        // Check if there is a local avatar file
         const userDir = path.join(tmpDir, "user")
         if (fs.existsSync(userDir)) {
             const files = fs.readdirSync(userDir)
@@ -131,63 +146,122 @@ async function processImportJob(jobId: string, mode: "merge" | "overwrite") {
             
             if (avatarFile) {
                 const avatarPath = path.join(userDir, avatarFile)
-                const buffer = fs.readFileSync(avatarPath)
                 const ext = path.extname(avatarFile).substring(1) || "png"
-                const filename = `${userId}/avatar-${Date.now()}.${ext}`
+                const filename = `avatar-${Date.now()}.${ext}`
                 const BUCKET_NAME = "avatars"
 
-                // Upload to Supabase
-                const { error: uploadError } = await supabaseAdmin.storage
-                    .from(BUCKET_NAME)
-                    .upload(filename, buffer, {
-                        contentType: `image/${ext}`,
-                        upsert: true
-                    })
-                
-                if (!uploadError) {
-                    // Get public URL
-                    const { data: { publicUrl } } = supabaseAdmin.storage
-                        .from(BUCKET_NAME)
-                        .getPublicUrl(filename)
-                    
-                    // Construct final URL (handling local dev env if needed)
-                    let finalUrl = publicUrl;
-                    if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
-                        const relativePath = publicUrl.split('/storage/v1/object/public/')[1];
-                        if (relativePath) {
-                            const baseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL.replace(/\/$/, '');
-                            finalUrl = `${baseUrl}/storage/v1/object/public/${relativePath}`;
-                        }
-                    }
-
-                    await prisma.user.update({
-                        where: { id: userId },
-                        data: { image: finalUrl }
-                    })
+                // Ensure bucket exists
+                try {
+                    await admin.storage.getBucket(BUCKET_NAME);
+                } catch (e) {
+                    await admin.storage.createBucket(BUCKET_NAME, 'Avatars', [], false, true, undefined, ['jpg', 'png', 'jpeg', 'gif', 'webp']);
                 }
+
+                const inputFile = InputFile.fromPath(avatarPath, filename);
+                
+                const file = await admin.storage.createFile(
+                    BUCKET_NAME,
+                    ID.unique(),
+                    inputFile
+                );
+                
+                await admin.databases.updateDocument(
+                    APPWRITE_DATABASE_ID,
+                    'users',
+                    userId,
+                    { image: file.$id }
+                );
             }
         }
     }
 
     // --- OVERWRITE MODE: DELETE EXISTING DATA ---
     if (mode === "overwrite") {
-        // Delete in reverse order of dependencies
+        // Helper to delete all documents in a collection for a user
+        const deleteForUser = async (collectionId: string, userIdField: string = 'user_id') => {
+            let cursor = null;
+            while (true) {
+                const queries = [
+                    Query.equal(userIdField, userId),
+                    Query.limit(100)
+                ];
+                if (cursor) queries.push(Query.cursorAfter(cursor));
+                
+                const { documents } = await admin.databases.listDocuments(
+                    APPWRITE_DATABASE_ID,
+                    collectionId,
+                    queries
+                );
+                
+                if (documents.length === 0) break;
+                
+                await Promise.all(documents.map(doc => 
+                    admin.databases.deleteDocument(APPWRITE_DATABASE_ID, collectionId, doc.$id)
+                ));
+                
+                if (documents.length < 100) break;
+            }
+        };
+
         // 1. Study Logs
-        await prisma.wordReview.deleteMany({ where: { userWordStatus: { userId } } })
-        await prisma.practiceProgress.deleteMany({ where: { userId } })
-        await prisma.dailyStudyStat.deleteMany({ where: { userId } })
+        let statusIds: string[] = [];
+        let cursor = null;
+        while (true) {
+            const queries = [
+                Query.equal('user_id', userId),
+                Query.limit(100)
+            ];
+            if (cursor) queries.push(Query.cursorAfter(cursor));
+            const { documents } = await admin.databases.listDocuments(
+                APPWRITE_DATABASE_ID,
+                'user_word_statuses',
+                queries
+            );
+            if (documents.length === 0) break;
+            statusIds.push(...documents.map(d => d.$id));
+            cursor = documents[documents.length - 1].$id;
+            if (documents.length < 100) break;
+        }
+        
+        for (let i = 0; i < statusIds.length; i += 50) {
+            const batch = statusIds.slice(i, i + 50);
+            const { documents: reviews } = await admin.databases.listDocuments(
+                APPWRITE_DATABASE_ID,
+                'word_reviews',
+                [Query.equal('user_word_status_id', batch)]
+            );
+            await Promise.all(reviews.map(r => admin.databases.deleteDocument(APPWRITE_DATABASE_ID, 'word_reviews', r.$id)));
+        }
+
+        await deleteForUser('practice_progress');
+        await deleteForUser('daily_study_stats');
         
         // 2. User Word Statuses
-        await prisma.userWordStatus.deleteMany({ where: { userId } })
+        await deleteForUser('user_word_statuses');
         
         // 3. Materials & Folders
-        // Need to delete files from storage too? Maybe too dangerous for now. Just DB.
-        await prisma.sentence.deleteMany({ where: { material: { userId } } })
-        await prisma.material.deleteMany({ where: { userId } })
-        await prisma.folder.deleteMany({ where: { userId } })
+        const { documents: materials } = await admin.databases.listDocuments(
+            APPWRITE_DATABASE_ID,
+            'materials',
+            [Query.equal('user_id', userId)]
+        );
+        const materialIds = materials.map(m => m.$id);
+        
+        for (let i = 0; i < materialIds.length; i += 50) {
+            const batch = materialIds.slice(i, i + 50);
+            const { documents: sentences } = await admin.databases.listDocuments(
+                APPWRITE_DATABASE_ID,
+                'sentences',
+                [Query.equal('material_id', batch)]
+            );
+            await Promise.all(sentences.map(s => admin.databases.deleteDocument(APPWRITE_DATABASE_ID, 'sentences', s.$id)));
+        }
+
+        await deleteForUser('materials');
+        await deleteForUser('folders');
         
         // 4. Dictionaries
-        await prisma.dictionary.deleteMany({ where: { userId } })
+        await deleteForUser('dictionaries');
     }
 
     // --- IMPORT PROCESS ---
@@ -201,29 +275,86 @@ async function processImportJob(jobId: string, mode: "merge" | "overwrite") {
     if (words) {
         for (const w of words) {
             // Check if word exists by text
-            let word = await prisma.word.findUnique({ where: { text: w.text } })
-            if (!word) {
+            const { documents } = await admin.databases.listDocuments(
+                APPWRITE_DATABASE_ID,
+                'words',
+                [Query.equal('text', w.text)]
+            );
+            
+            let wordId;
+            if (documents.length > 0) {
+                wordId = documents[0].$id;
+            } else {
                 // Create word
-                const { id, ...data } = w
-                word = await prisma.word.create({ data })
+                const { $id, $createdAt, $updatedAt, ...data } = w;
+                // Clean data
+                const cleanData = {
+                    text: data.text,
+                    phonetic: data.phonetic,
+                    translation: data.translation,
+                    pos: data.pos,
+                    definition: data.definition,
+                    collins: data.collins,
+                    oxford: data.oxford,
+                    tag: data.tag,
+                    bnc: data.bnc,
+                    frq: data.frq,
+                    exchange: data.exchange,
+                    audio: data.audio,
+                    detail: data.detail,
+                };
+                
+                const newWord = await admin.databases.createDocument(
+                    APPWRITE_DATABASE_ID,
+                    'words',
+                    ID.unique(),
+                    cleanData
+                );
+                wordId = newWord.$id;
             }
-            wordIdMap.set(w.id, word.id)
+            wordIdMap.set(w.$id || w.id, wordId)
         }
     }
 
     if (statuses) {
         for (const s of statuses) {
-            const newWordId = wordIdMap.get(s.wordId)
+            const oldWordId = s.word_id || s.wordId; // Handle different casing if needed
+            const newWordId = wordIdMap.get(oldWordId)
             if (!newWordId) continue
 
-            const { id, userId: oldUserId, wordId, word, reviews, ...data } = s
+            const { $id, $createdAt, $updatedAt, user_id, word_id, ...data } = s
             
-            // Upsert status
-            await prisma.userWordStatus.upsert({
-                where: { userId_wordId: { userId, wordId: newWordId } },
-                update: { ...data },
-                create: { ...data, userId, wordId: newWordId }
-            })
+            // Check if status exists
+            const { documents } = await admin.databases.listDocuments(
+                APPWRITE_DATABASE_ID,
+                'user_word_statuses',
+                [
+                    Query.equal('user_id', userId),
+                    Query.equal('word_id', newWordId)
+                ]
+            );
+
+            if (documents.length > 0) {
+                // Update
+                await admin.databases.updateDocument(
+                    APPWRITE_DATABASE_ID,
+                    'user_word_statuses',
+                    documents[0].$id,
+                    data
+                );
+            } else {
+                // Create
+                await admin.databases.createDocument(
+                    APPWRITE_DATABASE_ID,
+                    'user_word_statuses',
+                    ID.unique(),
+                    {
+                        ...data,
+                        user_id: userId,
+                        word_id: newWordId
+                    }
+                );
+            }
         }
     }
 
@@ -231,31 +362,59 @@ async function processImportJob(jobId: string, mode: "merge" | "overwrite") {
     const dictionaries = readJson("dictionaries/dictionaries.json")
     if (dictionaries) {
         for (const d of dictionaries) {
-            const { id, userId: oldUserId, words: dictWords, ...data } = d
+            const { $id, $createdAt, $updatedAt, user_id, words: dictWords, ...data } = d
             
             // Find or create dictionary
-            let dict = await prisma.dictionary.findFirst({
-                where: { userId, name: data.name }
-            })
+            const { documents } = await admin.databases.listDocuments(
+                APPWRITE_DATABASE_ID,
+                'dictionaries',
+                [
+                    Query.equal('user_id', userId),
+                    Query.equal('name', data.name)
+                ]
+            );
             
-            if (!dict) {
-                dict = await prisma.dictionary.create({
-                    data: { ...data, userId }
-                })
+            let dictId;
+            if (documents.length > 0) {
+                dictId = documents[0].$id;
+            } else {
+                const newDict = await admin.databases.createDocument(
+                    APPWRITE_DATABASE_ID,
+                    'dictionaries',
+                    ID.unique(),
+                    { ...data, user_id: userId }
+                );
+                dictId = newDict.$id;
             }
 
             // Add words to dictionary
             if (dictWords) {
                 for (const dw of dictWords) {
-                    const newWordId = wordIdMap.get(dw.wordId)
-                    // If word wasn't in vocab list, maybe we need to find it by text from dw.word?
-                    // Assuming vocab/words.json contained all referenced words.
+                    const oldWordId = dw.word_id || dw.wordId;
+                    const newWordId = wordIdMap.get(oldWordId)
+                    
                     if (newWordId) {
-                        await prisma.dictionaryWord.upsert({
-                            where: { dictionaryId_wordId: { dictionaryId: dict.id, wordId: newWordId } },
-                            update: {},
-                            create: { dictionaryId: dict.id, wordId: newWordId }
-                        })
+                        // Check if exists
+                        const { documents: existingDW } = await admin.databases.listDocuments(
+                            APPWRITE_DATABASE_ID,
+                            'dictionary_words',
+                            [
+                                Query.equal('dictionary_id', dictId),
+                                Query.equal('word_id', newWordId)
+                            ]
+                        );
+                        
+                        if (existingDW.length === 0) {
+                            await admin.databases.createDocument(
+                                APPWRITE_DATABASE_ID,
+                                'dictionary_words',
+                                ID.unique(),
+                                {
+                                    dictionary_id: dictId,
+                                    word_id: newWordId
+                                }
+                            );
+                        }
                     }
                 }
             }
@@ -268,36 +427,48 @@ async function processImportJob(jobId: string, mode: "merge" | "overwrite") {
     const sentenceIdMap = new Map<string, string>()
 
     if (folders) {
-        // Sort by order or parent to ensure parents exist? 
-        // Actually we might need two passes or topological sort if hierarchy is deep.
-        // Simple approach: Create all, then update parents.
-        
         for (const f of folders) {
-            const { id, userId: oldUserId, parentId, children, materials, ...data } = f
-            // Try to find existing folder by name? Or just create new ones?
-            // If merge, we might want to avoid duplicates.
-            let folder = await prisma.folder.findFirst({
-                where: { userId, name: data.name, parentId: null } // Simplified check
-            })
+            const { $id, $createdAt, $updatedAt, user_id, parent_id, children, materials, ...data } = f
             
-            if (!folder || mode === "overwrite") {
-                 folder = await prisma.folder.create({
-                    data: { ...data, userId, parentId: null } // Set parent later
-                 })
+            // Try to find existing folder by name
+            const { documents } = await admin.databases.listDocuments(
+                APPWRITE_DATABASE_ID,
+                'folders',
+                [
+                    Query.equal('user_id', userId),
+                    Query.equal('name', data.name),
+                    Query.isNull('parent_id') // Simplified
+                ]
+            );
+            
+            let folderId;
+            if (documents.length > 0 && mode === "merge") {
+                folderId = documents[0].$id;
+            } else {
+                 const newFolder = await admin.databases.createDocument(
+                    APPWRITE_DATABASE_ID,
+                    'folders',
+                    ID.unique(),
+                    { ...data, user_id: userId, parent_id: null }
+                 );
+                 folderId = newFolder.$id;
             }
-            folderIdMap.set(f.id, folder.id)
+            folderIdMap.set($id || f.id, folderId)
         }
         
         // Fix parents
         for (const f of folders) {
-            if (f.parentId && folderIdMap.has(f.parentId)) {
-                const newId = folderIdMap.get(f.id)
-                const newParentId = folderIdMap.get(f.parentId)
+            const oldParentId = f.parent_id || f.parentId;
+            if (oldParentId && folderIdMap.has(oldParentId)) {
+                const newId = folderIdMap.get(f.$id || f.id)
+                const newParentId = folderIdMap.get(oldParentId)
                 if (newId && newParentId) {
-                    await prisma.folder.update({
-                        where: { id: newId },
-                        data: { parentId: newParentId }
-                    })
+                    await admin.databases.updateDocument(
+                        APPWRITE_DATABASE_ID,
+                        'folders',
+                        newId,
+                        { parent_id: newParentId }
+                    );
                 }
             }
         }
@@ -306,56 +477,71 @@ async function processImportJob(jobId: string, mode: "merge" | "overwrite") {
     const materials = readJson("materials/materials.json")
     if (materials) {
         for (const m of materials) {
-            const { id, userId: oldUserId, folderId, sentences, ...data } = m
+            const { $id, $createdAt, $updatedAt, user_id, folder_id, sentences, ...data } = m
             
             // Check if exists
-            const existing = await prisma.material.findFirst({
-                where: { userId, title: data.title }
-            })
+            const { documents: existing } = await admin.databases.listDocuments(
+                APPWRITE_DATABASE_ID,
+                'materials',
+                [
+                    Query.equal('user_id', userId),
+                    Query.equal('title', data.title)
+                ]
+            );
             
-            if (existing && mode === "merge") continue // Skip if exists
+            if (existing.length > 0 && mode === "merge") continue 
 
             // Handle Media File
-            let filePath = data.filePath
-            const fileName = path.basename(filePath)
-            const localMedia = path.join(tmpDir, "materials", "media", fileName)
+            let fileId = data.file_id;
+            // If we have a local file for this material
+            const fileName = data.filename || 'file';
+            const localMedia = path.join(tmpDir, "materials", "media", `${$id}_${fileName}`)
             
             if (fs.existsSync(localMedia)) {
                 // Upload to storage
-                const fileBuffer = fs.readFileSync(localMedia)
-                const storagePath = `${userId}/${Date.now()}-${fileName}`
+                const inputFile = InputFile.fromPath(localMedia, fileName);
                 
-                const { error: uploadError } = await supabaseAdmin.storage
-                    .from("materials")
-                    .upload(storagePath, fileBuffer, { contentType: data.mimeType || undefined })
-                
-                if (!uploadError) {
-                    filePath = storagePath
+                try {
+                    const file = await admin.storage.createFile(
+                        'materials',
+                        ID.unique(),
+                        inputFile
+                    );
+                    fileId = file.$id;
+                } catch (e) {
+                    console.error("Failed to upload material file", e);
                 }
             }
 
-            const newFolderId = folderId ? folderIdMap.get(folderId) : null
+            const oldFolderId = folder_id || m.folderId;
+            const newFolderId = oldFolderId ? folderIdMap.get(oldFolderId) : null
 
-            const material = await prisma.material.create({
-                data: {
+            const material = await admin.databases.createDocument(
+                APPWRITE_DATABASE_ID,
+                'materials',
+                ID.unique(),
+                {
                     ...data,
-                    userId,
-                    folderId: newFolderId,
-                    filePath,
+                    user_id: userId,
+                    folder_id: newFolderId,
+                    file_id: fileId,
                 }
-            })
+            );
 
-            // Create sentences and map IDs
+            // Create sentences
             if (sentences && Array.isArray(sentences)) {
                 for (const s of sentences) {
-                    const { id: oldSentenceId, materialId: oldMatId, ...sData } = s
-                    const newSentence = await prisma.sentence.create({
-                        data: {
+                    const { $id: oldSentenceId, $createdAt, $updatedAt, material_id, ...sData } = s
+                    const newSentence = await admin.databases.createDocument(
+                        APPWRITE_DATABASE_ID,
+                        'sentences',
+                        ID.unique(),
+                        {
                             ...sData,
-                            materialId: material.id
+                            material_id: material.$id
                         }
-                    })
-                    sentenceIdMap.set(oldSentenceId, newSentence.id)
+                    );
+                    sentenceIdMap.set(oldSentenceId || s.id, newSentence.$id)
                 }
             }
         }
@@ -364,48 +550,40 @@ async function processImportJob(jobId: string, mode: "merge" | "overwrite") {
     // 4. Study Logs (Append)
     const reviews = readJson("study/reviews.json")
     if (reviews) {
-        for (const r of reviews) {
-            // Need to map userWordStatusId
-            // This is tricky because we need to find the NEW userWordStatusId
-            // We can find it via userId + wordId (mapped)
-            // But we don't have wordId in the review object directly, it's in userWordStatus.
-            // We need to look up the wordId from the OLD userWordStatus (which we might have in memory or need to look up in the export data)
-            
-            // Simplified: If we can't easily map, we might skip reviews or need a more complex mapping strategy.
-            // For now, let's skip deep history restoration if it's too complex for this scope, 
-            // OR try to look up the wordId from the exported statuses.json
-            
-            // Better: We upserted UserWordStatuses. We can find the new ID by querying DB with userId + wordId.
-            // But we need to know which wordId the review belongs to.
-            // The review has `userWordStatusId`. We need a map of OldStatusID -> NewStatusID.
-        }
-        
-        // Let's build OldStatusID -> WordID map from statuses.json
+        // Build OldStatusID -> WordID map from statuses.json
         const statusWordMap = new Map<string, string>()
         if (statuses) {
-            statuses.forEach((s: any) => statusWordMap.set(s.id, s.wordId))
+            statuses.forEach((s: any) => statusWordMap.set(s.$id || s.id, s.word_id || s.wordId))
         }
 
         for (const r of reviews) {
-            const oldStatusId = r.userWordStatusId
+            const oldStatusId = r.user_word_status_id || r.userWordStatusId
             const oldWordId = statusWordMap.get(oldStatusId)
             if (!oldWordId) continue
 
             const newWordId = wordIdMap.get(oldWordId)
             if (!newWordId) continue
 
-            const newStatus = await prisma.userWordStatus.findUnique({
-                where: { userId_wordId: { userId, wordId: newWordId } }
-            })
+            const { documents: newStatus } = await admin.databases.listDocuments(
+                APPWRITE_DATABASE_ID,
+                'user_word_statuses',
+                [
+                    Query.equal('user_id', userId),
+                    Query.equal('word_id', newWordId)
+                ]
+            );
 
-            if (newStatus) {
-                const { id, userWordStatusId, ...data } = r
-                await prisma.wordReview.create({
-                    data: {
+            if (newStatus.length > 0) {
+                const { $id, $createdAt, $updatedAt, user_word_status_id, ...data } = r
+                await admin.databases.createDocument(
+                    APPWRITE_DATABASE_ID,
+                    'word_reviews',
+                    ID.unique(),
+                    {
                         ...data,
-                        userWordStatusId: newStatus.id
+                        user_word_status_id: newStatus[0].$id
                     }
-                })
+                );
             }
         }
     }
@@ -414,15 +592,40 @@ async function processImportJob(jobId: string, mode: "merge" | "overwrite") {
     const practices = readJson("study/practices.json")
     if (practices) {
         for (const p of practices) {
-            const { id, userId: oldUserId, sentenceId, ...data } = p
-            const newSentenceId = sentenceIdMap.get(sentenceId)
+            const { $id, $createdAt, $updatedAt, user_id, sentence_id, ...data } = p
+            const oldSentenceId = sentence_id || p.sentenceId;
+            const newSentenceId = sentenceIdMap.get(oldSentenceId)
             
             if (newSentenceId) {
-                await prisma.practiceProgress.upsert({
-                    where: { userId_sentenceId: { userId, sentenceId: newSentenceId } },
-                    update: { ...data },
-                    create: { ...data, userId, sentenceId: newSentenceId }
-                })
+                // Check if exists
+                const { documents } = await admin.databases.listDocuments(
+                    APPWRITE_DATABASE_ID,
+                    'practice_progress',
+                    [
+                        Query.equal('user_id', userId),
+                        Query.equal('sentence_id', newSentenceId)
+                    ]
+                );
+                
+                if (documents.length > 0) {
+                    await admin.databases.updateDocument(
+                        APPWRITE_DATABASE_ID,
+                        'practice_progress',
+                        documents[0].$id,
+                        data
+                    );
+                } else {
+                    await admin.databases.createDocument(
+                        APPWRITE_DATABASE_ID,
+                        'practice_progress',
+                        ID.unique(),
+                        {
+                            ...data,
+                            user_id: userId,
+                            sentence_id: newSentenceId
+                        }
+                    );
+                }
             }
         }
     }
@@ -431,13 +634,36 @@ async function processImportJob(jobId: string, mode: "merge" | "overwrite") {
     const stats = readJson("study/daily_stats.json")
     if (stats) {
         for (const s of stats) {
-            const { id, userId: oldUserId, date, ...data } = s
+            const { $id, $createdAt, $updatedAt, user_id, date, ...data } = s
             
-            await prisma.dailyStudyStat.upsert({
-                where: { userId_date: { userId, date: new Date(date) } },
-                update: { ...data },
-                create: { ...data, userId, date: new Date(date) }
-            })
+            const { documents } = await admin.databases.listDocuments(
+                APPWRITE_DATABASE_ID,
+                'daily_study_stats',
+                [
+                    Query.equal('user_id', userId),
+                    Query.equal('date', date)
+                ]
+            );
+            
+            if (documents.length > 0) {
+                await admin.databases.updateDocument(
+                    APPWRITE_DATABASE_ID,
+                    'daily_study_stats',
+                    documents[0].$id,
+                    data
+                );
+            } else {
+                await admin.databases.createDocument(
+                    APPWRITE_DATABASE_ID,
+                    'daily_study_stats',
+                    ID.unique(),
+                    {
+                        ...data,
+                        user_id: userId,
+                        date: date
+                    }
+                );
+            }
         }
     }
 
@@ -445,19 +671,23 @@ async function processImportJob(jobId: string, mode: "merge" | "overwrite") {
     fs.rmSync(tmpDir, { recursive: true, force: true })
     if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath)
 
-    await prisma.importJob.update({
-      where: { id: jobId },
-      data: { status: "finished" },
-    })
+    await admin.databases.updateDocument(
+        APPWRITE_DATABASE_ID,
+        'import_jobs',
+        jobId,
+        { status: "finished" }
+    );
 
   } catch (error: any) {
     console.error("Import job failed:", error)
-    await prisma.importJob.update({
-      where: { id: jobId },
-      data: {
-        status: "failed",
-        error: error.message || "Unknown error",
-      },
-    })
+    await admin.databases.updateDocument(
+        APPWRITE_DATABASE_ID,
+        'import_jobs',
+        jobId,
+        {
+            status: "failed",
+            error: error.message || "Unknown error",
+        }
+    );
   }
 }

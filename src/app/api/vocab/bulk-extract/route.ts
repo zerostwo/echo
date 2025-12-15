@@ -1,5 +1,5 @@
 import { auth } from '@/auth';
-import { supabaseAdmin, supabase } from '@/lib/supabase';
+import { getAdminClient, APPWRITE_DATABASE_ID, Query } from '@/lib/appwrite';
 import { extractVocabulary } from '@/actions/vocab-actions';
 import { NextResponse } from 'next/server';
 
@@ -9,22 +9,20 @@ export async function POST() {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const client = supabaseAdmin || supabase;
+  const admin = getAdminClient();
 
   try {
     // Get all processed materials for this user that might need vocab extraction
-    const { data: materials, error } = await client
-      .from('materials')
-      .select('id, title')
-      .eq('user_id', session.user.id)
-      .eq('is_processed', true)
-      .is('deleted_at', null)
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      console.error('Error fetching materials:', error);
-      return NextResponse.json({ error: 'Failed to fetch materials' }, { status: 500 });
-    }
+    const { documents: materials } = await admin.databases.listDocuments(
+        APPWRITE_DATABASE_ID,
+        'materials',
+        [
+            Query.equal('user_id', session.user.id),
+            Query.equal('is_processed', true),
+            Query.isNull('deleted_at'),
+            Query.orderDesc('created_at')
+        ]
+    );
 
     if (!materials || materials.length === 0) {
       return NextResponse.json({ message: 'No processed materials found', extracted: 0 });
@@ -38,8 +36,8 @@ export async function POST() {
 
     for (const material of materials) {
       try {
-        console.log(`[bulk-extract] Extracting vocab for: ${material.title} (${material.id})`);
-        const result = await extractVocabulary(material.id);
+        console.log(`[bulk-extract] Extracting vocab for: ${material.title} (${material.$id})`);
+        const result = await extractVocabulary(material.$id);
         
         if (result && 'success' in result && result.success) {
           successCount++;

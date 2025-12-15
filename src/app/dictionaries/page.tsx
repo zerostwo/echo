@@ -4,27 +4,32 @@ import { DictionariesClient } from "./dictionaries-client"
 import { HeaderPortal } from "@/components/header-portal"
 import { SetBreadcrumbs } from "@/components/set-breadcrumbs"
 import { auth } from "@/auth"
-import { supabaseAdmin, supabase } from "@/lib/supabase"
+import { getAdminClient } from "@/lib/appwrite"
+import { DATABASE_ID } from "@/lib/appwrite_client"
 
 export default async function DictionariesPage() {
   const session = await auth();
-  const client = supabaseAdmin || supabase;
 
   // Fetch user settings
   let userSettings: any = {};
   if (session?.user?.id) {
-    const { data: user } = await client
-      .from('users')
-      .select('settings')
-      .eq('id', session.user.id)
-      .single();
+    try {
+      const { databases } = await getAdminClient();
+      const user = await databases.getDocument(
+        DATABASE_ID,
+        'users',
+        session.user.id
+      );
 
-    if (user?.settings) {
-      try {
-        userSettings = JSON.parse(user.settings);
-      } catch (e) {
-        console.error("Failed to parse user settings", e);
+      if (user?.settings) {
+        try {
+          userSettings = JSON.parse(user.settings);
+        } catch (e) {
+          console.error("Failed to parse user settings", e);
+        }
       }
+    } catch (error) {
+      console.error("Failed to fetch user settings", error);
     }
   }
 

@@ -1,5 +1,5 @@
 import { auth } from '@/auth';
-import { supabase, supabaseAdmin } from '@/lib/supabase';
+import { getAdminClient, APPWRITE_DATABASE_ID } from '@/lib/appwrite';
 import { createReadStream, statSync, existsSync } from 'fs';
 import { NextResponse } from 'next/server';
 import { headers } from 'next/headers';
@@ -10,24 +10,22 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     const session = await auth();
     if (!session?.user?.id) return new NextResponse('Unauthorized', { status: 401 });
     
-    // Use admin client for DB access to ensure we can find the material
-    // The anon 'supabase' client doesn't have the user's auth context
-    const client = supabaseAdmin || supabase;
+    const admin = getAdminClient();
 
-    if (!supabaseAdmin) {
-        console.warn("[Stream] Warning: supabaseAdmin is not available. Using anon client. DB queries may fail due to RLS.");
-    }
-
-    const { data: material } = await client
-        .from('materials')
-        .select('file_path, mime_type')
-        .eq('id', id)
-        .eq('user_id', session.user.id)
-        .single();
-
-    if (!material) {
+    let material;
+    try {
+        material = await admin.databases.getDocument(
+            APPWRITE_DATABASE_ID,
+            'materials',
+            id
+        );
+    } catch (e) {
         console.error(`[Stream] Material not found or access denied. ID: ${id}, User: ${session.user.id}`);
         return new NextResponse('Not Found', { status: 404 });
+    }
+
+    if (material.user_id !== session.user.id) {
+        return new NextResponse('Unauthorized', { status: 401 });
     }
 
     const filePath = material.file_path;
@@ -71,9 +69,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
         }
     }
 
-    // Handle Supabase Storage file
-    // client is already defined above
-    
+    // Handle Appwrite Storage file
     console.log(`[Stream] Serving file: ${filePath} for material: ${id}`);
 
     // If it's an external URL already
@@ -81,53 +77,55 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
         return NextResponse.redirect(filePath);
     }
 
-    // Generate signed URL
-    const storageBucketsToTry = ['materials', 'echo'];
-    let signedUrlData: { signedUrl: string } | null = null;
-    let signedUrlError: any = null;
-    let bucketUsed: string | null = null;
-
-    for (const bucket of storageBucketsToTry) {
-        const { data, error } = await client.storage
-            .from(bucket)
-            .createSignedUrl(filePath, 3600); // 1 hour validity
-
-        if (!error && data?.signedUrl) {
-            signedUrlData = data;
-            bucketUsed = bucket;
-            break;
-        }
-
-        if (error) {
-            signedUrlError = error;
-        }
+    // Appwrite Storage
+    // We need to get the file view URL or download URL
+    // Since we are proxying, we can use the download endpoint but we need to sign it or use admin key?
+    // Actually, Appwrite Node SDK doesn't have createSignedUrl like Supabase.
+    // But we can use getFileView or getFileDownload.
+    // However, those return buffers in Node SDK.
+    // We want to stream.
+    
+    // We can construct the URL manually and fetch it with the project ID/API Key.
+    // Or use the client SDK method if available? No, we are on server.
+    
+    // Let's construct the URL.
+    // Endpoint: /storage/buckets/{bucketId}/files/{fileId}/view
+    // We need to pass project ID.
+    // If the file is private, we need a session or JWT.
+    // Since we are the server, we can use the API Key in the header X-Appwrite-Key.
+    
+    const endpoint = process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT;
+    const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID;
+    const apiKey = process.env.APPWRITE_API_KEY;
+    const bucketId = 'materials'; // Assuming bucket name
+    
+    if (!endpoint || !projectId || !apiKey) {
+        return new NextResponse('Server Configuration Error', { status: 500 });
     }
 
-    if (!signedUrlData?.signedUrl) {
-        console.error("Failed to create signed URL:", signedUrlError);
-        console.error("FilePath:", filePath);
-        return new NextResponse('File not found in storage', { status: 404 });
-    }
-
+    const fileUrl = `${endpoint}/storage/buckets/${bucketId}/files/${filePath}/view?project=${projectId}`;
 
     try {
-        // Proxy the request to Supabase Storage to avoid CORS/Redirect issues
+        // Proxy the request to Appwrite Storage
         const headersList = await headers();
         const range = headersList.get('range');
         
-        const fetchHeaders: HeadersInit = {};
+        const fetchHeaders: HeadersInit = {
+            'X-Appwrite-Project': projectId,
+            'X-Appwrite-Key': apiKey
+        };
+        
         if (range) {
             fetchHeaders['Range'] = range;
         }
 
-        console.log(`[Stream] Proxying request to: ${signedUrlData.signedUrl} (bucket: ${bucketUsed})`);
-        const upstreamResponse = await fetch(signedUrlData.signedUrl, {
+        console.log(`[Stream] Proxying request to: ${fileUrl}`);
+        const upstreamResponse = await fetch(fileUrl, {
             headers: fetchHeaders
         });
 
         if (!upstreamResponse.ok) {
             console.error(`Upstream fetch failed: ${upstreamResponse.status} ${upstreamResponse.statusText}`);
-            console.error(`URL was: ${signedUrlData.signedUrl}`);
             return new NextResponse('Failed to fetch file from storage', { status: upstreamResponse.status });
         }
 

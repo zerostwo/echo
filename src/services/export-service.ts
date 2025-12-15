@@ -1,11 +1,11 @@
-import { prisma } from "@/lib/prisma"
-import { supabaseAdmin } from "@/lib/supabase"
+import { getAdminClient, APPWRITE_DATABASE_ID, Query } from "@/lib/appwrite"
+import { ID } from "node-appwrite"
 import archiver from "archiver"
 import fs from "fs"
 import path from "path"
 import os from "os"
-import { Readable } from "stream"
 import { format } from "date-fns"
+import { InputFile } from "node-appwrite/file"
 
 interface ExportOptions {
   include: {
@@ -17,99 +17,105 @@ interface ExportOptions {
   }
 }
 
+const EXPORT_BUCKET_ID = 'exports';
+
 export async function createExportJob(userId: string, options: ExportOptions) {
-  const job = await prisma.exportJob.create({
-    data: {
-      userId,
+  const admin = getAdminClient();
+  
+  const job = await admin.databases.createDocument(
+    APPWRITE_DATABASE_ID,
+    'export_jobs',
+    ID.unique(),
+    {
+      user_id: userId,
       options: JSON.stringify(options),
       status: "queued",
-    },
-  })
+      created_at: new Date().toISOString(),
+    }
+  );
 
   // Trigger processing asynchronously (fire and forget)
-  processExportJob(job.id).catch((err) => {
-    console.error(`Failed to process export job ${job.id}:`, err)
+  processExportJob(job.$id).catch((err) => {
+    console.error(`Failed to process export job ${job.$id}:`, err)
   })
 
-  return job
+  return {
+      id: job.$id,
+      userId: job.user_id,
+      status: job.status,
+      options: job.options
+  };
 }
 
 export async function getExportJobStatus(jobId: string, userId: string) {
-  return prisma.exportJob.findFirst({
-    where: {
-      id: jobId,
-      userId,
-    },
-  })
+  const admin = getAdminClient();
+  try {
+      const job = await admin.databases.getDocument(
+          APPWRITE_DATABASE_ID,
+          'export_jobs',
+          jobId
+      );
+      
+      if (job.user_id !== userId) return null;
+      
+      return {
+          id: job.$id,
+          userId: job.user_id,
+          status: job.status,
+          options: job.options,
+          filePath: job.file_path,
+          error: job.error
+      };
+  } catch (e) {
+      return null;
+  }
 }
 
 export async function getExportDownloadUrl(jobId: string, userId: string) {
-  const job = await prisma.exportJob.findFirst({
-    where: {
-      id: jobId,
-      userId,
-      status: "finished",
-    },
-  })
+  const admin = getAdminClient();
+  
+  const job = await admin.databases.getDocument(
+      APPWRITE_DATABASE_ID,
+      'export_jobs',
+      jobId
+  );
 
-  if (!job || !job.filePath) {
+  if (!job || job.user_id !== userId || job.status !== "finished" || !job.file_path) {
     throw new Error("Export not found or not ready")
   }
 
-  if (!supabaseAdmin) {
-    throw new Error("Supabase admin client not initialized")
-  }
-
-  const timestamp = format(new Date(), "yyyy-MM-dd-HH-mm")
-  const filename = `echo-export-${timestamp}.zip`
-
-  const { data, error } = await supabaseAdmin.storage
-    .from(job.filePath.startsWith("exports-large/") ? "exports-large" : "exports")
-    .createSignedUrl(
-      job.filePath.startsWith("exports-large/") 
-        ? job.filePath.replace("exports-large/", "") 
-        : job.filePath, 
-      3600, 
-      {
-        download: filename,
-      }
-    )
-
-  if (error) {
-    throw error
-  }
-
-  return data.signedUrl
+  // Return a proxy URL that will handle the download
+  return `/api/export/download/${jobId}`;
 }
 
 export async function deleteExportJob(jobId: string, userId: string) {
-  const job = await prisma.exportJob.findFirst({
-    where: {
-      id: jobId,
-      userId,
-    },
-  })
+  const admin = getAdminClient();
+  
+  const job = await admin.databases.getDocument(
+      APPWRITE_DATABASE_ID,
+      'export_jobs',
+      jobId
+  );
 
-  if (!job) {
+  if (!job || job.user_id !== userId) {
     throw new Error("Export job not found")
   }
 
-  // Delete file from Supabase if it exists
-  if (job.filePath && supabaseAdmin) {
+  // Delete file from Appwrite Storage if it exists
+  if (job.file_path) {
     try {
-      const bucket = job.filePath.startsWith("exports-large/") ? "exports-large" : "exports"
-      const path = job.filePath.startsWith("exports-large/") ? job.filePath.replace("exports-large/", "") : job.filePath
-      await supabaseAdmin.storage.from(bucket).remove([path])
+      await admin.storage.deleteFile(EXPORT_BUCKET_ID, job.file_path);
     } catch (error) {
       console.error("Failed to delete export file from storage:", error)
-      // Continue to delete the job record even if storage deletion fails
     }
   }
 
   // Delete job record
-  await prisma.exportJob.delete({
-    where: { id: jobId },
-  })
+  await admin.databases.deleteDocument(
+      APPWRITE_DATABASE_ID,
+      'export_jobs',
+      jobId
+  );
 }
 
 // Helper for BigInt serialization
@@ -120,21 +126,24 @@ const jsonStringify = (data: any) => {
 }
 
 async function processExportJob(jobId: string) {
+  const admin = getAdminClient();
+  
   try {
-    await prisma.exportJob.update({
-      where: { id: jobId },
-      data: { status: "processing" },
-    })
+    await admin.databases.updateDocument(
+        APPWRITE_DATABASE_ID,
+        'export_jobs',
+        jobId,
+        { status: "processing" }
+    );
 
-    const job = await prisma.exportJob.findUnique({
-      where: { id: jobId },
-      include: { user: true },
-    })
-
-    if (!job) return
+    const job = await admin.databases.getDocument(
+        APPWRITE_DATABASE_ID,
+        'export_jobs',
+        jobId
+    );
 
     const options = JSON.parse(job.options) as ExportOptions
-    const userId = job.userId
+    const userId = job.user_id
     const tmpDir = path.join(os.tmpdir(), `echo-export-${jobId}`)
     
     if (!fs.existsSync(tmpDir)) {
@@ -152,53 +161,37 @@ async function processExportJob(jobId: string) {
 
     // 2. User Data (Basic info)
     if (options.include.user) {
-      const user = await prisma.user.findUnique({ where: { id: userId } })
+      const user = await admin.databases.getDocument(APPWRITE_DATABASE_ID, 'users', userId);
+      
       if (user) {
         const userDir = path.join(tmpDir, "user")
         fs.mkdirSync(userDir, { recursive: true })
         
         // Handle Avatar
-        if (user.image && !user.image.startsWith("http")) {
-            // It's likely a storage path or relative path
-            // If it's a full URL but from our storage, we might want to download it.
-            // But usually user.image stores the public URL.
-            // If we want to backup the file, we need to know the storage path.
-            // Based on uploadAvatar, it returns the public URL.
-            // We can try to parse the path from the URL if it matches our supabase URL.
+        if (user.image) {
+            let fileId = null;
+            const bucketId = 'avatars'; 
             
-            let storagePath = null;
-            if (process.env.NEXT_PUBLIC_SUPABASE_URL && user.image.includes(process.env.NEXT_PUBLIC_SUPABASE_URL)) {
-                // Extract path after /storage/v1/object/public/avatars/
-                const parts = user.image.split("/storage/v1/object/public/avatars/");
-                if (parts.length > 1) {
-                    storagePath = parts[1];
-                }
+            if (user.image.includes('/files/')) {
+                const match = user.image.match(/\/files\/([^\/]+)\//);
+                if (match) fileId = match[1];
+            } else if (!user.image.startsWith('http')) {
+                fileId = user.image;
             }
 
-            if (storagePath && supabaseAdmin) {
-                const ext = path.extname(storagePath) || ".png"
-                const avatarFilename = `avatar${ext}`
-                const avatarDest = path.join(userDir, avatarFilename)
-                
+            if (fileId) {
+                const avatarDest = path.join(userDir, `avatar.png`) 
                 try {
-                    const { data, error } = await supabaseAdmin.storage
-                        .from("avatars")
-                        .download(storagePath)
-                    
-                    if (!error && data) {
-                        const buffer = await data.arrayBuffer()
-                        fs.writeFileSync(avatarDest, Buffer.from(buffer))
-                    }
+                    const buffer = await admin.storage.getFileDownload(bucketId, fileId);
+                    fs.writeFileSync(avatarDest, Buffer.from(buffer));
                 } catch (e) {
                     console.error("Failed to export avatar", e)
                 }
             }
         }
 
-        // Exclude sensitive data
         const { password, ...safeUser } = user
         
-        // Parse settings if it's a string
         let userDataToSave: any = { ...safeUser }
         try {
             if (typeof userDataToSave.settings === 'string') {
@@ -216,40 +209,83 @@ async function processExportJob(jobId: string) {
       fs.mkdirSync(vocabDir, { recursive: true })
 
       if (options.include.vocab) {
-        // Export Words (that the user has interacted with or added)
-        // We can find words via UserWordStatus
-        const userWordStatuses = await prisma.userWordStatus.findMany({
-          where: { userId },
-          include: { word: true },
-        })
+        let allStatuses: any[] = [];
+        let cursor = null;
         
-        const words = userWordStatuses.map(s => s.word)
-        fs.writeFileSync(path.join(vocabDir, "words.json"), jsonStringify(words))
+        while (true) {
+            const queries = [
+                Query.equal('user_id', userId),
+                Query.limit(100)
+            ];
+            if (cursor) queries.push(Query.cursorAfter(cursor));
+            
+            const { documents } = await admin.databases.listDocuments(
+                APPWRITE_DATABASE_ID,
+                'user_word_statuses',
+                queries
+            );
+            
+            if (documents.length === 0) break;
+            allStatuses.push(...documents);
+            cursor = documents[documents.length - 1].$id;
+            if (documents.length < 100) break;
+        }
         
-        // Export UserWordStatus
-        fs.writeFileSync(path.join(vocabDir, "statuses.json"), jsonStringify(userWordStatuses))
+        const wordIds = allStatuses.map(s => s.word_id);
+        const uniqueWordIds = Array.from(new Set(wordIds));
+        
+        let allWords: any[] = [];
+        for (let i = 0; i < uniqueWordIds.length; i += 100) {
+            const batch = uniqueWordIds.slice(i, i + 100);
+            const { documents } = await admin.databases.listDocuments(
+                APPWRITE_DATABASE_ID,
+                'words',
+                [Query.equal('$id', batch)]
+            );
+            allWords.push(...documents);
+        }
+
+        fs.writeFileSync(path.join(vocabDir, "words.json"), jsonStringify(allWords))
+        fs.writeFileSync(path.join(vocabDir, "statuses.json"), jsonStringify(allStatuses))
       }
 
       if (options.include.learning) {
         const studyDir = path.join(tmpDir, "study")
         fs.mkdirSync(studyDir, { recursive: true })
 
-        // Export WordReviews
-        const reviews = await prisma.wordReview.findMany({
-          where: { userWordStatus: { userId } },
-        })
-        fs.writeFileSync(path.join(studyDir, "reviews.json"), jsonStringify(reviews))
+        let allReviews: any[] = [];
+        let cursor = null;
+        while (true) {
+             const queries = [
+                Query.equal('user_id', userId),
+                Query.limit(100)
+            ];
+            if (cursor) queries.push(Query.cursorAfter(cursor));
+            
+            const { documents } = await admin.databases.listDocuments(
+                APPWRITE_DATABASE_ID,
+                'word_reviews',
+                queries
+            );
+            if (documents.length === 0) break;
+            allReviews.push(...documents);
+            cursor = documents[documents.length - 1].$id;
+            if (documents.length < 100) break;
+        }
+        fs.writeFileSync(path.join(studyDir, "reviews.json"), jsonStringify(allReviews))
 
-        // Export PracticeProgress
-        const practices = await prisma.practiceProgress.findMany({
-          where: { userId },
-        })
+        const { documents: practices } = await admin.databases.listDocuments(
+            APPWRITE_DATABASE_ID,
+            'practice_progress',
+            [Query.equal('user_id', userId)]
+        );
         fs.writeFileSync(path.join(studyDir, "practices.json"), jsonStringify(practices))
 
-        // Export DailyStudyStat
-        const stats = await prisma.dailyStudyStat.findMany({
-          where: { userId },
-        })
+        const { documents: stats } = await admin.databases.listDocuments(
+            APPWRITE_DATABASE_ID,
+            'daily_study_stats',
+            [Query.equal('user_id', userId)]
+        );
         fs.writeFileSync(path.join(studyDir, "daily_stats.json"), jsonStringify(stats))
       }
     }
@@ -259,11 +295,26 @@ async function processExportJob(jobId: string) {
       const dictDir = path.join(tmpDir, "dictionaries")
       fs.mkdirSync(dictDir, { recursive: true })
 
-      const dictionaries = await prisma.dictionary.findMany({
-        where: { userId },
-        include: { words: { include: { word: true } } },
-      })
-      fs.writeFileSync(path.join(dictDir, "dictionaries.json"), jsonStringify(dictionaries))
+      const { documents: dictionaries } = await admin.databases.listDocuments(
+          APPWRITE_DATABASE_ID,
+          'dictionaries',
+          [Query.equal('user_id', userId)]
+      );
+      
+      const fullDictionaries = [];
+      for (const dict of dictionaries) {
+          const { documents: dictWords } = await admin.databases.listDocuments(
+              APPWRITE_DATABASE_ID,
+              'dictionary_words',
+              [Query.equal('dictionary_id', dict.$id)]
+          );
+          fullDictionaries.push({
+              ...dict,
+              words: dictWords
+          });
+      }
+      
+      fs.writeFileSync(path.join(dictDir, "dictionaries.json"), jsonStringify(fullDictionaries))
     }
 
     // 5. Materials
@@ -273,56 +324,45 @@ async function processExportJob(jobId: string) {
       const mediaDir = path.join(matDir, "media")
       fs.mkdirSync(mediaDir, { recursive: true })
 
-      const materials = await prisma.material.findMany({
-        where: { userId },
-        include: { sentences: true },
-      })
+      const { documents: materials } = await admin.databases.listDocuments(
+          APPWRITE_DATABASE_ID,
+          'materials',
+          [Query.equal('user_id', userId)]
+      );
       
-      // Write metadata
-      fs.writeFileSync(path.join(matDir, "materials.json"), jsonStringify(materials))
+      const fullMaterials = [];
+      for (const mat of materials) {
+          const { documents: sentences } = await admin.databases.listDocuments(
+              APPWRITE_DATABASE_ID,
+              'sentences',
+              [Query.equal('material_id', mat.$id)]
+          );
+          fullMaterials.push({
+              ...mat,
+              sentences
+          });
 
-      // Download/Copy media files
-      for (const material of materials) {
-        if (material.filePath) {
-          const fileName = path.basename(material.filePath)
-          const destPath = path.join(mediaDir, fileName)
-          
-          try {
-            // Check if it's a local file or S3
-            // Assuming if it doesn't start with http/s3, it might be local or a key
-            // But usually in Supabase/S3 context, filePath might be the key.
-            
-            if (supabaseAdmin) {
-               // Try downloading from Supabase Storage first
-               const { data, error } = await supabaseAdmin.storage
-                 .from("materials") // Assuming bucket name
-                 .download(material.filePath)
-               
-               if (!error && data) {
-                 const buffer = await data.arrayBuffer()
-                 fs.writeFileSync(destPath, Buffer.from(buffer))
-                 continue
-               }
-            }
-
-            // Fallback to local file system if it exists (dev env)
-            if (fs.existsSync(material.filePath)) {
-              fs.copyFileSync(material.filePath, destPath)
-            }
-          } catch (e) {
-            console.error(`Failed to export file for material ${material.id}:`, e)
+          if (mat.file_id) { 
+              const destPath = path.join(mediaDir, `${mat.$id}_${mat.filename || 'file'}`)
+              try {
+                  const buffer = await admin.storage.getFileDownload('materials', mat.file_id);
+                  fs.writeFileSync(destPath, Buffer.from(buffer));
+              } catch (e) {
+                  console.error(`Failed to export file for material ${mat.$id}:`, e)
+              }
           }
-        }
       }
       
-      // Also export Folders
-      const folders = await prisma.folder.findMany({
-        where: { userId },
-      })
+      fs.writeFileSync(path.join(matDir, "materials.json"), jsonStringify(fullMaterials))
+      
+      const { documents: folders } = await admin.databases.listDocuments(
+          APPWRITE_DATABASE_ID,
+          'folders',
+          [Query.equal('user_id', userId)]
+      );
       fs.writeFileSync(path.join(matDir, "folders.json"), JSON.stringify(folders, null, 2))
     }
 
-    // Create ZIP
     const zipPath = path.join(os.tmpdir(), `export-${jobId}.zip`)
     const output = fs.createWriteStream(zipPath)
     const archive = archiver("zip", { zlib: { level: 9 } })
@@ -335,117 +375,47 @@ async function processExportJob(jobId: string) {
       archive.finalize()
     })
 
-    // Upload ZIP to Supabase
-    if (!supabaseAdmin) {
-        throw new Error("Supabase admin not configured")
+    try {
+        await admin.storage.getBucket(EXPORT_BUCKET_ID);
+    } catch (e) {
+        await admin.storage.createBucket(EXPORT_BUCKET_ID, 'Exports', [], false, true, undefined, ['zip']);
     }
 
-    // Use stream for upload to avoid memory issues with large files
-    // const fileContent = fs.readFileSync(zipPath)
-    const storagePath = `${userId}/${jobId}.zip`
-    const BUCKET_NAME = "exports"
-
-    // Helper to upload with stream
-    const uploadFile = async (bucket: string, path: string, filePath: string) => {
-        const fileStream = fs.createReadStream(filePath)
-        // @ts-ignore - supabase-js supports stream but types might be strict
-        return await supabaseAdmin.storage
-            .from(bucket)
-            .upload(path, fileStream, {
-                contentType: "application/zip",
-                upsert: true,
-                duplex: 'half' // Required for Node.js streams in some environments
-            })
-    }
-
-    let { error: uploadError } = await uploadFile(BUCKET_NAME, storagePath, zipPath)
-
-    let finalFilePath = storagePath
+    const fileId = ID.unique();
+    const inputFile = InputFile.fromPath(zipPath, `export-${jobId}.zip`);
     
-    // Handle errors: Bucket not found or Size limit exceeded
-    if (uploadError) {
-      const isSizeLimit = (uploadError as any).statusCode === '413' || uploadError.message.includes("exceeded the maximum allowed size");
-      const isNotFound = (uploadError as any).statusCode === '404' || uploadError.message.includes("Bucket not found");
+    const file = await admin.storage.createFile(
+        EXPORT_BUCKET_ID,
+        fileId,
+        inputFile,
+        [
+            `user:${userId}` 
+        ]
+    );
 
-      if (isNotFound) {
-        console.log(`Bucket '${BUCKET_NAME}' not found. Attempting to create it...`)
-        const { error: createError } = await supabaseAdmin.storage.createBucket(BUCKET_NAME, {
-          public: false, // Exports should be private
-          fileSizeLimit: undefined // No limit
-        })
-
-        if (createError) {
-          console.error("Failed to create bucket:", createError)
-          uploadError = new Error(`Failed to create bucket 'exports': ${createError.message}`) as any
-        } else {
-          console.log(`Bucket '${BUCKET_NAME}' created successfully. Retrying upload...`)
-          await new Promise(resolve => setTimeout(resolve, 1000))
-          
-          const retryResult = await uploadFile(BUCKET_NAME, storagePath, zipPath)
-          
-          uploadError = retryResult.error
-        }
-      } else if (isSizeLimit) {
-        console.log(`Bucket '${BUCKET_NAME}' size limit exceeded. Attempting to use 'exports-large' bucket...`)
-        
-        const LARGE_BUCKET = "exports-large"
-        // Set a very large limit (e.g. 50GB) or null if supported, but let's use a safe large number
-        const MAX_SIZE = 53687091200 // 50GB
-        
-        // Check if large bucket exists, if not create it
-        const { data: bucketData, error: bucketError } = await supabaseAdmin.storage.getBucket(LARGE_BUCKET)
-        
-        if (bucketError && bucketError.message.includes("not found")) {
-             console.log(`Bucket '${LARGE_BUCKET}' not found. Creating...`)
-             await supabaseAdmin.storage.createBucket(LARGE_BUCKET, {
-                public: false,
-                fileSizeLimit: MAX_SIZE
-             })
-        } else {
-             // Bucket exists, ensure limit is high enough
-             console.log(`Bucket '${LARGE_BUCKET}' exists. Updating limit...`)
-             await supabaseAdmin.storage.updateBucket(LARGE_BUCKET, {
-                public: false,
-                fileSizeLimit: MAX_SIZE
-             })
-        }
-
-        // Upload to large bucket
-        const { error: largeUploadError } = await uploadFile(LARGE_BUCKET, storagePath, zipPath)
-        
-        if (largeUploadError) {
-            console.error("Failed to upload to large bucket:", largeUploadError)
-            uploadError = largeUploadError
-        } else {
-            uploadError = null
-            finalFilePath = `exports-large/${storagePath}`
-        }
-      }
-    }
-
-    if (uploadError) throw uploadError
-
-    // Cleanup
     fs.rmSync(tmpDir, { recursive: true, force: true })
     fs.unlinkSync(zipPath)
 
-    // Update Job
-    await prisma.exportJob.update({
-      where: { id: jobId },
-      data: {
-        status: "finished",
-        filePath: finalFilePath,
-      },
-    })
+    await admin.databases.updateDocument(
+        APPWRITE_DATABASE_ID,
+        'export_jobs',
+        jobId,
+        {
+            status: "finished",
+            file_path: file.$id, 
+        }
+    );
 
   } catch (error: any) {
     console.error("Export job failed:", error)
-    await prisma.exportJob.update({
-      where: { id: jobId },
-      data: {
-        status: "failed",
-        error: error.message || "Unknown error",
-      },
-    })
+    await admin.databases.updateDocument(
+        APPWRITE_DATABASE_ID,
+        'export_jobs',
+        jobId,
+        {
+            status: "failed",
+            error: error.message || "Unknown error",
+        }
+    );
   }
 }

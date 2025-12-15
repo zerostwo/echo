@@ -3,7 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 import { auth } from "@/auth";
-import { supabase, supabaseAdmin } from "@/lib/supabase";
+import { getAdminClient, APPWRITE_DATABASE_ID, Query } from "@/lib/appwrite";
 import { AppSidebar } from "@/components/app-sidebar";
 import { getFolders } from "@/actions/folder-actions";
 import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
@@ -60,44 +60,51 @@ export default async function RootLayout({
   let materials: { id: string; title: string; folderId: string | null; mimeType?: string }[] = [];
   
   if (session?.user?.id) {
-    const client = supabaseAdmin || supabase;
-    const { data: user } = await client
-      .from('users')
-      .select('settings, two_factor_enabled, display_name, username, quota, used_space, image')
-      .eq('id', session.user.id)
-      .single();
+    const admin = getAdminClient();
+    try {
+        const user = await admin.databases.getDocument(
+            APPWRITE_DATABASE_ID,
+            'users',
+            session.user.id
+        );
 
-    if (user) {
-      twoFactorEnabled = user.two_factor_enabled || false;
-      displayName = user.display_name;
-      username = user.username;
-      userImage = user.image;
-      quota = Number(user.quota) || 10737418240;
-      usedSpace = Number(user.used_space) || 0;
-      if (user.settings) {
-        try {
-          userSettings = JSON.parse(user.settings);
-        } catch (e) {
-          console.error("Failed to parse user settings", e);
+        if (user) {
+          twoFactorEnabled = user.two_factor_enabled || false;
+          displayName = user.display_name;
+          username = user.username;
+          userImage = user.image;
+          quota = Number(user.quota) || 10737418240;
+          usedSpace = Number(user.used_space) || 0;
+          if (user.settings) {
+            try {
+              userSettings = typeof user.settings === 'string' ? JSON.parse(user.settings) : user.settings;
+            } catch (e) {
+              console.error("Failed to parse user settings", e);
+            }
+          }
         }
-      }
-    }
-    
-    // Fetch materials for the add materials dialog
-    const { data: materialsList } = await client
-      .from('materials')
-      .select('id, title, folder_id, mime_type')
-      .eq('user_id', session.user.id)
-      .is('deleted_at', null)
-      .order('title', { ascending: true });
-    
-    if (materialsList) {
-      materials = materialsList.map(m => ({
-        id: m.id,
-        title: m.title,
-        folderId: m.folder_id,
-        mimeType: m.mime_type,
-      }));
+        
+        // Fetch materials for the add materials dialog
+        const { documents: materialsList } = await admin.databases.listDocuments(
+            APPWRITE_DATABASE_ID,
+            'materials',
+            [
+                Query.equal('user_id', session.user.id),
+                Query.isNull('deleted_at'),
+                Query.orderAsc('title')
+            ]
+        );
+        
+        if (materialsList) {
+          materials = materialsList.map(m => ({
+            id: m.$id,
+            title: m.title,
+            folderId: m.folder_id,
+            mimeType: m.mime_type,
+          }));
+        }
+    } catch (e) {
+        console.error("Failed to fetch user data in layout", e);
     }
   }
   

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
-import { supabaseAdmin, supabase } from '@/lib/supabase';
+import { getAdminClient, APPWRITE_DATABASE_ID, Query } from '@/lib/appwrite';
 import { revalidatePath } from 'next/cache';
 
 export async function PATCH(request: NextRequest) {
@@ -23,18 +23,24 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    const client = supabaseAdmin || supabase;
+    const admin = getAdminClient();
+    const userId = session.user.id;
 
     // Verify folder ownership if folderId is provided
     if (folderId) {
-      const { data: folder, error: folderError } = await client
-        .from('folders')
-        .select('id')
-        .eq('id', folderId)
-        .eq('user_id', session.user.id)
-        .single();
-
-      if (folderError || !folder) {
+      try {
+        const folder = await admin.databases.getDocument(
+          APPWRITE_DATABASE_ID,
+          'folders',
+          folderId
+        );
+        if (folder.user_id !== userId) {
+           return NextResponse.json(
+            { error: 'Folder not found or unauthorized' },
+            { status: 404 }
+          );
+        }
+      } catch (e) {
         return NextResponse.json(
           { error: 'Folder not found or unauthorized' },
           { status: 404 }
@@ -43,17 +49,17 @@ export async function PATCH(request: NextRequest) {
     }
 
     // Verify material ownership
-    const { data: materials, error: materialError } = await client
-      .from('materials')
-      .select('id')
-      .eq('user_id', session.user.id)
-      .in('id', materialIds);
+    // We can fetch all materials with IDs and check user_id
+    const { documents: materials } = await admin.databases.listDocuments(
+        APPWRITE_DATABASE_ID,
+        'materials',
+        [
+            Query.equal('$id', materialIds),
+            Query.equal('user_id', userId)
+        ]
+    );
 
-    if (materialError) {
-      throw materialError;
-    }
-
-    if (!materials || materials.length !== materialIds.length) {
+    if (materials.length !== materialIds.length) {
       return NextResponse.json(
         { error: 'Some materials not found or unauthorized' },
         { status: 404 }
@@ -61,18 +67,21 @@ export async function PATCH(request: NextRequest) {
     }
 
     // Update all materials
-    const { error: updateError } = await client
-      .from('materials')
-      .update({
-        folder_id: folderId,
-        updated_at: new Date().toISOString(),
-      })
-      .in('id', materialIds)
-      .eq('user_id', session.user.id);
-
-    if (updateError) {
-      throw updateError;
-    }
+    // Appwrite doesn't support bulk update, so we loop
+    await Promise.all(materialIds.map(id => 
+        admin.databases.updateDocument(
+            APPWRITE_DATABASE_ID,
+            'materials',
+            id,
+            {
+                folder_id: folderId,
+                // updated_at is auto-handled by Appwrite usually, but we can set it if we want to track logic time
+                // But Appwrite has . Let's rely on that or set it if schema requires.
+                // Schema likely has updated_at as string if migrated from Supabase.
+                updated_at: new Date().toISOString(),
+            }
+        )
+    ));
 
     revalidatePath('/materials');
 
@@ -88,4 +97,3 @@ export async function PATCH(request: NextRequest) {
     );
   }
 }
-

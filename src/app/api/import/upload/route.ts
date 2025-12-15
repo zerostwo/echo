@@ -1,7 +1,8 @@
 import { auth } from "@/auth"
 import { createImportJob } from "@/services/import-service"
-import { supabaseAdmin } from "@/lib/supabase"
+import { getAdminClient } from "@/lib/appwrite"
 import { NextResponse } from "next/server"
+import { InputFile } from "node-appwrite/file"
 
 export async function POST(req: Request) {
   const session = await auth()
@@ -14,31 +15,26 @@ export async function POST(req: Request) {
     const file = formData.get("file") as File
     const mode = formData.get("mode") as "merge" | "overwrite"
 
-    if (!file || !mode) {
+    if (file === null || mode === null) {
       return NextResponse.json({ error: "Missing file or mode" }, { status: 400 })
     }
 
-    if (!supabaseAdmin) {
-        return NextResponse.json({ error: "Server configuration error" }, { status: 500 })
-    }
-
+    const admin = getAdminClient();
     const buffer = Buffer.from(await file.arrayBuffer())
-    const filePath = `imports/${session.user.id}/${Date.now()}-${file.name}`
+    const filename = `${Date.now()}-${file.name}`;
 
-    const { error: uploadError } = await supabaseAdmin.storage
-      .from("exports")
-      .upload(filePath, buffer, {
-        contentType: "application/zip",
-        upsert: true
-      })
+    const inputFile = InputFile.fromBuffer(buffer, filename);
+    
+    const uploadedFile = await admin.storage.createFile(
+        'exports',
+        'unique()',
+        inputFile
+    );
 
-    if (uploadError) {
-      throw uploadError
-    }
-
-    const job = await createImportJob(session.user.id, filePath, mode)
+    const job = await createImportJob(session.user.id, uploadedFile.$id, mode)
     return NextResponse.json(job)
   } catch (error: any) {
+    console.error("Import upload error:", error);
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 }

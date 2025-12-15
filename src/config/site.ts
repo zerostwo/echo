@@ -4,7 +4,7 @@
 export const siteConfig = {
   name: "Echo",
   description: "A platform for deep listening and precision learning.",
-  version: "0.1.0",
+  version: "0.1.1",
   // Server configuration references
   server: {
     host: process.env.HOST || "0.0.0.0",

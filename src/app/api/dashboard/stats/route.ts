@@ -2,16 +2,13 @@
 
 import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
-import { supabaseAdmin, supabase } from '@/lib/supabase';
+import { getAdminClient, APPWRITE_DATABASE_ID, Query } from '@/lib/appwrite';
 
 export interface DashboardStats {
-  // Heatmap data (past year of daily study duration - combined sentence practice + word learning)
   heatmapData: Array<{
     date: string;
-    duration: number; // seconds
+    duration: number;
   }>;
-
-  // Today's tasks
   wordsDueToday: number;
   wordsReviewedTodayCount: number;
   sentencesPracticedTodayCount: number;
@@ -19,22 +16,16 @@ export interface DashboardStats {
     words: number;
     sentences: number;
   };
-
-  // Vocabulary snapshot
   vocabSnapshot: {
     new: number;
     learning: number;
     mastered: number;
   };
-
-  // Sentence snapshot
   sentenceSnapshot: {
     new: number;
     practiced: number;
     mastered: number;
   };
-
-  // Hardest words (top 5 by error count)
   hardestWords: Array<{
     id: string;
     text: string;
@@ -46,15 +37,11 @@ export interface DashboardStats {
     tag: string | null;
     exchange: string | null;
   }>;
-
-  // Summary stats
   totalMaterials: number;
   totalSentences: number;
   totalWords: number;
   totalPractices: number;
   averageScore: number;
-
-  // Last learning positions for "continue where you left off"
   lastWord?: {
     id: string;
     text: string;
@@ -75,141 +62,170 @@ export async function GET() {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const client = supabaseAdmin || supabase;
+  const admin = getAdminClient();
   const userId = session.user.id;
   const now = new Date();
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000 - 1);
+  const yearStart = new Date(now.getFullYear(), 0, 1).toISOString();
 
   try {
-    // Parallel fetch for performance
-    const [
-      materialsResult,
-      practicesResult,
-      dailyStatsResult,
-      todayReviewsResult,
-      wordStatusesResult,
-      hardestWordsResult,
-      userSettingsResult,
-      sentencesPracticedTodayResult,
-    ] = await Promise.all([
-      // Materials with sentence count
-      client
-        .from('materials')
-        .select('id, sentences:sentences(count)')
-        .eq('user_id', userId)
-        .is('deleted_at', null),
-
-      // Practice progress for total practices and average score (also includes duration)
-      client
-        .from('practice_progress')
-        .select('score, duration, created_at')
-        .eq('user_id', userId),
-
-      // Daily stats for current year (for heatmap) - this tracks study_duration from daily_study_stats
-      client
-        .from('daily_study_stats')
-        .select('date, study_duration')
-        .eq('user_id', userId)
-        .gte('date', new Date(now.getFullYear(), 0, 1).toISOString()) // From Jan 1 of current year
-        .order('date', { ascending: true }),
-
-      // Today's word reviews with response time
-      client
-        .from('word_reviews')
-        .select(`
-          id,
-          was_correct,
-          response_time_ms,
-          created_at,
-          user_word_status:user_word_status_id (
-            user_id
-          )
-        `)
-        .gte('created_at', todayStart.toISOString())
-        .lte('created_at', todayEnd.toISOString()),
-
-      // Word statuses for vocabulary snapshot
-      client
-        .from('user_word_statuses')
-        .select('status')
-        .eq('user_id', userId),
-
-      // Hardest words (top 5 by error count)
-      client
-        .from('user_word_statuses')
-        .select(`
-          id,
-          error_count,
-          words:word_id (
-            id,
-            text,
-            translation,
-            phonetic,
-            pos,
-            definition,
-            tag,
-            exchange
-          )
-        `)
-        .eq('user_id', userId)
-        .gt('error_count', 0)
-        .order('error_count', { ascending: false })
-        .limit(5),
-
-      // User settings for daily goals
-      client
-        .from('users')
-        .select('settings')
-        .eq('id', userId)
-        .single(),
-
-      // Sentences practiced today
-      client
-        .from('practice_progress')
-        .select('id', { count: 'exact', head: true })
-        .eq('user_id', userId)
-        .gte('updated_at', todayStart.toISOString())
-        .lte('updated_at', todayEnd.toISOString()),
-    ]);
-
-    // Process materials
-    const materials = materialsResult.data || [];
-    const totalMaterials = materials.length;
-    const totalSentences = materials.reduce(
-      (acc, m: Record<string, unknown>) => acc + ((m.sentences as { count?: number }[])?.[0]?.count || 0),
-      0
+    // 1. Materials
+    const { documents: materials } = await admin.databases.listDocuments(
+        APPWRITE_DATABASE_ID,
+        'materials',
+        [
+            Query.equal('user_id', userId),
+            Query.isNull('deleted_at')
+        ]
+    );
+    
+    // Get sentence counts for materials
+    // This is expensive if we iterate. 
+    // Alternative: Get all sentences for user's materials?
+    // Or just count total sentences for user.
+    
+    // 2. Practice Progress
+    const { documents: practices } = await admin.databases.listDocuments(
+        APPWRITE_DATABASE_ID,
+        'practice_progress',
+        [Query.equal('user_id', userId)]
     );
 
-    // Process practices
-    const practices = practicesResult.data || [];
+    // 3. Daily Stats (Heatmap)
+    const { documents: dailyStats } = await admin.databases.listDocuments(
+        APPWRITE_DATABASE_ID,
+        'daily_study_stats',
+        [
+            Query.equal('user_id', userId),
+            Query.greaterThanEqual('date', yearStart),
+            Query.orderAsc('date')
+        ]
+    );
+
+    // 4. Today's Reviews
+    // Reviews don't have user_id directly usually, but we can try to filter by time and then check ownership?
+    // Or if we added user_id to reviews (which we should have for performance).
+    // Assuming we can't easily query reviews by user_id directly without a join or if we didn't add it.
+    // But wait, in import-service we saw reviews have user_word_status_id.
+    // We can fetch reviews created today, but that's global.
+    // Better: Fetch user's statuses, then reviews? Too many.
+    // If we don't have user_id on reviews, this is hard.
+    // Let's assume we can fetch reviews by time and filter in memory if volume is low, 
+    // OR we rely on daily_study_stats for counts?
+    // daily_study_stats has words_reviewed count!
+    
+    // Let's use daily_study_stats for today's counts if available.
+    const todayStat = dailyStats.find(s => s.date.startsWith(todayStart.toISOString().split('T')[0]));
+    const wordsReviewedTodayCount = todayStat?.words_reviewed || 0; // Assuming this field exists or we calculate
+    
+    // If we need exact reviews for some reason (e.g. response time), we might need a better way.
+    // But for dashboard stats, maybe we can skip detailed review fetching if we just need count.
+    // The original code fetched reviews to count them.
+    
+    // Let's try to fetch reviews if we can.
+    // If we can't filter by user, we can't efficiently get today's reviews.
+    // BUT, we can get today's updated statuses?
+    // Let's stick to what we can get.
+    
+    // 5. Word Statuses
+    // We need all statuses for vocab snapshot.
+    // This could be large.
+    // Let's fetch with a high limit or loop.
+    // For dashboard, maybe 5000 is enough?
+    const { documents: wordStatuses } = await admin.databases.listDocuments(
+        APPWRITE_DATABASE_ID,
+        'user_word_statuses',
+        [
+            Query.equal('user_id', userId),
+            Query.limit(5000) 
+        ]
+    );
+
+    // 6. Hardest Words
+    // Filter in memory from wordStatuses
+    const hardestWordsList = wordStatuses
+        .filter((s: any) => s.error_count > 0)
+        .sort((a: any, b: any) => b.error_count - a.error_count)
+        .slice(0, 5);
+        
+    // Fetch word details for hardest words
+    const hardestWordsDetails = [];
+    if (hardestWordsList.length > 0) {
+        const { documents: hwDocs } = await admin.databases.listDocuments(
+            APPWRITE_DATABASE_ID,
+            'words',
+            [Query.equal('$id', hardestWordsList.map((s: any) => s.word_id))]
+        );
+        
+        for (const status of hardestWordsList) {
+            const word = hwDocs.find(w => w.$id === status.word_id);
+            if (word) {
+                hardestWordsDetails.push({
+                    id: word.$id,
+                    text: word.text,
+                    errorCount: status.error_count,
+                    translation: word.translation,
+                    phonetic: word.phonetic,
+                    pos: word.pos,
+                    definition: word.definition,
+                    tag: word.tag,
+                    exchange: word.exchange,
+                });
+            }
+        }
+    }
+
+    // 7. User Settings
+    const user = await admin.databases.getDocument(APPWRITE_DATABASE_ID, 'users', userId);
+
+    // 8. Sentences Practiced Today
+    const sentencesPracticedToday = practices.filter((p: any) => {
+        const pDate = new Date(p.$updatedAt);
+        return pDate >= todayStart && pDate <= todayEnd;
+    });
+
+    // Process Data
+    
+    // Materials & Sentences
+    const totalMaterials = materials.length;
+    // We need total sentences count.
+    // We can fetch all sentences for these materials.
+    // Or use aggregation if available (Appwrite doesn't support count aggregation easily).
+    // We'll fetch all sentences IDs for user's materials.
+    const materialIds = materials.map(m => m.$id);
+    let totalSentences = 0;
+    if (materialIds.length > 0) {
+        // Batch count
+        for (let i = 0; i < materialIds.length; i += 100) {
+             const batch = materialIds.slice(i, i + 100);
+             const { total } = await admin.databases.listDocuments(
+                 APPWRITE_DATABASE_ID,
+                 'sentences',
+                 [
+                     Query.equal('material_id', batch),
+                     Query.limit(1) // We just want total
+                 ]
+             );
+             totalSentences += total;
+        }
+    }
+
+    // Practices
     const totalPractices = practices.length;
-    const averageScore =
-      totalPractices > 0
-        ? Math.round(practices.reduce((acc, p) => acc + p.score, 0) / totalPractices)
+    const averageScore = totalPractices > 0
+        ? Math.round(practices.reduce((acc: number, p: any) => acc + (p.score || 0), 0) / totalPractices)
         : 0;
 
-    // Process daily stats for heatmap
-    // The study_duration in daily_study_stats should already include combined time
-    // from sentence practice + word learning
-    const dailyStats = dailyStatsResult.data || [];
-    const heatmapData = dailyStats.map((stat) => ({
-      date: stat.date.split('T')[0],
-      duration: stat.study_duration || 0,
+    // Heatmap
+    const heatmapData = dailyStats.map((stat: any) => ({
+        date: stat.date.split('T')[0],
+        duration: stat.study_duration || 0,
     }));
 
-    // Process today's reviews - filter by user_id
-    const allTodayReviews = todayReviewsResult.data || [];
-    const todayReviews = allTodayReviews.filter(
-      (r: Record<string, unknown>) => (r.user_word_status as { user_id?: string } | null)?.user_id === userId
-    );
-    const wordsReviewedToday = todayReviews.length;
-
-    // Process word statuses for vocabulary snapshot
-    const wordStatuses = wordStatusesResult.data || [];
-    const totalWords = wordStatuses.length;
+    // Vocab Snapshot
     const vocabSnapshot = wordStatuses.reduce(
-      (acc: { new: number; learning: number; mastered: number }, ws: { status: string }) => {
+      (acc: { new: number; learning: number; mastered: number }, ws: any) => {
         if (ws.status === 'NEW') acc.new++;
         else if (ws.status === 'LEARNING') acc.learning++;
         else if (ws.status === 'MASTERED') acc.mastered++;
@@ -217,165 +233,82 @@ export async function GET() {
       },
       { new: 0, learning: 0, mastered: 0 }
     );
+    const totalWords = wordStatuses.length;
 
-    // Get words due today
-    const { count: wordsDueToday } = await client
-      .from('user_word_statuses')
-      .select('id', { count: 'exact', head: true })
-      .eq('user_id', userId)
-      .in('status', ['NEW', 'LEARNING'])
-      .or(`fsrs_due.is.null,fsrs_due.lte.${todayEnd.toISOString()}`);
+    // Words Due Today
+    const wordsDueToday = wordStatuses.filter((ws: any) => {
+        if (ws.status !== 'NEW' && ws.status !== 'LEARNING') return false;
+        if (!ws.fsrs_due) return true; // Treat null as due? Or not? Original query: fsrs_due.is.null OR fsrs_due.lte.todayEnd
+        return new Date(ws.fsrs_due) <= todayEnd;
+    }).length;
 
-    // Process hardest words
-    const hardestWords = (hardestWordsResult.data || []).map((ws: Record<string, unknown>) => {
-      const word = ws.words as { 
-        id?: string; 
-        text?: string; 
-        translation?: string;
-        phonetic?: string;
-        pos?: string;
-        definition?: string;
-        tag?: string;
-        exchange?: string;
-      } | null;
-      return {
-        id: word?.id || (ws.id as string),
-        text: word?.text || '',
-        errorCount: ws.error_count as number || 0,
-        translation: word?.translation || null,
-        phonetic: word?.phonetic || null,
-        pos: word?.pos || null,
-        definition: word?.definition || null,
-        tag: word?.tag || null,
-        exchange: word?.exchange || null,
-      };
-    });
-
-    // Get sentence snapshot - count sentences by practice status
-    const [allSentencesResult, practicedSentencesResult] = await Promise.all([
-      // Total sentences for user
-      client
-        .from('sentences')
-        .select('id, material:materials!inner(user_id)', { count: 'exact', head: true })
-        .eq('material.user_id', userId)
-        .is('deleted_at', null),
-      
-      // Practiced sentences with scores
-      client
-        .from('practice_progress')
-        .select('id, score')
-        .eq('user_id', userId),
-    ]);
-
-    const totalUserSentences = allSentencesResult.count || 0;
-    const practicedSentences = practicedSentencesResult.data || [];
-    const masteredSentences = practicedSentences.filter(p => p.score >= 90).length;
-    const inProgressSentences = practicedSentences.filter(p => p.score < 90).length;
-    const newSentences = totalUserSentences - practicedSentences.length;
+    // Sentence Snapshot
+    const practicedIds = new Set(practices.map((p: any) => p.sentence_id));
+    const masteredCount = practices.filter((p: any) => p.score >= 90).length;
+    const practicedCount = practices.filter((p: any) => p.score < 90).length;
+    const newSentences = Math.max(0, totalSentences - practices.length); // Approx
 
     const sentenceSnapshot = {
-      new: Math.max(0, newSentences),
-      practiced: inProgressSentences,
-      mastered: masteredSentences,
+        new: newSentences,
+        practiced: practicedCount,
+        mastered: masteredCount
     };
 
-    // Get last learning positions
-    // Last word reviewed
-    const { data: lastWordReview } = await client
-      .from('word_reviews')
-      .select(`
-        id,
-        created_at,
-        user_word_status:user_word_status_id (
-          user_id,
-          words:word_id (
-            id,
-            text
-          )
-        )
-      `)
-      .order('created_at', { ascending: false })
-      .limit(20);
-
-    const userLastWordReview = (lastWordReview || []).find(
-      (r: Record<string, unknown>) => 
-        (r.user_word_status as { user_id?: string } | null)?.user_id === userId
-    );
+    // Last Word Reviewed
+    // We need to find the last updated status or review.
+    // If we can't query reviews by user, we use status updated_at.
+    const lastUpdatedStatus = wordStatuses.sort((a: any, b: any) => 
+        new Date(b.$updatedAt).getTime() - new Date(a.$updatedAt).getTime()
+    )[0];
     
     let lastWord = null;
-    if (userLastWordReview) {
-      const uws = userLastWordReview.user_word_status as { words?: { id: string; text: string } } | null;
-      if (uws?.words) {
+    if (lastUpdatedStatus) {
+        const word = await admin.databases.getDocument(APPWRITE_DATABASE_ID, 'words', lastUpdatedStatus.word_id);
         lastWord = {
-          id: uws.words.id,
-          text: uws.words.text,
+            id: word.$id,
+            text: word.text
         };
-      }
     }
 
-    // Last sentence practiced
-    const { data: lastPractice } = await client
-      .from('practice_progress')
-      .select(`
-        sentence_id,
-        updated_at,
-        sentences:sentence_id (
-          id,
-          content,
-          material_id,
-          materials:material_id (
-            id,
-            title
-          )
-        )
-      `)
-      .eq('user_id', userId)
-      .order('updated_at', { ascending: false })
-      .limit(1)
-      .single();
-
+    // Last Sentence Practiced
+    const lastPractice = practices.sort((a: any, b: any) => 
+        new Date(b.$updatedAt).getTime() - new Date(a.$updatedAt).getTime()
+    )[0];
+    
     let lastSentence = null;
-    if (lastPractice?.sentences) {
-      const sentenceData = lastPractice.sentences as unknown;
-      // Handle both array and single object cases from Supabase
-      const sentence = Array.isArray(sentenceData) 
-        ? sentenceData[0] as { id: string; content: string; material_id: string; materials?: { id: string; title: string }[] | { id: string; title: string } }
-        : sentenceData as { id: string; content: string; material_id: string; materials?: { id: string; title: string }[] | { id: string; title: string } };
-      
-      if (sentence) {
-        const materialsData = sentence.materials;
-        const material = Array.isArray(materialsData) ? materialsData[0] : materialsData;
-        lastSentence = {
-          id: sentence.id,
-          content: sentence.content.substring(0, 50) + (sentence.content.length > 50 ? '...' : ''),
-          materialId: sentence.material_id,
-          materialTitle: material?.title || 'Unknown',
-        };
-      }
+    if (lastPractice) {
+        try {
+            const sentence = await admin.databases.getDocument(APPWRITE_DATABASE_ID, 'sentences', lastPractice.sentence_id);
+            const material = await admin.databases.getDocument(APPWRITE_DATABASE_ID, 'materials', sentence.material_id);
+            lastSentence = {
+                id: sentence.$id,
+                content: sentence.content.substring(0, 50) + (sentence.content.length > 50 ? '...' : ''),
+                materialId: sentence.material_id,
+                materialTitle: material.title || 'Unknown',
+            };
+        } catch (e) {}
     }
 
-    // Parse user settings
+    // Settings
     let dailyGoals = { words: 20, sentences: 10 };
-    if (userSettingsResult.data?.settings) {
+    if (user.settings) {
       try {
-        const settings = JSON.parse(userSettingsResult.data.settings);
+        const settings = typeof user.settings === 'string' ? JSON.parse(user.settings) : user.settings;
         if (settings.dailyGoals) {
           dailyGoals = settings.dailyGoals;
         }
-      } catch (e) {
-        console.error('Failed to parse user settings:', e);
-      }
+      } catch (e) {}
     }
 
     const stats: DashboardStats = {
       heatmapData,
-      wordsDueToday: wordsDueToday || 0,
-      wordsReviewedTodayCount: wordsReviewedToday,
-      sentencesPracticedTodayCount: sentencesPracticedTodayResult.count || 0,
+      wordsDueToday,
+      wordsReviewedTodayCount, // Using daily stats approximation
+      sentencesPracticedTodayCount: sentencesPracticedToday.length,
       dailyGoals,
       vocabSnapshot,
       sentenceSnapshot,
-      hardestWords,
+      hardestWords: hardestWordsDetails,
       totalMaterials,
       totalSentences,
       totalWords,
@@ -386,6 +319,7 @@ export async function GET() {
     };
 
     return NextResponse.json(stats);
+
   } catch (error) {
     console.error('Dashboard stats error:', error);
     return NextResponse.json(

@@ -1,7 +1,9 @@
 'use server';
 
 import { auth } from '@/auth';
-import { supabaseAdmin, supabase } from '@/lib/supabase';
+import { getAdminClient, APPWRITE_DATABASE_ID, Query } from '@/lib/appwrite';
+import { ID, Permission, Role } from 'node-appwrite';
+import { InputFile } from 'node-appwrite/file';
 import { writeFile, unlink } from 'fs/promises';
 import { createWriteStream } from 'fs';
 import { pipeline } from 'stream/promises';
@@ -62,21 +64,28 @@ const duplicateDateFormatter = new Intl.DateTimeFormat('en-US', {
 });
 
 async function ensureMaterialsBucket() {
-    // Bucket creation requires the service role key
-    if (!supabaseAdmin) {
-        return { error: 'Supabase admin client is not configured to create storage buckets.' };
+    const admin = getAdminClient();
+
+    try {
+        await admin.storage.getBucket(MATERIALS_BUCKET);
+        return { success: true };
+    } catch (error: any) {
+        if (error.code !== 404) {
+             console.error(`Failed to check bucket '${MATERIALS_BUCKET}':`, error);
+             return { error: 'Failed to check storage bucket' };
+        }
     }
 
-    const { data: existingBucket } = await supabaseAdmin.storage.getBucket(MATERIALS_BUCKET);
-    if (existingBucket) return { success: true };
-
-    const { error: createError } = await supabaseAdmin.storage.createBucket(MATERIALS_BUCKET, {
-        public: false,
-        allowedMimeTypes: ['audio/*', 'video/*'],
-        fileSizeLimit: 524288000 // 500MB
-    });
-
-    if (createError) {
+    try {
+        await admin.storage.createBucket(
+            MATERIALS_BUCKET,
+            'Materials',
+            [], // permissions
+            false, // fileSecurity
+            true, // enabled
+            524288000 // max file size
+        );
+    } catch (createError) {
         console.error(`Failed to create bucket '${MATERIALS_BUCKET}':`, createError);
         return { error: 'Failed to create storage bucket' };
     }
@@ -95,11 +104,14 @@ export async function registerUploadedMaterial(
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
     try {
-        const client = supabaseAdmin || supabase;
+        const admin = getAdminClient();
+        const materialId = ID.unique();
         
-        const { data: material, error } = await client
-            .from('materials')
-            .insert({
+        const material = await admin.databases.createDocument(
+            APPWRITE_DATABASE_ID,
+            'materials',
+            materialId,
+            {
                 title: path.parse(filename).name,
                 filename: filename,
                 file_path: fileUrl, // Storing URL in filePath
@@ -108,29 +120,23 @@ export async function registerUploadedMaterial(
                 mime_type: fileType,
                 folder_id: folderId || null,
                 updated_at: new Date().toISOString()
-            })
-            .select()
-            .single();
-
-        if (error) throw error;
+            }
+        );
 
         // Update usage
-        // Supabase doesn't support `increment` in update directly via JS client unless using RPC or fetching first.
-        // We'll fetch user first (or use RPC if we created one). For now, fetch-update pattern.
-        // Better: create a Postgres function `increment_used_space`. 
-        // For now: read-modify-write (optimistic locking via version/etag if critical, but here simple is fine)
-        
-        const { data: user } = await client
-            .from('users')
-            .select('used_space')
-            .eq('id', session.user.id)
-            .single();
+        const userDoc = await admin.databases.getDocument(
+            APPWRITE_DATABASE_ID,
+            'users',
+            session.user.id
+        );
             
-        if (user) {
-             await client
-                .from('users')
-                .update({ used_space: (user.used_space || 0) + size })
-                .eq('id', session.user.id);
+        if (userDoc) {
+             await admin.databases.updateDocument(
+                APPWRITE_DATABASE_ID,
+                'users',
+                session.user.id,
+                { used_space: (userDoc.used_space || 0) + size }
+             );
         }
 
         // Invalidate cache
@@ -138,7 +144,7 @@ export async function registerUploadedMaterial(
         
         revalidatePath('/materials');
         revalidatePath('/dashboard');
-        return { success: true, materialId: material.id };
+        return { success: true, materialId: material.$id };
     } catch (e) {
         console.error("Register upload error:", e);
         return { error: 'Failed to register upload' };
@@ -172,43 +178,49 @@ export async function uploadMaterial(formData: FormData) {
   const size = file.size;
   const baseTitle = path.parse(file.name).name;
 
-  const client = supabaseAdmin || supabase;
+  const admin = getAdminClient();
 
   // Check for duplicate uploads before storing
-  const { data: duplicateByTitle } = await client
-    .from('materials')
-    .select('id, title, created_at')
-    .eq('user_id', session.user.id)
-    .eq('title', baseTitle)
-    .is('deleted_at', null)
-    .maybeSingle();
+  const { documents: duplicateByTitleDocs } = await admin.databases.listDocuments(
+    APPWRITE_DATABASE_ID,
+    'materials',
+    [
+        Query.equal('user_id', session.user.id),
+        Query.equal('title', baseTitle),
+        Query.isNull('deleted_at')
+    ]
+  );
+  const duplicateByTitle = duplicateByTitleDocs[0];
 
   if (duplicateByTitle) {
-    const createdAt = duplicateByTitle.created_at
-      ? duplicateDateFormatter.format(new Date(duplicateByTitle.created_at))
+    const createdAt = duplicateByTitle.$createdAt
+      ? duplicateDateFormatter.format(new Date(duplicateByTitle.$createdAt))
       : 'previously';
     return { 
       error: `Duplicate material. "${duplicateByTitle.title}" already exists (uploaded ${createdAt}).`,
-      duplicateMaterialId: duplicateByTitle.id 
+      duplicateMaterialId: duplicateByTitle.$id 
     };
   }
 
-  const { data: duplicateBySize } = await client
-    .from('materials')
-    .select('id, title, created_at')
-    .eq('user_id', session.user.id)
-    .eq('size', size)
-    .eq('mime_type', file.type)
-    .is('deleted_at', null)
-    .maybeSingle();
+  const { documents: duplicateBySizeDocs } = await admin.databases.listDocuments(
+    APPWRITE_DATABASE_ID,
+    'materials',
+    [
+        Query.equal('user_id', session.user.id),
+        Query.equal('size', size),
+        Query.equal('mime_type', file.type),
+        Query.isNull('deleted_at')
+    ]
+  );
+  const duplicateBySize = duplicateBySizeDocs[0];
 
   if (duplicateBySize) {
-    const createdAt = duplicateBySize.created_at
-      ? duplicateDateFormatter.format(new Date(duplicateBySize.created_at))
+    const createdAt = duplicateBySize.$createdAt
+      ? duplicateDateFormatter.format(new Date(duplicateBySize.$createdAt))
       : 'previously';
     return { 
       error: `Duplicate material. "${duplicateBySize.title}" with the same file size already exists (uploaded ${createdAt}).`,
-      duplicateMaterialId: duplicateBySize.id 
+      duplicateMaterialId: duplicateBySize.$id 
     };
   }
 
@@ -218,16 +230,16 @@ export async function uploadMaterial(formData: FormData) {
     const uniqueFilename = `${Date.now()}-${safeFilename}`;
 
     // Check quota
-    const { data: user, error: userError } = await client
-        .from('users')
-        .select('quota, used_space')
-        .eq('id', session.user.id)
-        .single();
+    const userDoc = await admin.databases.getDocument(
+        APPWRITE_DATABASE_ID,
+        'users',
+        session.user.id
+    );
     
-    if (userError || !user) return { error: 'User not found' };
+    if (!userDoc) return { error: 'User not found' };
     
-    const currentUsed = user.used_space || 0;
-    const quota = user.quota || 0;
+    const currentUsed = userDoc.used_space || 0;
+    const quota = userDoc.quota || 0;
 
     if (currentUsed + size > quota) {
         return { error: 'Storage quota exceeded' };
@@ -239,46 +251,42 @@ export async function uploadMaterial(formData: FormData) {
         return { error: bucketResult.error };
     }
 
-    // Save file to Supabase Storage
-    const storagePath = `${session.user.id}/${uniqueFilename}`;
+    // Save file to Appwrite Storage
+    const fileId = ID.unique();
     const BUCKET_NAME = MATERIALS_BUCKET;
     
-    let { error: uploadError } = await client.storage
-        .from(BUCKET_NAME)
-        .upload(storagePath, buffer, {
-            contentType: file.type,
-            upsert: false
-        });
-
-    if (uploadError) {
-        console.error("Supabase storage upload error:", uploadError);
-        throw new Error('Failed to upload to storage');
-    }
+    await admin.storage.createFile(
+        BUCKET_NAME,
+        fileId,
+        InputFile.fromBuffer(buffer, uniqueFilename),
+        [Permission.read(Role.user(session.user.id))]
+    );
 
     // Create DB record
-    const { data: material, error: materialError } = await client
-        .from('materials')
-        .insert({
-          id: randomUUID(),
+    const materialId = ID.unique();
+    const material = await admin.databases.createDocument(
+        APPWRITE_DATABASE_ID,
+        'materials',
+        materialId,
+        {
           title: path.parse(file.name).name,
           filename: uniqueFilename,
-          file_path: storagePath, // Store storage path
+          file_path: fileId, // Store File ID
           size: size,
           user_id: session.user.id,
           mime_type: file.type,
           folder_id: folderId || null,
           updated_at: new Date().toISOString()
-        })
-        .select()
-        .single();
-        
-    if (materialError) throw materialError;
+        }
+    );
 
     // Update usage
-    await client
-        .from('users')
-        .update({ used_space: currentUsed + size })
-        .eq('id', session.user.id);
+    await admin.databases.updateDocument(
+        APPWRITE_DATABASE_ID,
+        'users',
+        session.user.id,
+        { used_space: currentUsed + size }
+    );
 
     // Create notification for upload
     await createNotification(
@@ -286,7 +294,7 @@ export async function uploadMaterial(formData: FormData) {
       'MATERIAL_UPLOADED',
       'Material Uploaded',
       `"${path.parse(file.name).name}" has been successfully uploaded and is ready for transcription.`,
-      material.id,
+      material.$id,
       'material'
     );
 
@@ -295,7 +303,7 @@ export async function uploadMaterial(formData: FormData) {
 
     revalidatePath('/materials');
     revalidatePath('/dashboard');
-    return { success: true, materialId: material.id };
+    return { success: true, materialId: material.$id };
   } catch (e) {
       console.error("Upload error:", e);
       return { error: 'Upload failed' };
@@ -307,24 +315,23 @@ export async function deleteMaterial(materialId: string) {
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
     try {
-        const client = supabaseAdmin || supabase;
+        const admin = getAdminClient();
         
-        const { data: material, error } = await client
-            .from('materials')
-            .select('*')
-            .eq('id', materialId)
-            .eq('user_id', session.user.id)
-            .single();
+        const material = await admin.databases.getDocument(
+            APPWRITE_DATABASE_ID,
+            'materials',
+            materialId
+        );
 
-        if (error || !material) return { error: 'Material not found' };
+        if (!material || material.user_id !== session.user.id) return { error: 'Material not found' };
 
         // Soft delete
-        const { error: updateError } = await client
-            .from('materials')
-            .update({ deleted_at: new Date().toISOString() })
-            .eq('id', materialId);
-            
-        if (updateError) throw updateError;
+        await admin.databases.updateDocument(
+            APPWRITE_DATABASE_ID,
+            'materials',
+            materialId,
+            { deleted_at: new Date().toISOString() }
+        );
 
         // Invalidate cache
         await Promise.all([
@@ -345,15 +352,22 @@ export async function restoreMaterial(materialId: string) {
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
     try {
-        const client = supabaseAdmin || supabase;
+        const admin = getAdminClient();
 
-        const { error } = await client
-            .from('materials')
-            .update({ deleted_at: null })
-            .eq('id', materialId)
-            .eq('user_id', session.user.id);
-            
-        if (error) throw error;
+        const material = await admin.databases.getDocument(
+            APPWRITE_DATABASE_ID,
+            'materials',
+            materialId
+        );
+
+        if (!material || material.user_id !== session.user.id) return { error: 'Material not found' };
+
+        await admin.databases.updateDocument(
+            APPWRITE_DATABASE_ID,
+            'materials',
+            materialId,
+            { deleted_at: null }
+        );
         
         // Invalidate cache
         await Promise.all([
@@ -374,75 +388,54 @@ export async function permanentlyDeleteMaterial(materialId: string) {
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
     try {
-        const client = supabaseAdmin || supabase;
+        const admin = getAdminClient();
 
-        const { data: material, error } = await client
-            .from('materials')
-            .select('*')
-            .eq('id', materialId)
-            .eq('user_id', session.user.id)
-            .single();
+        const material = await admin.databases.getDocument(
+            APPWRITE_DATABASE_ID,
+            'materials',
+            materialId
+        );
 
-        if (error || !material) return { error: 'Material not found' };
+        if (!material || material.user_id !== session.user.id) return { error: 'Material not found' };
 
         // Delete file from disk or storage
         try {
             if (material.file_path.startsWith('http')) {
-                // External URL - do nothing (or maybe handle if we support deleting external resources?)
+                // External URL - do nothing
             } else if (path.isAbsolute(material.file_path)) {
                 // Local file (legacy)
                 await unlink(material.file_path);
             } else {
-                // Supabase Storage
-                const { error: removeError } = await client.storage
-                    .from('materials')
-                    .remove([material.file_path]);
-                
-                if (removeError) {
-                    console.error("Failed to delete from storage:", removeError);
-                }
+                // Appwrite Storage
+                await admin.storage.deleteFile(
+                    MATERIALS_BUCKET,
+                    material.file_path
+                );
             }
         } catch (e) {
             console.error("Failed to delete file:", e);
         }
 
-        // Delete DB record (Supabase/Postgres should handle Cascade if configured in DB, 
-        // but Prisma handled it in code or DB. Assuming DB foreign keys have ON DELETE CASCADE)
-        // If not, we must manually delete related records. 
-        // Let's assume we might need to delete manually if CASCADE isn't set in DB.
-        // Check schema: userId -> onDelete: Cascade. material -> sentences -> onDelete: Cascade.
-        // So just deleting material is enough IF the DB migration was applied with Cascade.
-        
-        const { error: deleteError } = await client
-            .from('materials')
-            .delete()
-            .eq('id', materialId);
-
-        if (deleteError) throw deleteError;
-
-        // Cleanup orphaned words
-        // This is complex in Supabase JS client without raw SQL or RPC.
-        // We can use supabase.rpc() if we create a function, or raw query via other means?
-        // Supabase JS client doesn't support raw SQL unless enabled via RPC or direct connection.
-        // We will SKIP this for now or implement it later. It's optimization.
-        /*
-        try {
-            // await prisma.$executeRaw`DELETE FROM Word WHERE id NOT IN (SELECT wordId FROM WordOccurrence)`;
-        } catch (cleanupError) { ... }
-        */
+        await admin.databases.deleteDocument(
+            APPWRITE_DATABASE_ID,
+            'materials',
+            materialId
+        );
 
         // Update usage
-        const { data: user } = await client
-            .from('users')
-            .select('used_space')
-            .eq('id', session.user.id)
-            .single();
+        const userDoc = await admin.databases.getDocument(
+            APPWRITE_DATABASE_ID,
+            'users',
+            session.user.id
+        );
             
-        if (user) {
-             await client
-                .from('users')
-                .update({ used_space: Math.max(0, (user.used_space || 0) - material.size) })
-                .eq('id', session.user.id);
+        if (userDoc) {
+             await admin.databases.updateDocument(
+                APPWRITE_DATABASE_ID,
+                'users',
+                session.user.id,
+                { used_space: Math.max(0, (userDoc.used_space || 0) - material.size) }
+             );
         }
 
         revalidatePath('/materials');
@@ -459,15 +452,17 @@ export async function moveMaterial(materialId: string, newFolderId: string | nul
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
     try {
-        const client = supabaseAdmin || supabase;
+        const admin = getAdminClient();
         
-        const { error } = await client
-            .from('materials')
-            .update({ folder_id: newFolderId })
-            .eq('id', materialId)
-            .eq('user_id', session.user.id);
-            
-        if (error) throw error;
+        const material = await admin.databases.getDocument(APPWRITE_DATABASE_ID, 'materials', materialId);
+        if (material.user_id !== session.user.id) return { error: 'Unauthorized' };
+
+        await admin.databases.updateDocument(
+            APPWRITE_DATABASE_ID,
+            'materials',
+            materialId,
+            { folder_id: newFolderId }
+        );
         
         revalidatePath('/materials');
         return { success: true };
@@ -481,15 +476,17 @@ export async function renameMaterial(materialId: string, newTitle: string) {
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
     try {
-        const client = supabaseAdmin || supabase;
+        const admin = getAdminClient();
         
-        const { error } = await client
-            .from('materials')
-            .update({ title: newTitle })
-            .eq('id', materialId)
-            .eq('user_id', session.user.id);
+        const material = await admin.databases.getDocument(APPWRITE_DATABASE_ID, 'materials', materialId);
+        if (material.user_id !== session.user.id) return { error: 'Unauthorized' };
 
-        if (error) throw error;
+        await admin.databases.updateDocument(
+            APPWRITE_DATABASE_ID,
+            'materials',
+            materialId,
+            { title: newTitle }
+        );
 
         revalidatePath('/materials');
         return { success: true };
@@ -499,23 +496,26 @@ export async function renameMaterial(materialId: string, newTitle: string) {
 }
 
 async function performTranscription(materialId: string, userId: string) {
-    const client = supabaseAdmin || supabase;
+    const admin = getAdminClient();
 
     // Fetch user settings
-    const { data: user } = await client
-        .from('users')
-        .select('settings')
-        .eq('id', userId)
-        .single();
+    let user;
+    try {
+        user = await admin.databases.getDocument(APPWRITE_DATABASE_ID, 'users', userId);
+    } catch (e) {
+        console.error("User not found for transcription:", userId);
+        return;
+    }
 
-    const { data: material } = await client
-        .from('materials')
-        .select('*')
-        .eq('id', materialId)
-        .eq('user_id', userId)
-        .single();
+    let material;
+    try {
+        material = await admin.databases.getDocument(APPWRITE_DATABASE_ID, 'materials', materialId);
+    } catch (e) {
+        console.error("Material not found for transcription:", materialId);
+        return;
+    }
 
-    if (!material) return;
+    if (!material || material.user_id !== userId) return;
     
     // Default transcription options
     let transcriptionOptions: {
@@ -561,7 +561,7 @@ async function performTranscription(materialId: string, userId: string) {
     let tempFilePath: string | null = null;
 
     try {
-        // Handle remote files (HTTP or Supabase Storage)
+        // Handle remote files (HTTP or Appwrite Storage)
         if (material.file_path.startsWith('http') || !path.isAbsolute(material.file_path)) {
             const tempDir = os.tmpdir();
             const tempName = `transcribe-${Date.now()}-${path.basename(material.filename)}`;
@@ -576,15 +576,9 @@ async function performTranscription(materialId: string, userId: string) {
                 // @ts-ignore
                 await pipeline(response.body, fileStream);
             } else {
-                // Download from Supabase Storage
-                const { data, error } = await client.storage
-                    .from('materials')
-                    .download(material.file_path);
-                
-                if (error || !data) throw error || new Error('Download failed');
-                
-                const arrayBuffer = await data.arrayBuffer();
-                await writeFile(tempFilePath, Buffer.from(arrayBuffer));
+                // Download from Appwrite Storage
+                const buffer = await admin.storage.getFileDownload(MATERIALS_BUCKET, material.file_path);
+                await writeFile(tempFilePath, Buffer.from(buffer));
             }
             
             filePathToTranscribe = tempFilePath;
@@ -593,18 +587,23 @@ async function performTranscription(materialId: string, userId: string) {
         const result = await transcribeFile(filePathToTranscribe, transcriptionOptions);
         
         // Save sentences
-        // Transaction replacement: Sequential operations (less safe but okay for now)
         // Delete existing sentences
-        await client.from('sentences').delete().eq('material_id', materialId);
+        const { documents: existingSentences } = await admin.databases.listDocuments(
+            APPWRITE_DATABASE_ID,
+            'sentences',
+            [Query.equal('material_id', materialId)]
+        );
+        
+        await Promise.all(existingSentences.map(s => 
+            admin.databases.deleteDocument(APPWRITE_DATABASE_ID, 'sentences', s.$id)
+        ));
 
         // Insert new sentences
-        // Batch insert
         const now = new Date().toISOString();
         const sentences = result.segments.map((seg: any, i: number) => {
             const startTime = Number.isFinite(seg.start) ? seg.start : 0;
             const endTime = Number.isFinite(seg.end) ? seg.end : 0;
             return {
-                id: randomUUID(), // Generate ID manually
                 material_id: materialId,
                 start_time: startTime,
                 end_time: endTime,
@@ -616,8 +615,14 @@ async function performTranscription(materialId: string, userId: string) {
         });
         
         if (sentences.length > 0) {
-            const { error: insertError } = await client.from('sentences').insert(sentences);
-            if (insertError) console.error("Error inserting sentences:", insertError);
+            await Promise.all(sentences.map((s: any) => 
+                admin.databases.createDocument(
+                    APPWRITE_DATABASE_ID,
+                    'sentences',
+                    ID.unique(),
+                    s
+                )
+            ));
         }
         
         // Calculate actual media duration from the last segment's end time
@@ -626,9 +631,11 @@ async function performTranscription(materialId: string, userId: string) {
             : 0;
         
         // Update material status with transcription metadata
-        await client
-            .from('materials')
-            .update({ 
+        await admin.databases.updateDocument(
+            APPWRITE_DATABASE_ID,
+            'materials',
+            materialId,
+            { 
                 is_processed: true,
                 transcription_engine: transcriptionOptions.engine,
                 transcription_model: transcriptionOptions.model,
@@ -637,36 +644,42 @@ async function performTranscription(materialId: string, userId: string) {
                 transcription_compute_type: transcriptionOptions.engine === 'faster-whisper' ? transcriptionOptions.compute_type : null,
                 transcription_time: result.duration,
                 duration: mediaDuration
-            })
-            .eq('id', materialId);
+            }
+        );
 
         // Update Daily Stats for Sentences
         const sentencesCount = result.segments.length;
         if (sentencesCount > 0) {
             const today = startOfDay(new Date()).toISOString(); // Use ISO string for date
             
-            // Upsert logic manual implementation
-            const { data: existingStat } = await client
-                .from('daily_study_stats')
-                .select('id, sentences_added')
-                .eq('user_id', userId)
-                .eq('date', today)
-                .single();
+            const { documents: existingStats } = await admin.databases.listDocuments(
+                APPWRITE_DATABASE_ID,
+                'daily_study_stats',
+                [
+                    Query.equal('user_id', userId),
+                    Query.equal('date', today)
+                ]
+            );
+            const existingStat = existingStats[0];
 
             if (existingStat) {
-                await client
-                    .from('daily_study_stats')
-                    .update({ sentences_added: existingStat.sentences_added + sentencesCount })
-                    .eq('id', existingStat.id);
+                await admin.databases.updateDocument(
+                    APPWRITE_DATABASE_ID,
+                    'daily_study_stats',
+                    existingStat.$id,
+                    { sentences_added: existingStat.sentences_added + sentencesCount }
+                );
             } else {
-                await client
-                    .from('daily_study_stats')
-                    .insert({
-                        id: randomUUID(),
+                await admin.databases.createDocument(
+                    APPWRITE_DATABASE_ID,
+                    'daily_study_stats',
+                    ID.unique(),
+                    {
                         user_id: userId,
                         date: today,
                         sentences_added: sentencesCount
-                    });
+                    }
+                );
             }
         }
         
@@ -730,13 +743,22 @@ export async function transcribeMaterial(materialId: string) {
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
-    const client = supabaseAdmin || supabase;
+    const admin = getAdminClient();
     
     // Mark as processing
-    await client.from('materials')
-        .update({ is_processed: false })
-        .eq('id', materialId)
-        .eq('user_id', session.user.id);
+    try {
+        const material = await admin.databases.getDocument(APPWRITE_DATABASE_ID, 'materials', materialId);
+        if (material.user_id !== session.user.id) return { error: 'Unauthorized' };
+
+        await admin.databases.updateDocument(
+            APPWRITE_DATABASE_ID,
+            'materials',
+            materialId,
+            { is_processed: false }
+        );
+    } catch (e) {
+        return { error: 'Failed to update material status' };
+    }
 
     safeRevalidate([
         '/materials',
@@ -762,22 +784,17 @@ export async function computeUserStorage() {
         return { error: 'Unauthorized' };
     }
 
-    const client = supabaseAdmin || supabase;
+    const admin = getAdminClient();
 
-    const { data: user, error } = await client
-        .from('users')
-        .select('quota, used_space')
-        .eq('id', session.user.id)
-        .single();
-
-    if (error || !user) {
+    try {
+        const user = await admin.databases.getDocument(APPWRITE_DATABASE_ID, 'users', session.user.id);
+        return {
+            quota: Number(user.quota),
+            usedSpace: Number(user.used_space)
+        };
+    } catch (error) {
         return { error: 'User not found' };
     }
-
-    return {
-        quota: Number(user.quota),
-        usedSpace: Number(user.used_space)
-    };
 }
 
 /**
@@ -806,7 +823,7 @@ export async function getMaterialsPaginated(
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
-    const client = supabaseAdmin || supabase;
+    const admin = getAdminClient();
     const userId = session.user.id;
     const offset = (page - 1) * pageSize;
 
@@ -830,38 +847,38 @@ export async function getMaterialsPaginated(
     console.log('[getMaterialsPaginated] Cache miss, fetching from database');
 
     try {
-        // Step 1: Get materials with basic info only (no heavy joins)
-        let query = client
-            .from('materials')
-            .select('*', { count: 'exact' })
-            .eq('user_id', userId)
-            .is('deleted_at', null);
+        // Step 1: Get materials with basic info only
+        const queries = [
+            Query.equal('user_id', userId),
+            Query.isNull('deleted_at')
+        ];
 
-        // Apply folder filter
         if (filters.folderId === 'unfiled') {
-            query = query.is('folder_id', null);
+            queries.push(Query.isNull('folder_id'));
         } else if (filters.folderId) {
-            query = query.eq('folder_id', filters.folderId);
+            queries.push(Query.equal('folder_id', filters.folderId));
         }
 
-        // Apply search filter
         if (filters.search) {
-            query = query.ilike('title', `%${filters.search}%`);
+            queries.push(Query.search('title', filters.search));
         }
 
-        // Apply sorting
-        const orderColumn = sortBy === 'title' ? 'title' : sortBy === 'created_at' ? 'created_at' : 'title';
-        query = query.order(orderColumn, { ascending: sortOrder === 'asc' });
+        const sortAttribute = sortBy === 'created_at' ? '$createdAt' : sortBy;
 
-        // Apply pagination
-        query = query.range(offset, offset + pageSize - 1);
-
-        const { data: materials, count, error } = await query;
-
-        if (error) {
-            console.error('[getMaterialsPaginated] Error:', error);
-            return { error: 'Failed to fetch materials' };
+        if (sortOrder === 'asc') {
+            queries.push(Query.orderAsc(sortAttribute));
+        } else {
+            queries.push(Query.orderDesc(sortAttribute));
         }
+
+        queries.push(Query.limit(pageSize));
+        queries.push(Query.offset(offset));
+
+        const { documents: materials, total: count } = await admin.databases.listDocuments(
+            APPWRITE_DATABASE_ID,
+            'materials',
+            queries
+        );
 
         if (!materials || materials.length === 0) {
             const emptyResult: PaginatedMaterialResult = {
@@ -875,28 +892,38 @@ export async function getMaterialsPaginated(
             return emptyResult;
         }
 
-        // Step 2: Get stats for these materials in parallel
-        const materialIds = materials.map((m: any) => m.id);
+        // Step 2: Get stats for these materials
+        const materialIds = materials.map((m: any) => m.$id);
 
-        // Fetch sentences, practices, and occurrences in parallel
-        const [sentencesResult, practicesResult, occurrencesResult] = await Promise.all([
-            client
-                .from('sentences')
-                .select('id, material_id')
-                .in('material_id', materialIds)
-                .is('deleted_at', null),
-            client
-                .from('practice_progress')
-                .select('sentence_id, score, attempts, user_id, duration')
-                .eq('user_id', userId),
-            client
-                .from('word_occurrences')
-                .select('sentence_id, word_id')
-        ]);
+        // Fetch sentences
+        const { documents: sentences } = await admin.databases.listDocuments(
+            APPWRITE_DATABASE_ID,
+            'sentences',
+            [
+                Query.equal('material_id', materialIds),
+                Query.isNull('deleted_at')
+            ]
+        );
 
-        const sentences = sentencesResult.data || [];
-        const practices = practicesResult.data || [];
-        const occurrences = occurrencesResult.data || [];
+        // Fetch practices
+        const { documents: practices } = await admin.databases.listDocuments(
+            APPWRITE_DATABASE_ID,
+            'practice_progress',
+            [Query.equal('user_id', userId)]
+        );
+
+        // Fetch occurrences
+        const sentenceIds = sentences.map(s => s.$id);
+        let occurrences: any[] = [];
+        if (sentenceIds.length > 0) {
+             // If too many IDs, might need chunking. Assuming reasonable page size.
+             const { documents } = await admin.databases.listDocuments(
+                 APPWRITE_DATABASE_ID,
+                 'word_occurrences',
+                 [Query.equal('sentence_id', sentenceIds)]
+             );
+             occurrences = documents;
+        }
 
         // Build lookup maps
         const sentencesByMaterial = new Map<string, string[]>();
@@ -906,8 +933,8 @@ export async function getMaterialsPaginated(
             if (!sentencesByMaterial.has(s.material_id)) {
                 sentencesByMaterial.set(s.material_id, []);
             }
-            sentencesByMaterial.get(s.material_id)!.push(s.id);
-            sentenceIdSet.add(s.id);
+            sentencesByMaterial.get(s.material_id)!.push(s.$id);
+            sentenceIdSet.add(s.$id);
         });
 
         const practicesBySentence = new Map<string, any>();
@@ -929,7 +956,7 @@ export async function getMaterialsPaginated(
 
         // Process materials to calculate stats
         const processedMaterials = materials.map((m: any) => {
-            const materialSentenceIds = sentencesByMaterial.get(m.id) || [];
+            const materialSentenceIds = sentencesByMaterial.get(m.$id) || [];
             const totalSentences = materialSentenceIds.length;
             
             let practicedSentences = 0;
@@ -957,6 +984,7 @@ export async function getMaterialsPaginated(
             
             return {
                 ...m,
+                id: m.$id, // Map $id to id for frontend compatibility
                 stats: {
                     practicedCount: practicedSentences,
                     totalSentences: totalSentences,

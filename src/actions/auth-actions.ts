@@ -2,8 +2,10 @@
 
 import { z } from 'zod';
 import crypto from 'crypto';
-import { supabaseAdmin, supabase } from '@/lib/supabase';
 import bcrypt from 'bcrypt';
+import { getAdminClient } from '@/lib/appwrite';
+import { DATABASE_ID } from '@/lib/appwrite_client';
+import { ID, Query } from 'node-appwrite';
 import { sendVerificationEmail, sendPasswordResetEmail } from '@/lib/email';
 
 const RegisterSchema = z.object({
@@ -22,63 +24,77 @@ export async function registerUser(prevState: string | undefined, formData: Form
 
     const { email, password, username: requestedUsername } = validatedFields.data;
 
-    // Use admin client if available to ensure we can query users
-    const client = supabaseAdmin || supabase;
-    console.log('[Register] Using admin client:', !!supabaseAdmin);
+    const { databases, users } = await getAdminClient();
 
-    const { data: existingUser } = await client
-      .from('users')
-      .select('id')
-      .eq('email', email)
-      .single();
-
-    if (existingUser) {
-      return 'Email already in use';
+    // Check if email exists in Appwrite Auth
+    try {
+        const { users: existingAuthUsers } = await users.list([Query.equal('email', email)]);
+        if (existingAuthUsers.length > 0) {
+            return 'Email already in use';
+        }
+    } catch (e) {
+        // Ignore
     }
 
-    // Check if username is available, if not generate a unique one
+    // Check if username is available in DB
     let username = requestedUsername.toLowerCase().replace(/[^a-z0-9]/g, '');
     let usernameExists = true;
     let attempts = 0;
     
     while (usernameExists && attempts < 10) {
-      const { data: existingUsername } = await client
-        .from('users')
-        .select('id')
-        .eq('username', username)
-        .single();
+      const { documents: existingUsernames } = await databases.listDocuments(
+        DATABASE_ID,
+        'users',
+        [Query.equal('username', username)]
+      );
       
-      if (!existingUsername) {
+      if (existingUsernames.length === 0) {
         usernameExists = false;
       } else {
-        // Add random suffix if username exists
         username = `${requestedUsername}${crypto.randomInt(1000, 9999)}`;
         attempts++;
       }
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const userId = ID.unique();
+
+    // Create Appwrite User
+    try {
+        await users.create(
+            userId,
+            email,
+            undefined, // Phone
+            password,
+            username // Name
+        );
+    } catch (createError: any) {
+        console.error('Error creating Appwrite user:', createError);
+        if (createError.code === 409) return 'Email already in use';
+        return 'Failed to create user account';
+    }
+
+    // Create DB User Profile
     const verificationToken = crypto.randomBytes(32).toString('hex');
-
-    const { error: createError } = await client
-      .from('users')
-      .insert({
-        id: crypto.randomUUID(),
-        username,
-        email,
-        password: hashedPassword,
-        updated_at: new Date().toISOString(),
-        verification_token: verificationToken,
-        email_verified: null, 
-      });
-
-    if (createError) {
-        console.error('Error creating user:', createError);
-        // If RLS blocks this, we need Service Role Key
-        if (createError.code === '42501') { // permission denied
-             return 'Server configuration error: Missing permissions to create user.';
-        }
-        throw createError;
+    const hashedPassword = await bcrypt.hash(password, 10);
+    
+    try {
+        await databases.createDocument(
+            DATABASE_ID,
+            'users',
+            userId,
+            {
+                username,
+                email,
+                password: hashedPassword,
+                verification_token: verificationToken,
+                email_verified: false, 
+                updated_at: new Date().toISOString(),
+            }
+        );
+    } catch (createError: any) {
+        console.error('Error creating user profile:', createError);
+        await users.delete(userId);
+        return 'Failed to create user profile';
     }
 
     // Send verification email
@@ -86,9 +102,6 @@ export async function registerUser(prevState: string | undefined, formData: Form
     
     if (!emailResult.success) {
       console.error('[Register] Failed to send verification email:', emailResult.error);
-      // Still log the verification link for development/debugging
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-      console.log(`[DEV] Verification Link: ${baseUrl}/verify-email?token=${verificationToken}`);
     }
 
     return 'verification-needed';
@@ -101,16 +114,16 @@ export async function registerUser(prevState: string | undefined, formData: Form
 
 export async function resendVerificationEmail(email: string) {
   try {
-    const client = supabaseAdmin || supabase;
+    const { databases } = await getAdminClient();
     
-    // Find user by email
-    const { data: user, error } = await client
-      .from('users')
-      .select('id, username, display_name, email, email_verified, verification_token')
-      .eq('email', email)
-      .single();
+    const { documents } = await databases.listDocuments(
+        DATABASE_ID,
+        'users',
+        [Query.equal('email', email)]
+    );
+    const user = documents[0];
     
-    if (error || !user) {
+    if (!user) {
       return { error: 'User not found.' };
     }
     
@@ -118,28 +131,23 @@ export async function resendVerificationEmail(email: string) {
       return { error: 'Email is already verified.' };
     }
     
-    // Generate new verification token
     const verificationToken = crypto.randomBytes(32).toString('hex');
     
-    // Update user with new token
-    const { error: updateError } = await client
-      .from('users')
-      .update({ verification_token: verificationToken })
-      .eq('id', user.id);
-    
-    if (updateError) {
+    try {
+        await databases.updateDocument(
+            DATABASE_ID,
+            'users',
+            user.$id,
+            { verification_token: verificationToken }
+        );
+    } catch (updateError) {
       console.error('[Resend] Failed to update verification token:', updateError);
       return { error: 'Failed to generate new verification token.' };
     }
     
-    // Send verification email
     const emailResult = await sendVerificationEmail(user.email, user.display_name || user.username, verificationToken);
     
     if (!emailResult.success) {
-      console.error('[Resend] Failed to send verification email:', emailResult.error);
-      // Still log the verification link for development/debugging
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-      console.log(`[DEV] Verification Link: ${baseUrl}/verify-email?token=${verificationToken}`);
       return { error: 'Failed to send verification email. Please try again later.' };
     }
     
@@ -154,54 +162,46 @@ export async function authenticate(
   prevState: string | undefined,
   formData: FormData,
 ) {
-  // This function is deprecated in favor of client-side signIn
-  // But we keep it to avoid breaking imports if any
   return 'Please use client-side authentication';
 }
 
-// Forgot Password - Request Reset
 export async function requestPasswordReset(email: string) {
   try {
-    const client = supabaseAdmin || supabase;
+    const { databases } = await getAdminClient();
     
-    // Find user by email
-    const { data: user, error } = await client
-      .from('users')
-      .select('id, username, display_name, email')
-      .eq('email', email)
-      .single();
+    const { documents } = await databases.listDocuments(
+        DATABASE_ID,
+        'users',
+        [Query.equal('email', email)]
+    );
+    const user = documents[0];
     
-    if (error || !user) {
-      // Don't reveal if email exists for security
+    if (!user) {
       return { success: true };
     }
     
-    // Generate reset token with expiry (1 hour)
     const resetToken = crypto.randomBytes(32).toString('hex');
-    const resetTokenExpiry = new Date(Date.now() + 3600000).toISOString(); // 1 hour
+    const resetTokenExpiry = new Date(Date.now() + 3600000).toISOString();
     
-    // Update user with reset token
-    const { error: updateError } = await client
-      .from('users')
-      .update({ 
-        reset_token: resetToken,
-        reset_token_expiry: resetTokenExpiry
-      })
-      .eq('id', user.id);
-    
-    if (updateError) {
+    try {
+        await databases.updateDocument(
+            DATABASE_ID,
+            'users',
+            user.$id,
+            { 
+                reset_token: resetToken,
+                reset_token_expiry: resetTokenExpiry
+            }
+        );
+    } catch (updateError) {
       console.error('[Password Reset] Failed to update reset token:', updateError);
       return { error: 'Failed to process request. Please try again.' };
     }
     
-    // Send reset email
     const emailResult = await sendPasswordResetEmail(user.email, user.display_name || user.username, resetToken);
     
     if (!emailResult.success) {
       console.error('[Password Reset] Failed to send reset email:', emailResult.error);
-      // Still log the reset link for development/debugging
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-      console.log(`[DEV] Password Reset Link: ${baseUrl}/reset-password?token=${resetToken}`);
     }
     
     return { success: true };
@@ -211,47 +211,50 @@ export async function requestPasswordReset(email: string) {
   }
 }
 
-// Reset Password with Token
 export async function resetPassword(token: string, newPassword: string) {
   try {
     if (!token || newPassword.length < 6) {
       return { error: 'Invalid request.' };
     }
     
-    const client = supabaseAdmin || supabase;
+    const { databases, users } = await getAdminClient();
     
-    // Find user by reset token
-    const { data: user, error } = await client
-      .from('users')
-      .select('id, reset_token_expiry')
-      .eq('reset_token', token)
-      .single();
+    const { documents } = await databases.listDocuments(
+        DATABASE_ID,
+        'users',
+        [Query.equal('reset_token', token)]
+    );
+    const user = documents[0];
     
-    if (error || !user) {
+    if (!user) {
       return { error: 'Invalid or expired reset link.' };
     }
     
-    // Check if token is expired
     if (user.reset_token_expiry && new Date(user.reset_token_expiry) < new Date()) {
       return { error: 'Reset link has expired. Please request a new one.' };
     }
     
-    // Hash new password
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    // Update Appwrite Auth Password
+    try {
+        await users.updatePassword(user.$id, newPassword);
+    } catch (e) {
+        console.error('Failed to update Appwrite password:', e);
+        return { error: 'Failed to reset password.' };
+    }
     
-    // Update password and clear reset token
-    const { error: updateError } = await client
-      .from('users')
-      .update({ 
-        password: hashedPassword,
-        reset_token: null,
-        reset_token_expiry: null
-      })
-      .eq('id', user.id);
-    
-    if (updateError) {
-      console.error('[Password Reset] Failed to update password:', updateError);
-      return { error: 'Failed to reset password. Please try again.' };
+    // Clear reset token
+    try {
+        await databases.updateDocument(
+            DATABASE_ID,
+            'users',
+            user.$id,
+            { 
+                reset_token: null,
+                reset_token_expiry: null
+            }
+        );
+    } catch (updateError) {
+      console.error('[Password Reset] Failed to clear reset token:', updateError);
     }
     
     return { success: true };
