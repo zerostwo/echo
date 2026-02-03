@@ -75,10 +75,6 @@ export async function PATCH(request: NextRequest) {
             id,
             {
                 folder_id: folderId,
-                // updated_at is auto-handled by Appwrite usually, but we can set it if we want to track logic time
-                // But Appwrite has . Let's rely on that or set it if schema requires.
-                // Schema likely has updated_at as string if migrated from Supabase.
-                updated_at: new Date().toISOString(),
             }
         )
     ));

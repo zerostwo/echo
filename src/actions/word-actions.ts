@@ -561,14 +561,6 @@ export async function editWord(wordId: string, newWordText: string) {
             updateData.definition = dictData.definition || null;
             updateData.translation = dictData.translation || null;
             updateData.pos = dictData.pos || null;
-            updateData.collins = dictData.collins ? Number(dictData.collins) : null;
-            updateData.oxford = dictData.oxford ? Number(dictData.oxford) : null;
-            updateData.tag = dictData.tag || null;
-            updateData.bnc = dictData.bnc ? Number(dictData.bnc) : null;
-            updateData.frq = dictData.frq ? Number(dictData.frq) : null;
-            updateData.exchange = dictData.exchange || null;
-            updateData.audio = dictData.audio || null;
-            updateData.detail = dictData.detail ? JSON.stringify(dictData.detail) : null;
         }
 
         // Update the word
@@ -679,14 +671,6 @@ export async function addWordRelation(wordId: string, relatedText: string, type:
             newWordData.definition = dictData.definition || null;
             newWordData.translation = dictData.translation || null;
             newWordData.pos = dictData.pos || null;
-            newWordData.collins = dictData.collins ? Number(dictData.collins) : null;
-            newWordData.oxford = dictData.oxford ? Number(dictData.oxford) : null;
-            newWordData.tag = dictData.tag || null;
-            newWordData.bnc = dictData.bnc ? Number(dictData.bnc) : null;
-            newWordData.frq = dictData.frq ? Number(dictData.frq) : null;
-            newWordData.exchange = dictData.exchange || null;
-            newWordData.audio = dictData.audio || null;
-            newWordData.detail = dictData.detail ? JSON.stringify(dictData.detail) : null;
         }
         
         try {

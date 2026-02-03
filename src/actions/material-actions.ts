@@ -863,7 +863,18 @@ export async function getMaterialsPaginated(
             queries.push(Query.search('title', filters.search));
         }
 
-        const sortAttribute = sortBy === 'created_at' ? '$createdAt' : sortBy;
+        // Sanitize sortBy to ensure it's a valid attribute in the schema
+        const validSortAttributes = ['title', 'created_at', 'updated_at', 'size', '$createdAt', '$updatedAt'];
+        let sortAttribute = sortBy;
+        
+        if (sortBy === 'created_at') {
+            sortAttribute = '$createdAt';
+        } else if (sortBy === 'updated_at') {
+            sortAttribute = '$updatedAt';
+        } else if (!validSortAttributes.includes(sortBy)) {
+            // Fallback for computed fields or invalid attributes
+            sortAttribute = '$createdAt';
+        }
 
         if (sortOrder === 'asc') {
             queries.push(Query.orderAsc(sortAttribute));

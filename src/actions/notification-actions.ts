@@ -1,7 +1,7 @@
 'use server';
 
 import { auth } from '@/auth';
-import { createSessionClient, getAdminClient } from '@/lib/appwrite';
+import { getAdminClient } from '@/lib/appwrite';
 import { DATABASE_ID } from '@/lib/appwrite_client';
 import { ID, Query } from 'node-appwrite';
 
@@ -31,14 +31,15 @@ export async function getNotifications(limit: number = 50): Promise<{ notificati
   if (!session?.user?.id) return { error: 'Unauthorized' };
 
   try {
-    const { databases } = await createSessionClient();
+    const { databases } = await getAdminClient();
     
+    // Use $createdAt for ordering (Appwrite's built-in timestamp)
     const { documents } = await databases.listDocuments(
       DATABASE_ID,
       NOTIFICATIONS_COLLECTION_ID,
       [
         Query.equal('user_id', session.user.id),
-        Query.orderDesc('created_at'),
+        Query.orderDesc('$createdAt'),
         Query.limit(limit)
       ]
     );
@@ -52,7 +53,7 @@ export async function getNotifications(limit: number = 50): Promise<{ notificati
       isRead: n.is_read,
       relatedId: n.related_id,
       relatedType: n.related_type,
-      createdAt: n.created_at,
+      createdAt: n.$createdAt, // Use Appwrite's built-in timestamp
     }));
 
     return { notifications };
@@ -67,15 +68,17 @@ export async function getUnreadCount(): Promise<{ count?: number, error?: string
   if (!session?.user?.id) return { error: 'Unauthorized' };
 
   try {
-    const { databases } = await createSessionClient();
+    const { databases } = await getAdminClient();
     
+    // Use limit(1) and select minimal fields, then use total for count
     const { total } = await databases.listDocuments(
       DATABASE_ID,
       NOTIFICATIONS_COLLECTION_ID,
       [
         Query.equal('user_id', session.user.id),
         Query.equal('is_read', false),
-        Query.limit(0)
+        Query.select(['$id']),
+        Query.limit(1)
       ]
     );
 
@@ -97,6 +100,8 @@ export async function createNotification(
   try {
     const { databases } = await getAdminClient();
     
+    // Note: Appwrite automatically handles $createdAt and $updatedAt
+    // Do NOT include created_at as it's not a schema attribute
     await databases.createDocument(
       DATABASE_ID,
       NOTIFICATIONS_COLLECTION_ID,
@@ -109,7 +114,6 @@ export async function createNotification(
         is_read: false,
         related_id: relatedId || null,
         related_type: relatedType || null,
-        created_at: new Date().toISOString(),
       }
     );
 
@@ -125,7 +129,18 @@ export async function markAsRead(notificationId: string): Promise<{ success?: bo
   if (!session?.user?.id) return { error: 'Unauthorized' };
 
   try {
-    const { databases } = await createSessionClient();
+    const { databases } = await getAdminClient();
+    
+    // Verify ownership
+    const notification = await databases.getDocument(
+      DATABASE_ID,
+      NOTIFICATIONS_COLLECTION_ID,
+      notificationId
+    );
+    
+    if (notification.user_id !== session.user.id) {
+      return { error: 'Unauthorized' };
+    }
     
     await databases.updateDocument(
       DATABASE_ID,
@@ -146,7 +161,7 @@ export async function markAllAsRead(): Promise<{ success?: boolean, error?: stri
   if (!session?.user?.id) return { error: 'Unauthorized' };
 
   try {
-    const { databases } = await createSessionClient();
+    const { databases } = await getAdminClient();
     
     let cursor = null;
     do {
@@ -189,7 +204,18 @@ export async function deleteNotification(notificationId: string): Promise<{ succ
   if (!session?.user?.id) return { error: 'Unauthorized' };
 
   try {
-    const { databases } = await createSessionClient();
+    const { databases } = await getAdminClient();
+    
+    // Verify ownership
+    const notification = await databases.getDocument(
+      DATABASE_ID,
+      NOTIFICATIONS_COLLECTION_ID,
+      notificationId
+    );
+    
+    if (notification.user_id !== session.user.id) {
+      return { error: 'Unauthorized' };
+    }
     
     await databases.deleteDocument(
       DATABASE_ID,
@@ -209,7 +235,7 @@ export async function clearAllNotifications(): Promise<{ success?: boolean, erro
   if (!session?.user?.id) return { error: 'Unauthorized' };
 
   try {
-    const { databases } = await createSessionClient();
+    const { databases } = await getAdminClient();
     
     let cursor = null;
     do {

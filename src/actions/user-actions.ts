@@ -174,10 +174,21 @@ export async function uploadAvatar(formData: FormData) {
 
     // Ensure bucket exists
     try {
-        await storage.getBucket(BUCKET_NAME);
+        const bucket = await storage.getBucket(BUCKET_NAME);
+        if (!bucket.fileSecurity) {
+            console.log("Enabling file security for avatars bucket");
+            // Simplified bucket update - just enable file security
+            await storage.updateBucket(
+                BUCKET_NAME,
+                bucket.name,
+                bucket.$permissions,
+                true, // Enable file security
+                bucket.enabled
+            );
+        }
     } catch (e) {
         try {
-            await storage.createBucket(BUCKET_NAME, "Avatars", [], false, true, 2097152);
+            await storage.createBucket(BUCKET_NAME, "Avatars", [], true, true, 2097152);
         } catch (createError) {
             console.error("Failed to create avatars bucket", createError);
         }

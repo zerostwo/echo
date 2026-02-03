@@ -220,14 +220,6 @@ export async function extractVocabulary(materialId: string) {
             translation: d.translation,
             pos: d.pos,
             definition: d.definition,
-            collins: d.collins ? Number(d.collins) : null,
-            oxford: d.oxford ? Number(d.oxford) : null,
-            tag: d.tag,
-            bnc: d.bnc ? Number(d.bnc) : null,
-            frq: d.frq ? Number(d.frq) : null,
-            exchange: d.exchange,
-            audio: d.audio,
-            detail: d.detail ? JSON.stringify(d.detail) : null,
             deleted_at: null,
         });
     }
@@ -549,7 +541,6 @@ export interface PaginatedVocabResult {
     };
 }
 
-// Helper function with retry logic for Supabase requests - REMOVED
 
 export async function getVocabPaginated(
     page: number = 1,

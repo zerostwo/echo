@@ -1,7 +1,7 @@
 'use server';
 
 import { auth } from '@/auth';
-import { getAdminClient, createSessionClient } from '@/lib/appwrite';
+import { getAdminClient } from '@/lib/appwrite';
 import { 
     DATABASE_ID, 
     FOLDERS_COLLECTION_ID, 
@@ -14,7 +14,8 @@ export async function getFolders() {
     const session = await auth();
     if (!session?.user?.id) return [];
 
-    const { databases } = await createSessionClient();
+    // Use admin client for read operations to ensure consistent access
+    const { databases } = await getAdminClient();
 
     try {
         // Appwrite default limit is 25. We might need pagination if user has many folders.
@@ -50,7 +51,9 @@ export async function createFolder(name: string, parentId?: string) {
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
-    const { databases } = await createSessionClient();
+    // Use admin client for document creation to bypass collection-level permissions
+    // The user_id field ensures ownership-based access control
+    const { databases } = await getAdminClient();
 
     try {
         // Get the max order for the parent level
@@ -84,7 +87,6 @@ export async function createFolder(name: string, parentId?: string) {
                 user_id: session.user.id,
                 parent_id: parentId || null,
                 order: newOrder,
-                updated_at: new Date().toISOString()
             }
         );
 
@@ -113,7 +115,7 @@ export async function deleteFolder(folderId: string, moveToUnfiled: boolean = tr
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
-    const { databases } = await createSessionClient();
+    const { databases } = await getAdminClient();
 
     try {
         // Verify ownership
@@ -169,7 +171,7 @@ export async function renameFolder(folderId: string, newName: string) {
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
-    const { databases } = await createSessionClient();
+    const { databases } = await getAdminClient();
 
     try {
         // Verify ownership implicitly by query or getDocument
@@ -200,7 +202,7 @@ export async function updateFolderParent(folderId: string, newParentId: string |
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
-    const { databases } = await createSessionClient();
+    const { databases } = await getAdminClient();
 
     try {
         // Verify ownership
@@ -283,7 +285,6 @@ export async function updateFolderParent(folderId: string, newParentId: string |
             { 
                 parent_id: newParentId,
                 order: newOrder,
-                updated_at: new Date().toISOString()
             }
         );
 
@@ -302,7 +303,7 @@ export async function updateFolderOrder(
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
-    const { databases } = await createSessionClient();
+    const { databases } = await getAdminClient();
 
     try {
         // Verify all folders belong to the user
@@ -323,9 +324,8 @@ export async function updateFolderOrder(
 
         // Update each folder's order (and optionally parentId)
         await Promise.all(updates.map(update => {
-            const updateData: { order: number; parent_id?: string | null; updated_at: string } = {
+            const updateData: { order: number; parent_id?: string | null } = {
                 order: update.order,
-                updated_at: new Date().toISOString()
             };
 
             if (update.parentId !== undefined) {
@@ -353,7 +353,7 @@ export async function bulkMoveMaterials(materialIds: string[], folderId: string 
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
-    const { databases } = await createSessionClient();
+    const { databases } = await getAdminClient();
 
     try {
         // Verify folder ownership if folderId is provided
@@ -391,7 +391,6 @@ export async function bulkMoveMaterials(materialIds: string[], folderId: string 
                 id,
                 { 
                     folder_id: folderId,
-                    updated_at: new Date().toISOString()
                 }
             )
         ));

@@ -1,7 +1,7 @@
 'use server';
 
 import { auth } from '@/auth';
-import { getAdminClient, createSessionClient } from '@/lib/appwrite';
+import { getAdminClient } from '@/lib/appwrite';
 import { 
     DATABASE_ID, 
     SENTENCES_COLLECTION_ID, 
@@ -30,8 +30,8 @@ export async function evaluateDictation(sentenceId: string, userText: string, du
   const session = await auth();
   if (!session?.user?.id) return { error: 'Unauthorized' };
 
-  const { databases } = await createSessionClient();
-  const { databases: adminDatabases } = await getAdminClient(); // For updates that might need admin privs or just consistency
+  // Use admin client for all database operations to avoid permission issues
+  const { databases } = await getAdminClient();
 
   try {
     const sentence = await databases.getDocument(
@@ -233,12 +233,12 @@ export async function evaluateDictation(sentenceId: string, userText: string, du
                 
                 // Update word statuses for missed words (increase error count, reset FSRS)
                 for (const wordId of missedWordIds) {
-                    await updateWordStatusOnDictationError(adminDatabases, session.user.id, wordId, now);
+                    await updateWordStatusOnDictationError(databases, session.user.id, wordId, now);
                 }
                 
                 // Update word statuses for correct words (improve FSRS state)
                 for (const wordId of correctWordIds) {
-                    await updateWordStatusOnDictationSuccess(adminDatabases, session.user.id, wordId, now);
+                    await updateWordStatusOnDictationSuccess(databases, session.user.id, wordId, now);
                 }
             }
         }

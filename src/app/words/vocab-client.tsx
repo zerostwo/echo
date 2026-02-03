@@ -85,7 +85,7 @@ interface VocabClientProps {
   materials?: { id: string; title: string }[]
 }
 
-// Column header with sort dropdown (Supabase style)
+// Column header with sort dropdown
 function SortableColumnHeader({ 
   column, 
   label, 

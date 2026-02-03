@@ -1,7 +1,7 @@
 'use server';
 
 import { auth } from '@/auth';
-import { createSessionClient } from '@/lib/appwrite_client';
+import { getAdminClient } from '@/lib/appwrite';
 import { DATABASE_IDS, COLLECTION_IDS } from '@/lib/appwrite_client';
 import { revalidatePath } from 'next/cache';
 
@@ -10,7 +10,18 @@ export async function moveMaterial(materialId: string, targetFolderId: string | 
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
     try {
-        const { databases } = await createSessionClient();
+        const { databases } = await getAdminClient();
+        
+        // Verify material ownership
+        const material = await databases.getDocument(
+            DATABASE_IDS.main,
+            COLLECTION_IDS.materials,
+            materialId
+        );
+        
+        if (material.user_id !== session.user.id) {
+            return { error: 'Unauthorized' };
+        }
         
         await databases.updateDocument(
             DATABASE_IDS.main,

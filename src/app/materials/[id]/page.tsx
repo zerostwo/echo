@@ -67,14 +67,15 @@ export default async function MaterialDetailPage({ params }: { params: Promise<{
     }));
   }
 
-  // Get sentence count
+  // Get sentence count - use limit(1) with select to minimize data transfer, then use total
   const { total: sentenceCount } = await databases.listDocuments(
     DATABASE_ID,
     'sentences',
     [
       Query.equal('material_id', id),
       Query.isNull('deleted_at'),
-      Query.limit(0)
+      Query.select(['$id']),
+      Query.limit(1)
     ]
   );
 

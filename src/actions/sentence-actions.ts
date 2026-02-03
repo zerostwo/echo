@@ -1,7 +1,7 @@
 'use server';
 
 import { auth } from '@/auth';
-import { getAdminClient, createSessionClient } from '@/lib/appwrite';
+import { getAdminClient } from '@/lib/appwrite';
 import { 
     DATABASE_ID, 
     SENTENCES_COLLECTION_ID, 
@@ -127,9 +127,8 @@ async function upsertWordsForTokens(userId: string, rawWords: string[]) {
 
             if (existingWords.total > 0) {
                 wordId = existingWords.documents[0].$id;
-                // If it was soft deleted, restore it? The original logic didn't explicitly restore, 
-                // but `upsert` in Supabase would update it. 
-                // Let's ensure it's not deleted.
+                // If it was soft deleted, restore it
+                // Ensure it's not deleted.
                 if (existingWords.documents[0].deleted_at) {
                     await databases.updateDocument(
                         DATABASE_ID,
@@ -566,7 +565,7 @@ export async function getSentencesPaginated(
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
-    const { databases } = await createSessionClient();
+    const { databases } = await getAdminClient();
     const userId = session.user.id;
     const offset = (page - 1) * pageSize;
 

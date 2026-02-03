@@ -219,7 +219,7 @@ export function WordDetailSheet({ word, open, onOpenChange, dictionaryId, onWord
             return;
         }
 
-        // Supabase returns snake_case column names from the database
+        // Handle both snake_case (Appwrite) and camelCase field names
         const materialId = sentence.material_id || sentence.materialId;
         const startTime = sentence.start_time ?? sentence.startTime ?? 0;
         const endTime = sentence.end_time ?? sentence.endTime ?? 0;

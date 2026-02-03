@@ -1,7 +1,7 @@
 'use server';
 
 import { authenticator } from 'otplib';
-import { createSessionClient } from '@/lib/appwrite';
+import { getAdminClient } from '@/lib/appwrite';
 import { DATABASE_ID } from '@/lib/appwrite_client';
 import { auth } from '@/auth';
 import { revalidatePath } from 'next/cache';
@@ -24,7 +24,7 @@ export async function enableTwoFactor(secret: string, token: string) {
     const isValid = authenticator.check(token, secret);
     if (!isValid) return { error: 'Invalid token' };
 
-    const { databases } = await createSessionClient();
+    const { databases } = await getAdminClient();
 
     await databases.updateDocument(
       DATABASE_ID,
@@ -33,7 +33,6 @@ export async function enableTwoFactor(secret: string, token: string) {
       {
         two_factor_secret: secret,
         two_factor_enabled: true,
-        updated_at: new Date().toISOString(),
       }
     );
 
@@ -49,7 +48,7 @@ export async function disableTwoFactor() {
   if (!session?.user) return { error: 'Not authenticated' };
 
   try {
-    const { databases } = await createSessionClient();
+    const { databases } = await getAdminClient();
 
     await databases.updateDocument(
       DATABASE_ID,
@@ -58,7 +57,6 @@ export async function disableTwoFactor() {
       {
         two_factor_enabled: false,
         two_factor_secret: null,
-        updated_at: new Date().toISOString(),
       }
     );
 

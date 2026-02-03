@@ -15,16 +15,16 @@ Echo is a deep-listening and precision-learning platform: upload audio/video, au
 - 📚 Vocabulary & dictionaries: Global de-duplicated word store with source sentences; filters for Oxford/Collins levels and more; Anki CSV export; custom dictionaries (built from filters or manual add) that feed directly into learning.
 - 🧠 Study modes: FSRS spaced repetition; words support typing/dictation, multiple choice (incl. synonym direction), and context listening; session recovery and shortcuts. Sentence practice includes dictation scoring with diffs, adjustable start/end, A-B loop, and per-word lookup.
 - 📊 Progress feedback: Dashboard heatmap, daily goals, vocab/sentence snapshots, hardest words, and a notification center for background tasks.
-- 🔄 Data portability: Export/import ZIP (settings, vocab + statuses, learning records, dictionaries, materials/transcripts) with merge or overwrite options, backed by Supabase storage.
+- 🔄 Data portability: Export/import ZIP (settings, vocab + statuses, learning records, dictionaries, materials/transcripts) with merge or overwrite options.
 - 🔒 Safety: NextAuth v5 with email verification, reset, TOTP 2FA, roles/quotas, optional Redis caching.
 
 ## Tech Stack
 
 - **Framework**: Next.js 16 (App Router), React 19, TypeScript
 - **UI**: Tailwind CSS v4, Radix UI, Lucide Icons
-- **Backend**: Prisma + PostgreSQL (Supabase), Redis (optional)
+- **Backend**: Appwrite (Database + Storage), Redis (optional)
 - **AI / NLP**: Faster-Whisper, OpenAI Whisper, ts-fsrs, natural
-- **Storage / Uploads**: Supabase Storage (materials/avatars/exports), Better Upload pipeline
+- **Storage / Uploads**: Appwrite Storage (materials/avatars/exports), Better Upload pipeline
 - **Auth**: NextAuth v5 (Credentials), TOTP 2FA, SMTP mailers
 - **Scripts**: Python 3 (`scripts/transcribe.py` and helpers)
 
@@ -41,11 +41,10 @@ pip install -r scripts/requirements.txt   # Whisper-related deps
 2) Environment (example)
 ```env
 AUTH_SECRET=your_nextauth_secret
-DATABASE_URL=postgresql://user:pass@host:5432/db
-DIRECT_URL=postgresql://user:pass@host:5432/db
-NEXT_PUBLIC_SUPABASE_URL=https://xxx.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=...
-SUPABASE_SERVICE_ROLE_KEY=...             # for storage/export/import
+NEXT_PUBLIC_APPWRITE_ENDPOINT=https://cloud.appwrite.io/v1
+NEXT_PUBLIC_APPWRITE_PROJECT_ID=your_project_id
+NEXT_PUBLIC_APPWRITE_DATABASE_ID=echo_db
+APPWRITE_API_KEY=your_api_key             # for server-side operations
 SMTP_HOST=smtp.example.com
 SMTP_PORT=465
 SMTP_USER=...
@@ -59,10 +58,10 @@ NEXT_PUBLIC_APP_URL=http://localhost:17891
 ```
 
 3) Database & storage
-```bash
-npx prisma migrate deploy
-```
-Supabase buckets expected: `materials` (private), `avatars` (public avatars), `exports` (import/export). With a service role key, missing buckets are auto-created when needed.
+Set up your Appwrite project with the following collections:
+- `users`, `materials`, `sentences`, `words`, `word_occurrences`, `user_word_statuses`, `practice_progress`, `dictionaries`, `dictionary_words`, `folders`, `notifications`, `daily_study_stats`
+
+Appwrite buckets expected: `materials` (private), `avatars` (public avatars), `exports` (import/export).
 
 4) Run
 ```bash
@@ -72,7 +71,7 @@ Use `npm run build` / `npm run start` for production. Startup scripts sync `echo
 
 ## Common Flows
 
-- Upload & transcribe: drag-drop/batch upload audio/video; dedupe checks; store to Supabase; Python transcription (choose model/device/VAD); auto vocab extraction; notifications emitted.
+- Upload & transcribe: drag-drop/batch upload audio/video; dedupe checks; store to Appwrite Storage; Python transcription (choose model/device/VAD); auto vocab extraction; notifications emitted.
 - Materials browsing: grid/list toggle, folder breadcrumbs, re-transcribe, rename, move to trash, timestamps shown in your timezone.
 - Word learning: filter by material/dictionary/Oxford/Collins/difficulty; session recovery, keyboard shortcuts, synonym questions, context playback, mark mastered/unknown.
 - Sentence practice: jump to last practiced or first sentence of latest material; dictation scoring diff with missing/extra highlights, A-B loop, fine-grained timing tweaks, shortcut navigation, word sheet.

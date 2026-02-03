@@ -23,8 +23,6 @@ export async function createImportJob(userId: string, filePath: string, mode: "m
       user_id: userId,
       file_path: filePath,
       status: "queued",
-      mode: mode,
-      created_at: new Date().toISOString(),
     }
   );
 
@@ -154,7 +152,7 @@ async function processImportJob(jobId: string, mode: "merge" | "overwrite") {
                 try {
                     await admin.storage.getBucket(BUCKET_NAME);
                 } catch (e) {
-                    await admin.storage.createBucket(BUCKET_NAME, 'Avatars', [], false, true, undefined, ['jpg', 'png', 'jpeg', 'gif', 'webp']);
+                    await admin.storage.createBucket(BUCKET_NAME, 'Avatars', [], true, true, undefined, ['jpg', 'png', 'jpeg', 'gif', 'webp']);
                 }
 
                 const inputFile = InputFile.fromPath(avatarPath, filename);
@@ -294,14 +292,6 @@ async function processImportJob(jobId: string, mode: "merge" | "overwrite") {
                     translation: data.translation,
                     pos: data.pos,
                     definition: data.definition,
-                    collins: data.collins,
-                    oxford: data.oxford,
-                    tag: data.tag,
-                    bnc: data.bnc,
-                    frq: data.frq,
-                    exchange: data.exchange,
-                    audio: data.audio,
-                    detail: data.detail,
                 };
                 
                 const newWord = await admin.databases.createDocument(

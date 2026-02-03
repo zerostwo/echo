@@ -79,11 +79,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
 
     // Appwrite Storage
     // We need to get the file view URL or download URL
-    // Since we are proxying, we can use the download endpoint but we need to sign it or use admin key?
-    // Actually, Appwrite Node SDK doesn't have createSignedUrl like Supabase.
-    // But we can use getFileView or getFileDownload.
-    // However, those return buffers in Node SDK.
-    // We want to stream.
+    // Since we are proxying, we can use the download endpoint with admin API key.
+    // Appwrite Node SDK's getFileView/getFileDownload return buffers.
+    // We want to stream, so we construct the URL and proxy the request.
     
     // We can construct the URL manually and fetch it with the project ID/API Key.
     // Or use the client SDK method if available? No, we are on server.
