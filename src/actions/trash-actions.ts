@@ -17,6 +17,12 @@ import { permanentlyDeleteSentence, restoreSentence } from './sentence-actions';
 import { permanentlyDeleteWord, restoreWord } from './word-actions';
 import { permanentlyDeleteDictionary, restoreDictionary } from './dictionary-actions';
 import { revalidatePath } from 'next/cache';
+import { 
+    withCache,
+    generateCacheKey,
+    CACHE_PREFIXES,
+    invalidateTrashCache,
+} from '@/lib/cache';
 
 export interface TrashItem {
     id: string;
@@ -47,8 +53,17 @@ export async function getTrashItemsPaginated(
 
     const userId = session.user.id;
     const { databases } = await getAdminClient();
+    const cacheKey = generateCacheKey(CACHE_PREFIXES.TRASH_ITEMS, {
+        user_id: userId,
+        page,
+        pageSize,
+        search,
+        sortBy,
+        sortOrder,
+    });
 
-    try {
+    return withCache(cacheKey, 60, async () => {
+      try {
         // 1. Fetch Deleted Materials
         const materialQueries = [
             Query.equal('user_id', userId),
@@ -219,10 +234,11 @@ export async function getTrashItemsPaginated(
             totalPages: Math.ceil(total / pageSize),
         };
 
-    } catch (error) {
+      } catch (error) {
         console.error("Failed to fetch trash items:", error);
         return { error: "Failed to fetch trash items" };
-    }
+      }
+    });
 }
 
 export async function restoreItem(id: string, type: string) {
@@ -246,6 +262,9 @@ export async function restoreItem(id: string, type: string) {
         console.error("Restore error:", e);
         return { error: 'Failed to restore item' };
     }
+    finally {
+        await invalidateTrashCache(session.user.id);
+    }
 }
 
 export async function permanentlyDeleteItem(id: string, type: string) {
@@ -268,6 +287,9 @@ export async function permanentlyDeleteItem(id: string, type: string) {
     } catch (e) {
         console.error("Delete error:", e);
         return { error: 'Failed to delete item' };
+    }
+    finally {
+        await invalidateTrashCache(session.user.id);
     }
 }
 
@@ -296,6 +318,7 @@ export async function emptyTrash() {
         revalidatePath('/trash');
         revalidatePath('/materials');
         revalidatePath('/words');
+        await invalidateTrashCache(session.user.id);
         return { success: true };
     } catch (e) {
         return { error: 'Failed to empty trash' };

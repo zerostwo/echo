@@ -2,11 +2,9 @@ import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { getAdminClient, APPWRITE_DATABASE_ID, Query } from '@/lib/appwrite';
 import { 
-  getCached, 
-  setCached, 
+  withCache,
   CACHE_PREFIXES,
 } from '@/lib/cache';
-import { dedupe } from '@/lib/dedupe';
 import { withQueryLogging } from '@/lib/query-logger';
 import { chunkArray } from '@/lib/pagination';
 
@@ -73,20 +71,7 @@ export async function GET() {
   // Generate cache key
   const cacheKey = `${CACHE_PREFIXES.DASHBOARD_STATS}${userId}`;
   
-  // Check cache first
-  const cached = getCached<DashboardStats>(cacheKey);
-  if (cached) {
-    return NextResponse.json(cached);
-  }
-
-  // Use dedupe to prevent concurrent identical requests
-  const stats = await dedupe(`dashboard:stats:${userId}`, async () => {
-    // Double-check cache after acquiring dedupe lock
-    const cachedAfterLock = getCached<DashboardStats>(cacheKey);
-    if (cachedAfterLock) {
-      return cachedAfterLock;
-    }
-
+  const stats = await withCache(cacheKey, 60, async () => {
     return withQueryLogging('getDashboardStats', async () => {
       const admin = getAdminClient();
       const now = new Date();
@@ -161,6 +146,7 @@ export async function GET() {
         'user_word_statuses',
         [
             Query.equal('user_id', userId),
+            Query.isNull('deleted_at'),
             Query.limit(5000) 
         ]
     );
@@ -285,14 +271,15 @@ export async function GET() {
     // Vocab Snapshot - only count words in user's materials/dictionaries
     const vocabSnapshot = relevantWordStatuses.reduce(
       (acc: { new: number; learning: number; mastered: number }, ws: any) => {
-        if (ws.status === 'NEW') acc.new++;
-        else if (ws.status === 'LEARNING') acc.learning++;
-        else if (ws.status === 'MASTERED') acc.mastered++;
+        const normalizedStatus = !ws.status || ws.status === 'UNKNOWN' ? 'NEW' : ws.status;
+        if (normalizedStatus === 'NEW') acc.new++;
+        else if (normalizedStatus === 'LEARNING') acc.learning++;
+        else if (normalizedStatus === 'MASTERED') acc.mastered++;
         return acc;
       },
       { new: 0, learning: 0, mastered: 0 }
     );
-    const totalWords = relevantWordStatuses.length;
+    const totalWords = vocabSnapshot.new + vocabSnapshot.learning + vocabSnapshot.mastered;
 
     // Words Due Today - only count words in user's materials/dictionaries
     const wordsDueToday = relevantWordStatuses.filter((ws: any) => {
@@ -411,11 +398,8 @@ export async function GET() {
         lastSentence,
       };
 
-      // Cache for 30 seconds (dashboard stats change frequently)
-      setCached(cacheKey, resultStats, 30000);
-
       return resultStats;
-    }, { userId });
+    }, { user_id: userId });
   });
 
   return NextResponse.json(stats);

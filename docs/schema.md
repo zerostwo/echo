@@ -324,6 +324,7 @@ User-specific learning progress for each word (FSRS state).
 | `fsrs_last_review` | datetime | no | null | Last review timestamp |
 | `error_count` | integer | yes | 0 | Total errors in dictation |
 | `last_error_at` | datetime | no | null | Last error timestamp |
+| `deleted_at` | datetime | no | null | Soft delete timestamp |
 | `$createdAt` | datetime | auto | - | Creation timestamp |
 | `$updatedAt` | datetime | auto | - | Last update timestamp |
 
@@ -342,6 +343,7 @@ User-specific learning progress for each word (FSRS state).
 - `user_id` + `word_id` (unique)
 - `user_id` + `status`
 - `user_id` + `fsrs_due`
+- `user_id` + `deleted_at` (for trash queries)
 
 ---
 
@@ -415,6 +417,7 @@ User progress on sentence dictation practice.
 | `score` | integer | yes | - | Accuracy score (0-100) |
 | `attempts` | integer | yes | 1 | Number of attempts |
 | `duration` | integer | yes | 0 | Total practice time (seconds) |
+| `recording_file_id` | string | no | null | Appwrite Storage file ID for user recording |
 | `$createdAt` | datetime | auto | - | Creation timestamp |
 | `$updatedAt` | datetime | auto | - | Last update timestamp |
 
@@ -716,6 +719,17 @@ Stores user profile images.
 | Allowed Extensions | png, jpg, jpeg, gif, webp |
 | File Security | Public read |
 
+### recordings
+
+Stores user audio recordings for dictation practice.
+
+| Setting | Value |
+|---------|-------|
+| Bucket ID | `recordings` |
+| Max File Size | 52,428,800 bytes (50MB) |
+| Allowed Extensions | webm, mp3, wav, ogg |
+| File Security | Per-file (user read permission) |
+
 ---
 
 ## Collection IDs Reference
@@ -745,6 +759,7 @@ export const BUCKETS = {
   MATERIALS: 'materials',
   EXPORTS: 'exports',
   AVATARS: 'avatars',
+  RECORDINGS: 'recordings',
 } as const;
 ```
 
@@ -769,6 +784,7 @@ Collections using soft delete (`deleted_at` field):
 - sentences
 - words
 - dictionaries
+- user_word_statuses (for per-user trash functionality)
 
 Collections with hard delete:
 - word_occurrences (cascades with sentence)

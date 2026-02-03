@@ -14,15 +14,13 @@ import { createNotification } from './notification-actions';
 import { startOfDay } from 'date-fns';
 import os from 'os';
 import { 
-  getCached, 
-  setCached, 
+  withCache,
   generateCacheKey, 
   CACHE_PREFIXES,
   invalidateMaterialsCache,
   invalidateVocabCache,
   invalidateDashboardCache,
 } from '@/lib/cache';
-import { dedupe, generateDedupeKey } from '@/lib/dedupe';
 import { chunkArray, processBatchedParallel } from '@/lib/pagination';
 import { withQueryLogging } from '@/lib/query-logger';
 import { safeRevalidate, revalidateInBackground, revalidateMaterialPaths } from '@/lib/revalidate';
@@ -115,8 +113,8 @@ export async function registerUploadedMaterial(
         }
 
         // Invalidate cache
-        invalidateMaterialsCache(session.user.id);
-        invalidateDashboardCache(session.user.id);
+        await invalidateMaterialsCache(session.user.id);
+        await invalidateDashboardCache(session.user.id);
         
         revalidateMaterialPaths();
         return { success: true, materialId: material.$id };
@@ -274,8 +272,8 @@ export async function uploadMaterial(formData: FormData) {
     );
 
         // Invalidate cache
-        invalidateMaterialsCache(session.user.id);
-        invalidateDashboardCache(session.user.id);
+        await invalidateMaterialsCache(session.user.id);
+        await invalidateDashboardCache(session.user.id);
 
         revalidateMaterialPaths();
         return { success: true, materialId: material.$id };
@@ -309,9 +307,9 @@ export async function deleteMaterial(materialId: string) {
         );
 
         // Invalidate cache
-        invalidateMaterialsCache(session.user.id);
-        invalidateVocabCache(session.user.id);
-        invalidateDashboardCache(session.user.id);
+        await invalidateMaterialsCache(session.user.id);
+        await invalidateVocabCache(session.user.id);
+        await invalidateDashboardCache(session.user.id);
 
         revalidateMaterialPaths();
         return { success: true };
@@ -343,9 +341,9 @@ export async function restoreMaterial(materialId: string) {
         );
         
         // Invalidate cache
-        invalidateMaterialsCache(session.user.id);
-        invalidateVocabCache(session.user.id);
-        invalidateDashboardCache(session.user.id);
+        await invalidateMaterialsCache(session.user.id);
+        await invalidateVocabCache(session.user.id);
+        await invalidateDashboardCache(session.user.id);
         
         safeRevalidate(['/materials', '/trash', '/dashboard']);
         return { success: true };
@@ -395,7 +393,7 @@ async function processOrphanCleanupQueue() {
         }
 
         // Invalidate caches after cleanup
-        invalidateVocabCache(task.userId);
+        await invalidateVocabCache(task.userId);
     }
 
     isProcessingOrphanCleanup = false;
@@ -543,9 +541,9 @@ export async function permanentlyDeleteMaterial(materialId: string) {
         }
 
         // Invalidate caches
-        invalidateMaterialsCache(userId);
-        invalidateVocabCache(userId);
-        invalidateDashboardCache(userId);
+        await invalidateMaterialsCache(userId);
+        await invalidateVocabCache(userId);
+        await invalidateDashboardCache(userId);
 
         safeRevalidate(['/materials', '/trash', '/dashboard', '/words']);
         return { success: true };
@@ -569,7 +567,7 @@ export async function moveMaterial(materialId: string, newFolderId: string | nul
             { folder_id: newFolderId }
         );
         
-        invalidateMaterialsCache(session.user.id);
+        await invalidateMaterialsCache(session.user.id);
         safeRevalidate(['/materials']);
         return { success: true };
     } catch (e) {
@@ -594,7 +592,7 @@ export async function renameMaterial(materialId: string, newTitle: string) {
             { title: newTitle }
         );
 
-        invalidateMaterialsCache(session.user.id);
+        await invalidateMaterialsCache(session.user.id);
         safeRevalidate(['/materials']);
         return { success: true };
     } catch (e) {
@@ -930,7 +928,7 @@ export async function getMaterialsPaginated(
     const userId = session.user.id;
     const offset = (page - 1) * pageSize;
 
-    // Generate cache and dedupe keys
+    // Generate cache key
     const cacheKey = generateCacheKey(CACHE_PREFIXES.MATERIALS_PAGINATED, {
         user_id: userId,
         page,
@@ -939,30 +937,8 @@ export async function getMaterialsPaginated(
         sortBy,
         sortOrder
     });
-    
-    const dedupeKey = generateDedupeKey('getMaterialsPaginated', {
-        user_id: userId,
-        page,
-        pageSize,
-        filters,
-        sortBy,
-        sortOrder
-    });
 
-    // Try to get from cache first
-    const cached = getCached<PaginatedMaterialResult>(cacheKey);
-    if (cached) {
-        return cached;
-    }
-
-    // Use dedupe to prevent concurrent identical requests
-    return dedupe(dedupeKey, async () => {
-        // Double-check cache after acquiring dedupe lock
-        const cachedAfterLock = getCached<PaginatedMaterialResult>(cacheKey);
-        if (cachedAfterLock) {
-            return cachedAfterLock;
-        }
-
+    return withCache(cacheKey, 60, async () => {
         return withQueryLogging('getMaterialsPaginated', async () => {
             const admin = getAdminClient();
 
@@ -1017,7 +993,6 @@ export async function getMaterialsPaginated(
                     pageSize,
                     totalPages: Math.ceil((count || 0) / pageSize),
                 };
-                setCached(cacheKey, emptyResult, 60000);
                 return emptyResult;
             }
 
@@ -1088,6 +1063,34 @@ export async function getMaterialsPaginated(
                 }
             });
 
+            // Build a set of word IDs that are soft-deleted for this user
+            const deletedWordIds = new Set<string>();
+            const allWordIds = new Set<string>();
+            occurrences.forEach((o: any) => {
+                allWordIds.add(o.word_id);
+            });
+
+            if (allWordIds.size > 0) {
+                const wordIdList = Array.from(allWordIds);
+                for (let i = 0; i < wordIdList.length; i += 50) {
+                    const batch = wordIdList.slice(i, i + 50);
+                    const { documents: statuses } = await admin.databases.listDocuments(
+                        APPWRITE_DATABASE_ID,
+                        'user_word_statuses',
+                        [
+                            Query.equal('user_id', userId),
+                            Query.equal('word_id', batch),
+                            Query.limit(100)
+                        ]
+                    );
+                    statuses.forEach((s: any) => {
+                        if (s.deleted_at) {
+                            deletedWordIds.add(s.word_id);
+                        }
+                    });
+                }
+            }
+
             // Process materials to calculate stats
             const processedMaterials = materials.map((m: any) => {
                 const materialSentenceIds = sentencesByMaterial.get(m.$id) || [];
@@ -1110,7 +1113,11 @@ export async function getMaterialsPaginated(
                     
                     const wordIds = occurrencesBySentence.get(sentenceId);
                     if (wordIds) {
-                        wordIds.forEach(wid => uniqueWordIds.add(wid));
+                        wordIds.forEach(wid => {
+                            if (!deletedWordIds.has(wid)) {
+                                uniqueWordIds.add(wid);
+                            }
+                        });
                     }
                 });
 
@@ -1140,9 +1147,6 @@ export async function getMaterialsPaginated(
                 pageSize,
                 totalPages,
             };
-
-            // Cache the result for 2 minutes
-            setCached(cacheKey, result, 120000);
 
             return result;
         }, { user_id: userId, page, pageSize });

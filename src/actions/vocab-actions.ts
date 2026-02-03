@@ -7,15 +7,14 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
 import { startOfDay } from 'date-fns';
+import { createHash } from 'crypto';
 import { 
-  getCached, 
-  setCached, 
+  withCache,
   generateCacheKey, 
   CACHE_PREFIXES,
   invalidateVocabCache,
   invalidateDashboardCache,
 } from '@/lib/cache';
-import { dedupe, generateDedupeKey } from '@/lib/dedupe';
 import { chunkArray } from '@/lib/pagination';
 import { withQueryLogging } from '@/lib/query-logger';
 import { safeRevalidate, revalidateInBackground, revalidateVocabPaths } from '@/lib/revalidate';
@@ -129,32 +128,38 @@ export async function queryDictionary(wordList: string[]) {
 
     const scriptPath = path.join(process.cwd(), 'scripts', 'query_dict.py');
     const pythonCmd = process.env.PYTHON_CMD || 'python3';
-    
-    console.log(`[queryDictionary] Processing ${wordList.length} words. Cmd: ${pythonCmd}, Script: ${scriptPath}`);
-    
-    try {
-        // Increase buffer for large JSON output
-        // Use execFile to avoid shell escaping issues
-        console.log(`[queryDictionary] Executing command...`);
-        const { stdout, stderr } = await execFileAsync(pythonCmd, [scriptPath, ...wordList], { maxBuffer: 1024 * 1024 * 10 });
-        
-        if (stderr && stderr.trim().length > 0) {
-            // Some warnings might be printed to stderr, log them but don't fail if stdout is present
-            console.warn('[queryDictionary] stderr:', stderr);
-        }
 
-        console.log(`[queryDictionary] Command finished. Stdout length: ${stdout.length}`);
-        
-        const result = JSON.parse(stdout);
-        if (result.error) {
-             console.error("[queryDictionary] Script returned error:", result.error);
-             return {};
+    const normalizedWords = Array.from(new Set(wordList.map(w => w.toLowerCase()))).sort();
+    const hash = createHash('sha1').update(JSON.stringify(normalizedWords)).digest('hex');
+    const cacheKey = `${CACHE_PREFIXES.DICT_LOOKUP}${hash}`;
+
+    return withCache(cacheKey, 60 * 60, async () => {
+        console.log(`[queryDictionary] Processing ${wordList.length} words. Cmd: ${pythonCmd}, Script: ${scriptPath}`);
+
+        try {
+            // Increase buffer for large JSON output
+            // Use execFile to avoid shell escaping issues
+            console.log(`[queryDictionary] Executing command...`);
+            const { stdout, stderr } = await execFileAsync(pythonCmd, [scriptPath, ...wordList], { maxBuffer: 1024 * 1024 * 10 });
+            
+            if (stderr && stderr.trim().length > 0) {
+                // Some warnings might be printed to stderr, log them but don't fail if stdout is present
+                console.warn('[queryDictionary] stderr:', stderr);
+            }
+
+            console.log(`[queryDictionary] Command finished. Stdout length: ${stdout.length}`);
+            
+            const result = JSON.parse(stdout);
+            if (result.error) {
+                 console.error("[queryDictionary] Script returned error:", result.error);
+                 return {};
+            }
+            return result;
+        } catch (e) {
+            console.error("[queryDictionary] Failed:", e);
+            return {};
         }
-        return result;
-    } catch (e) {
-        console.error("[queryDictionary] Failed:", e);
-        return {};
-    }
+    });
 }
 
 /**
@@ -246,6 +251,7 @@ export async function extractVocabulary(materialId: string) {
     // Build lemma map - include words without dictionary data
     const lemmaMap = new Map<string, any>(); // lemmaText -> dict data (may be null for unknown words)
     const rawToLemma = new Map<string, string>(); // raw word -> lemma text
+    let wordsWithoutDictData = 0;
     
     for (const raw of rawWordList) {
         const data = dictResults[raw];
@@ -259,13 +265,14 @@ export async function extractVocabulary(materialId: string) {
             // This ensures all words from the material are tracked
             if (!lemmaMap.has(raw)) {
                 lemmaMap.set(raw, null); // null indicates no dictionary data
+                wordsWithoutDictData++;
             }
             rawToLemma.set(raw, raw);
         }
     }
     
     const lemmaTexts = Array.from(lemmaMap.keys());
-    console.log(`[extractVocabulary] Found ${lemmaTexts.length} unique lemmas (${lemmaMap.size - Object.keys(dictResults).length} without dictionary data).`);
+    console.log(`[extractVocabulary] Found ${lemmaTexts.length} unique lemmas (${wordsWithoutDictData} without dictionary data).`);
 
     // 4. Check which lemmas already exist in database
     const existingWords = new Map<string, string>(); // text -> id
@@ -307,6 +314,14 @@ export async function extractVocabulary(materialId: string) {
             translation: d?.translation || null,
             pos: d?.pos || null,
             definition: d?.definition || null,
+            collins: d?.collins ? Number(d.collins) : null,
+            oxford: d?.oxford ? Number(d.oxford) : null,
+            tag: d?.tag || null,
+            bnc: d?.bnc ? Number(d.bnc) : null,
+            frq: d?.frq ? Number(d.frq) : null,
+            exchange: d?.exchange || null,
+            audio: d?.audio || null,
+            detail: d?.detail ? JSON.stringify(d.detail) : null,
             deleted_at: null,
         });
     }
@@ -344,10 +359,11 @@ export async function extractVocabulary(materialId: string) {
 
     // 6. Create/Update UserWordStatus for this user
     let newWordsCount = 0;
+    let restoredWordsCount = 0;
     const wordIdsToCheck = Array.from(lemmaToId.values());
     
-    // Batch check existing statuses
-    const existingStatuses = new Set<string>(); 
+    // Batch check existing statuses (including soft-deleted ones)
+    const existingStatuses = new Map<string, { id: string; deleted_at: string | null }>(); 
     
     if (wordIdsToCheck.length > 0) {
         for (let i = 0; i < wordIdsToCheck.length; i += 50) {
@@ -357,28 +373,38 @@ export async function extractVocabulary(materialId: string) {
                 'user_word_statuses',
                 [
                     Query.equal('user_id', session.user.id),
-                    Query.equal('word_id', batch)
+                    Query.equal('word_id', batch),
+                    Query.limit(100)
                 ]
             );
             
             for (const s of statusBatch) {
-                existingStatuses.add(s.word_id);
+                existingStatuses.set(s.word_id, { id: s.$id, deleted_at: s.deleted_at });
             }
         }
     }
     
-    // Create statuses for words that don't have one
+    // Create statuses for words that don't have one, restore soft-deleted ones
     const statusesToInsert = [];
+    const statusesToRestore: string[] = [];
+    
     for (const wordId of wordIdsToCheck) {
-        if (!existingStatuses.has(wordId)) {
+        const existingStatus = existingStatuses.get(wordId);
+        if (!existingStatus) {
+            // No existing status - create new one
             statusesToInsert.push({
                 user_id: session.user.id,
                 word_id: wordId,
                 status: "NEW"
             });
+        } else if (existingStatus.deleted_at) {
+            // Status exists but was soft-deleted - restore it
+            statusesToRestore.push(existingStatus.id);
         }
+        // If status exists and is not deleted, skip it
     }
     
+    // Insert new statuses
     if (statusesToInsert.length > 0) {
         for (const status of statusesToInsert) {
             try {
@@ -395,7 +421,24 @@ export async function extractVocabulary(materialId: string) {
         newWordsCount = statusesToInsert.length;
     }
     
-    console.log(`[extractVocabulary] Created ${newWordsCount} new word statuses for user.`);
+    // Restore soft-deleted statuses
+    if (statusesToRestore.length > 0) {
+        for (const statusId of statusesToRestore) {
+            try {
+                await admin.databases.updateDocument(
+                    APPWRITE_DATABASE_ID,
+                    'user_word_statuses',
+                    statusId,
+                    { deleted_at: null }
+                );
+            } catch (e: any) {
+                console.error("Error restoring status:", e);
+            }
+        }
+        restoredWordsCount = statusesToRestore.length;
+    }
+    
+    console.log(`[extractVocabulary] Created ${newWordsCount} new word statuses, restored ${restoredWordsCount} from trash.`);
 
     // 7. Create Word Occurrences
     const occurrencesData = [];
@@ -418,7 +461,7 @@ export async function extractVocabulary(materialId: string) {
     if (occurrencesData.length > 0) {
         const sentenceIds = sentences.map((s: any) => s.$id);
         
-        // Delete existing occurrences
+        // Delete existing occurrences (throttled to avoid Appwrite 500s)
         for (let i = 0; i < sentenceIds.length; i += 50) {
             const batchIds = sentenceIds.slice(i, i + 50);
             const { documents: occs } = await admin.databases.listDocuments(
@@ -429,8 +472,22 @@ export async function extractVocabulary(materialId: string) {
                     Query.limit(5000)
                 ]
             );
-            
-            await Promise.all(occs.map(o => admin.databases.deleteDocument(APPWRITE_DATABASE_ID, 'word_occurrences', o.$id)));
+
+            // Delete in small chunks to avoid overloading the API
+            for (let j = 0; j < occs.length; j += 20) {
+                const chunk = occs.slice(j, j + 20);
+                for (const occ of chunk) {
+                    try {
+                        await admin.databases.deleteDocument(
+                            APPWRITE_DATABASE_ID,
+                            'word_occurrences',
+                            occ.$id
+                        );
+                    } catch (e) {
+                        console.warn('[extractVocabulary] Failed to delete occurrence:', occ.$id);
+                    }
+                }
+            }
         }
 
         // Insert new occurrences
@@ -446,8 +503,9 @@ export async function extractVocabulary(materialId: string) {
     // Just log the extraction time instead
     console.log(`[extractVocabulary] Extraction completed in ${totalDuration}s`);
 
-    // 8. Update Daily Stats
-    if (newWordsCount > 0) {
+    // 8. Update Daily Stats (include both new and restored words)
+    const totalAddedWords = newWordsCount + restoredWordsCount;
+    if (totalAddedWords > 0) {
         const today = startOfDay(new Date()).toISOString();
         
         const { documents: existingStats } = await admin.databases.listDocuments(
@@ -465,7 +523,7 @@ export async function extractVocabulary(materialId: string) {
                 APPWRITE_DATABASE_ID,
                 'daily_study_stats',
                 existingStat.$id,
-                { words_added: existingStat.words_added + newWordsCount }
+                { words_added: existingStat.words_added + totalAddedWords }
             );
         } else {
             await admin.databases.createDocument(
@@ -475,14 +533,15 @@ export async function extractVocabulary(materialId: string) {
                 {
                     user_id: session.user.id,
                     date: today,
-                    words_added: newWordsCount
+                    words_added: totalAddedWords
                 }
             );
         }
     }
 
-    // Invalidate vocab cache after extraction
+    // Invalidate caches after extraction
     await invalidateVocabCache(session.user.id);
+    await invalidateDashboardCache(session.user.id);
 
     await revalidateInBackground([
         '/words',
@@ -491,12 +550,13 @@ export async function extractVocabulary(materialId: string) {
     ]);
 
     console.log(`[extractVocabulary] Completed in ${totalDuration.toFixed(2)}s. ` +
-        `Processed ${lemmaToId.size} words, ${newWordsCount} new for user.`);
+        `Processed ${lemmaToId.size} words, ${newWordsCount} new, ${restoredWordsCount} restored for user.`);
     
     return { 
         success: true, 
         count: lemmaToId.size,
         newWords: newWordsCount,
+        restoredWords: restoredWordsCount,
         reusedWords: lemmaToId.size - newLemmasToInsert.length
     };
 }
@@ -643,7 +703,7 @@ export async function getVocabPaginated(
     const userId = session.user.id;
     const offset = (page - 1) * pageSize;
 
-    // Generate cache and dedupe keys
+    // Generate cache key
     const cacheKey = generateCacheKey(CACHE_PREFIXES.VOCAB_PAGINATED, {
         user_id: userId,
         page,
@@ -653,29 +713,7 @@ export async function getVocabPaginated(
         sortOrder
     });
 
-    const dedupeKey = generateDedupeKey('getVocabPaginated', {
-        user_id: userId,
-        page,
-        pageSize,
-        filters,
-        sortBy,
-        sortOrder
-    });
-
-    // Try to get from cache first
-    const cached = getCached<PaginatedVocabResult>(cacheKey);
-    if (cached) {
-        return cached;
-    }
-
-    // Use dedupe to prevent concurrent identical requests
-    return dedupe(dedupeKey, async () => {
-        // Double-check cache after acquiring dedupe lock
-        const cachedAfterLock = getCached<PaginatedVocabResult>(cacheKey);
-        if (cachedAfterLock) {
-            return cachedAfterLock;
-        }
-
+    return withCache(cacheKey, 60, async () => {
         return withQueryLogging('getVocabPaginated', async () => {
             const admin = getAdminClient();
 
@@ -821,7 +859,6 @@ export async function getVocabPaginated(
                     totalPages: 0,
                     stats: { totalWords: 0, masteredWords: 0, learningWords: 0, newWords: 0, newWords24h: 0, masteredWords24h: 0, dueToday: 0, overdueWords: 0, averageRetention: 0 }
                 };
-                setCached(cacheKey, emptyResult, 60000);
                 return emptyResult;
             }
 
@@ -849,7 +886,6 @@ export async function getVocabPaginated(
                     [
                         Query.equal('user_id', userId),
                         Query.equal('word_id', batchWordIds),
-                        Query.isNull('deleted_at'), // Exclude soft-deleted words
                         Query.limit(100) // Must specify limit, Appwrite default is only 25
                     ]
                 )
@@ -868,6 +904,8 @@ export async function getVocabPaginated(
         allWords.forEach((word) => {
             const freqData = wordFrequencyMap.get(word.$id);
             const status = statusMap.get(word.$id);
+            if (status?.deleted_at) return;
+            const normalizedStatus = !status?.status || status.status === 'UNKNOWN' ? 'NEW' : status.status;
             
             mergedWords.push({
                 id: word.$id,
@@ -886,7 +924,7 @@ export async function getVocabPaginated(
                 detail: word.detail,
                 frequency: freqData?.frequency || 0,
                 occurrences: (freqData?.sentenceIds || []).map(sid => ({ sentence_id: sid })),
-                status: status?.status ?? 'NEW',
+                status: normalizedStatus,
                 statusCreatedAt: status?.$createdAt,
                 statusUpdatedAt: status?.$updatedAt,
                 // FSRS learning progress fields
@@ -1084,9 +1122,6 @@ export async function getVocabPaginated(
                     averageRetention: Math.round(avgRetention),
                 }
             };
-
-            // Cache the result for 2 minutes (120000ms)
-            setCached(cacheKey, result, 120000);
 
             return result;
         }, { user_id: userId, page, pageSize });

@@ -197,9 +197,6 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
   // Track if initial data has been loaded to avoid double fetches
   const initializedRef = useRef(false)
   
-  // Track last fetch params to avoid duplicate requests
-  const lastFetchParamsRef = useRef<string>('')
-
   // Initialize data from initialData on first render only
   useEffect(() => {
     if (!initializedRef.current) {
@@ -241,23 +238,6 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
   }, [materialId, initialData])
 
   const fetchData = useCallback(async (newPage?: number, newPageSize?: number, newSortBy?: string, newSortOrder?: 'asc' | 'desc') => {
-    // Generate params key to detect duplicate requests
-    const paramsKey = JSON.stringify({
-      page: newPage ?? page,
-      pageSize: newPageSize ?? pageSize,
-      sortBy: newSortBy ?? sortBy,
-      sortOrder: newSortOrder ?? sortOrder,
-      search: debouncedSearch,
-      filters,
-      showMastered: settings?.vocabShowMastered
-    })
-    
-    // Skip if this is a duplicate request
-    if (paramsKey === lastFetchParamsRef.current) {
-      return
-    }
-    lastFetchParamsRef.current = paramsKey
-    
     setLoading(true)
     try {
       // Determine which material IDs to filter by
@@ -322,14 +302,23 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
     fetchData(1) // Reset to page 1 when filters change
   }, [debouncedSearch, filters, settings?.vocabShowMastered, fetchData])
 
+  // Fetch when pagination or sort changes (after initial load)
+  const pagingChangeRef = useRef(false)
+  useEffect(() => {
+    if (!pagingChangeRef.current) {
+      pagingChangeRef.current = true
+      return
+    }
+    fetchData(page, pageSize, sortBy, sortOrder)
+  }, [page, pageSize, sortBy, sortOrder, fetchData])
+
   const handlePageChange = (newPage: number) => {
     setPage(newPage)
-    fetchData(newPage)
   }
 
   const handlePageSizeChange = async (newSize: number) => {
     setPageSize(newSize)
-    fetchData(1, newSize)
+    setPage(1)
     // Persist page size preference
     await updateSettings({ vocabPageSize: newSize })
   }
@@ -338,7 +327,7 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
   const handleSort = async (column: string, order: 'asc' | 'desc') => {
     setSortBy(column)
     setSortOrder(order)
-    fetchData(1, undefined, column, order)
+    setPage(1)
     // Persist sort preference
     await updateSettings({ vocabSortBy: column, vocabSortOrder: order })
   }

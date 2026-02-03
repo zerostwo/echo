@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Folder, FileAudio, MoreVertical, FolderPlus, Pencil, Trash, ChevronLeft, Upload, Grid, List, RefreshCw } from 'lucide-react';
+import { Folder, FileAudio, MoreVertical, FolderPlus, Pencil, Trash, ChevronLeft, Upload, Grid, List, RefreshCw, BookOpen } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import {
@@ -33,6 +33,7 @@ import { Input } from '@/components/ui/input';
 import { UploadMaterialDialog } from './upload-dialog';
 import { createFolder, deleteFolder, renameFolder } from '@/actions/folder-actions';
 import { deleteMaterial, renameMaterial, uploadMaterial, transcribeMaterial } from '@/actions/material-actions';
+import { extractVocabulary } from '@/actions/vocab-actions';
 import { moveMaterial } from '@/actions/move-actions';
 import { toast } from 'sonner';
 import { DndContext, useDraggable, useDroppable, DragOverlay, MouseSensor, TouchSensor, useSensor, useSensors } from '@dnd-kit/core';
@@ -194,6 +195,16 @@ export function MaterialBrowser({ folders, materials, currentFolderId, parentFol
           toast.error(res.error, { id: toastId });
       } else {
           toast.success('Transcription started', { id: toastId });
+      }
+  }
+
+  async function handleReextractVocabulary(id: string) {
+      const toastId = toast.loading('Starting vocabulary extraction...');
+      const res = await extractVocabulary(id);
+      if (res?.error) {
+          toast.error(res.error, { id: toastId });
+      } else {
+          toast.success('Vocabulary extraction started', { id: toastId });
       }
   }
 
@@ -360,7 +371,13 @@ export function MaterialBrowser({ folders, materials, currentFolderId, parentFol
                                                 e.stopPropagation();
                                                 handleRetranscribe(material.id);
                                             }}>
-                                                <RefreshCw className="mr-2 h-4 w-4" /> Regenerate Transcript
+                                                <RefreshCw className="mr-2 h-4 w-4" /> Re-transcribe
+                                            </DropdownMenuItem>
+                                            <DropdownMenuItem onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleReextractVocabulary(material.id);
+                                            }}>
+                                                <BookOpen className="mr-2 h-4 w-4" /> Re-extract Vocabulary
                                             </DropdownMenuItem>
                                             <DropdownMenuItem onClick={(e) => {
                                                 e.stopPropagation();

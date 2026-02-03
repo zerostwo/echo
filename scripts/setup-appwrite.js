@@ -106,8 +106,14 @@ const COLLECTIONS = [
             { key: 'pos', type: 'string', size: 50, required: false },
             { key: 'translation', type: 'string', size: 1000, required: false },
             { key: 'definition', type: 'string', size: 5000, required: false },
+            { key: 'collins', type: 'integer', required: false },
+            { key: 'oxford', type: 'integer', required: false },
             { key: 'tag', type: 'string', size: 255, required: false },
+            { key: 'bnc', type: 'integer', required: false },
+            { key: 'frq', type: 'integer', required: false },
             { key: 'exchange', type: 'string', size: 1000, required: false },
+            { key: 'audio', type: 'string', size: 1000, required: false },
+            { key: 'detail', type: 'string', size: 5000, required: false },
             { key: 'deleted_at', type: 'datetime', required: false }
         ],
         indexes: [
@@ -145,12 +151,14 @@ const COLLECTIONS = [
             { key: 'fsrs_state', type: 'integer', required: false, default: 0 },
             { key: 'fsrs_last_review', type: 'datetime', required: false },
             { key: 'error_count', type: 'integer', required: false, default: 0 },
-            { key: 'last_error_at', type: 'datetime', required: false }
+            { key: 'last_error_at', type: 'datetime', required: false },
+            { key: 'deleted_at', type: 'datetime', required: false } // For soft delete
         ],
         indexes: [
             { key: 'user_word_idx', type: 'key', attributes: ['user_id', 'word_id'] }, // Should be unique logically
             { key: 'user_status_idx', type: 'key', attributes: ['user_id', 'status'] },
-            { key: 'user_due_idx', type: 'key', attributes: ['user_id', 'fsrs_due'] }
+            { key: 'user_due_idx', type: 'key', attributes: ['user_id', 'fsrs_due'] },
+            { key: 'user_deleted_idx', type: 'key', attributes: ['user_id', 'deleted_at'] } // For trash queries
         ]
     },
     {
@@ -161,7 +169,8 @@ const COLLECTIONS = [
             { key: 'sentence_id', type: 'string', size: 255, required: true },
             { key: 'score', type: 'integer', required: true },
             { key: 'attempts', type: 'integer', required: false, default: 1 },
-            { key: 'duration', type: 'integer', required: false, default: 0 }
+            { key: 'duration', type: 'integer', required: false, default: 0 },
+            { key: 'recording_file_id', type: 'string', size: 255, required: false } // For user recordings
         ],
         indexes: [
             { key: 'user_sentence_idx', type: 'key', attributes: ['user_id', 'sentence_id'] }
@@ -256,13 +265,46 @@ const COLLECTIONS = [
             { key: 'word_idx', type: 'key', attributes: ['word_id'] },
             { key: 'dict_word_idx', type: 'key', attributes: ['dictionary_id', 'word_id'] }
         ]
+    },
+    {
+        id: 'word_relations',
+        name: 'Word Relations',
+        attributes: [
+            { key: 'word_id', type: 'string', size: 255, required: true },
+            { key: 'related_word_id', type: 'string', size: 255, required: false },
+            { key: 'custom_text', type: 'string', size: 255, required: false },
+            { key: 'relation_type', type: 'string', size: 50, required: true }
+        ],
+        indexes: [
+            { key: 'word_idx', type: 'key', attributes: ['word_id'] },
+            { key: 'related_word_idx', type: 'key', attributes: ['related_word_id'] }
+        ]
+    },
+    {
+        id: 'word_reviews',
+        name: 'Word Reviews',
+        attributes: [
+            { key: 'user_word_status_id', type: 'string', size: 255, required: true },
+            { key: 'rating', type: 'integer', required: true },
+            { key: 'mode', type: 'string', size: 50, required: true },
+            { key: 'response_time_ms', type: 'integer', required: true },
+            { key: 'was_correct', type: 'boolean', required: true },
+            { key: 'error_count', type: 'integer', required: false, default: 0 },
+            { key: 'new_stability', type: 'double', required: false },
+            { key: 'new_difficulty', type: 'double', required: false },
+            { key: 'new_due', type: 'datetime', required: false }
+        ],
+        indexes: [
+            { key: 'status_idx', type: 'key', attributes: ['user_word_status_id'] }
+        ]
     }
 ];
 
 const BUCKETS = [
     { id: 'materials', name: 'Materials', fileSecurity: true },
     { id: 'avatars', name: 'Avatars', fileSecurity: false }, // Public avatars usually
-    { id: 'exports', name: 'Exports', fileSecurity: true }
+    { id: 'exports', name: 'Exports', fileSecurity: true },
+    { id: 'recordings', name: 'User Recordings', fileSecurity: true } // For user audio recordings
 ];
 
 async function setup() {

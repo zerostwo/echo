@@ -4,7 +4,7 @@ import { auth } from '@/auth';
 import { getAdminClient, APPWRITE_DATABASE_ID, Query } from '@/lib/appwrite';
 import { ID } from 'node-appwrite';
 import { revalidatePath } from 'next/cache';
-import { invalidateVocabCache } from '@/lib/redis';
+import { invalidateVocabCache } from '@/lib/cache';
 import { queryDictionary } from '@/actions/vocab-actions';
 
 /**

@@ -7,6 +7,13 @@ import { revalidatePath } from "next/cache"
 import { lookupWordByText } from "@/actions/word-actions"
 import { VocabFilters } from '@/actions/vocab-actions'
 import { randomUUID } from 'crypto'
+import { 
+  withCache,
+  generateCacheKey,
+  CACHE_PREFIXES,
+  invalidateDictionaryCache,
+  invalidateVocabCache,
+} from '@/lib/cache'
 
 export async function createDictionaryFromFilter(name: string, description: string, filters: VocabFilters) {
   const session = await auth()
@@ -213,6 +220,8 @@ export async function createDictionaryFromFilter(name: string, description: stri
   }
 
   revalidatePath("/dictionaries")
+  await invalidateDictionaryCache(userId)
+  await invalidateVocabCache(userId)
   return { ...dictionary, id: dictionary.$id }
 }
 
@@ -354,6 +363,8 @@ export async function addWordToDictionaryByText(dictionaryId: string, text: stri
   }
 
   revalidatePath(`/dictionaries/${dictionaryId}`)
+  await invalidateDictionaryCache(session.user.id)
+  await invalidateVocabCache(session.user.id)
   return { success: true }
 }
 
@@ -385,6 +396,8 @@ export async function createDictionary(data: {
 
   revalidatePath("/vocab")
   revalidatePath("/dictionaries")
+  await invalidateDictionaryCache(session.user.id)
+  await invalidateVocabCache(session.user.id)
   return { ...dictionary, id: dictionary.$id }
 }
 
@@ -394,16 +407,26 @@ export async function getDictionaries() {
     throw new Error("Unauthorized")
   }
   const admin = getAdminClient();
+  const cacheKey = generateCacheKey(CACHE_PREFIXES.DICTIONARIES_PAGINATED, {
+      user_id: session.user.id,
+      page: 1,
+      pageSize: 1000,
+      filters: { search: '' },
+      sortBy: 'createdAt',
+      sortOrder: 'desc',
+      scope: 'all',
+  });
 
-  const { documents: dictionaries } = await admin.databases.listDocuments(
-      APPWRITE_DATABASE_ID,
-      'dictionaries',
-      [
-          Query.equal('user_id', session.user.id),
-          Query.isNull('deleted_at'),
-          Query.orderDesc('created_at')
-      ]
-  );
+  return withCache(cacheKey, 60, async () => {
+    const { documents: dictionaries } = await admin.databases.listDocuments(
+        APPWRITE_DATABASE_ID,
+        'dictionaries',
+        [
+            Query.equal('user_id', session.user.id),
+            Query.isNull('deleted_at'),
+            Query.orderDesc('created_at')
+        ]
+    );
 
   // Fetch stats
   // This is heavy. We need words for each dictionary.
@@ -466,7 +489,8 @@ export async function getDictionaries() {
       });
   }
 
-  return result;
+    return result;
+  });
 }
 
 export async function getDictionary(id: string) {
@@ -571,6 +595,8 @@ export async function addWordsToDictionary(dictionaryId: string, wordIds: string
   }
 
   revalidatePath(`/dictionaries/${dictionaryId}`)
+  await invalidateDictionaryCache(session.user.id)
+  await invalidateVocabCache(session.user.id)
   return { success: true }
 }
 
@@ -605,6 +631,8 @@ export async function removeWordsFromDictionary(dictionaryId: string, wordIds: s
   }
 
   revalidatePath(`/dictionaries/${dictionaryId}`)
+  await invalidateDictionaryCache(session.user.id)
+  await invalidateVocabCache(session.user.id)
   return { success: true }
 }
 
@@ -631,6 +659,8 @@ export async function deleteDictionary(id: string) {
 
   revalidatePath("/vocab")
   revalidatePath("/dictionaries")
+  await invalidateDictionaryCache(session.user.id)
+  await invalidateVocabCache(session.user.id)
   return { success: true }
 }
 
@@ -658,6 +688,8 @@ export async function restoreDictionary(id: string) {
   revalidatePath("/vocab")
   revalidatePath("/dictionaries")
   revalidatePath("/trash")
+  await invalidateDictionaryCache(session.user.id)
+  await invalidateVocabCache(session.user.id)
   return { success: true }
 }
 
@@ -702,6 +734,8 @@ export async function permanentlyDeleteDictionary(id: string) {
   }
 
   revalidatePath("/trash")
+  await invalidateDictionaryCache(session.user.id)
+  await invalidateVocabCache(session.user.id)
   return { success: true }
 }
 
@@ -722,14 +756,15 @@ export async function updateDictionary(id: string, data: { name?: string; descri
           id,
           data
       );
+      revalidatePath("/vocab")
+      revalidatePath("/dictionaries")
+      revalidatePath(`/dictionaries/${id}`)
+      await invalidateDictionaryCache(session.user.id)
+      await invalidateVocabCache(session.user.id)
       return { ...updated, id: updated.$id };
   } catch (e) {
       throw new Error("Dictionary not found");
   }
-
-  revalidatePath("/vocab")
-  revalidatePath("/dictionaries")
-  revalidatePath(`/dictionaries/${id}`)
 }
 
 export interface DictionaryFilters {
@@ -758,8 +793,17 @@ export async function getDictionariesPaginated(
     const admin = getAdminClient();
 
     const offset = (page - 1) * pageSize;
+    const cacheKey = generateCacheKey(CACHE_PREFIXES.DICTIONARIES_PAGINATED, {
+        user_id: session.user.id,
+        page,
+        pageSize,
+        filters,
+        sortBy,
+        sortOrder,
+    });
 
-    try {
+    return withCache(cacheKey, 60, async () => {
+      try {
         const queries = [
             Query.equal('user_id', session.user.id),
             Query.isNull('deleted_at')
@@ -854,8 +898,9 @@ export async function getDictionariesPaginated(
             totalPages: Math.ceil(total / pageSize),
         };
 
-    } catch (error) {
+      } catch (error) {
         console.error("Failed to fetch dictionaries:", error);
         return { error: "Failed to fetch dictionaries" };
-    }
+      }
+    });
 }
