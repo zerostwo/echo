@@ -12,7 +12,8 @@ import {
     USER_WORD_STATUSES_COLLECTION_ID,
     DAILY_STUDY_STATS_COLLECTION_ID
 } from '@/lib/appwrite_client';
-import { ID, Query } from 'node-appwrite';
+import { ID, Query, Permission, Role } from 'node-appwrite';
+import { InputFile } from 'node-appwrite/file';
 import * as Diff from 'diff';
 import { revalidatePath } from 'next/cache';
 import { startOfDay } from 'date-fns';
@@ -431,4 +432,222 @@ async function updateWordStatusOnDictationSuccess(
     );
   }
   // If no existing status, don't create one - user needs to explicitly add words to vocabulary
+}
+
+// ============================================================================
+// Recording Management
+// ============================================================================
+
+const RECORDINGS_BUCKET = 'recordings';
+
+/**
+ * Ensure the recordings bucket exists
+ */
+async function ensureRecordingsBucket() {
+  const admin = getAdminClient();
+  
+  try {
+    await admin.storage.getBucket(RECORDINGS_BUCKET);
+    return { success: true };
+  } catch (error: any) {
+    if (error.code !== 404) {
+      console.error(`Failed to check recordings bucket:`, error);
+      return { error: 'Failed to check recordings bucket' };
+    }
+  }
+
+  // Bucket doesn't exist, create it
+  try {
+    await admin.storage.createBucket(
+      RECORDINGS_BUCKET,
+      'User Recordings',
+      [], // permissions
+      true, // fileSecurity
+      true, // enabled
+      52428800 // max file size (50MB)
+    );
+    return { success: true };
+  } catch (createError) {
+    console.error(`Failed to create recordings bucket:`, createError);
+    return { error: 'Failed to create recordings bucket' };
+  }
+}
+
+/**
+ * Save a user's recording for a sentence
+ * Replaces any existing recording for this user+sentence
+ */
+export async function saveRecording(sentenceId: string, formData: FormData) {
+  const session = await auth();
+  if (!session?.user?.id) return { error: 'Unauthorized' };
+
+  const admin = getAdminClient();
+  const userId = session.user.id;
+
+  try {
+    // Ensure bucket exists
+    const bucketCheck = await ensureRecordingsBucket();
+    if (bucketCheck.error) return { error: bucketCheck.error };
+
+    // Get the audio file from form data
+    const audioFile = formData.get('audio') as File;
+    if (!audioFile) return { error: 'No audio file provided' };
+
+    // Get or create practice_progress record
+    const { documents: existingProgress } = await admin.databases.listDocuments(
+      DATABASE_ID,
+      PRACTICE_PROGRESS_COLLECTION_ID,
+      [
+        Query.equal('user_id', userId),
+        Query.equal('sentence_id', sentenceId)
+      ]
+    );
+
+    // If there's an existing recording, delete it first
+    if (existingProgress.length > 0 && existingProgress[0].recording_file_id) {
+      try {
+        await admin.storage.deleteFile(RECORDINGS_BUCKET, existingProgress[0].recording_file_id);
+      } catch (e) {
+        // Ignore deletion errors (file might already be gone)
+        console.warn('Failed to delete old recording:', e);
+      }
+    }
+
+    // Generate unique file ID
+    const fileId = ID.unique();
+    const fileName = `${userId}_${sentenceId}_${Date.now()}.webm`;
+
+    // Convert File to buffer
+    const buffer = Buffer.from(await audioFile.arrayBuffer());
+
+    // Upload file to storage with user permission
+    await admin.storage.createFile(
+      RECORDINGS_BUCKET,
+      fileId,
+      InputFile.fromBuffer(buffer, fileName),
+      [Permission.read(Role.user(userId))]
+    );
+
+    // Update or create practice_progress with recording file ID
+    if (existingProgress.length > 0) {
+      await admin.databases.updateDocument(
+        DATABASE_ID,
+        PRACTICE_PROGRESS_COLLECTION_ID,
+        existingProgress[0].$id,
+        { recording_file_id: fileId }
+      );
+    } else {
+      await admin.databases.createDocument(
+        DATABASE_ID,
+        PRACTICE_PROGRESS_COLLECTION_ID,
+        ID.unique(),
+        {
+          user_id: userId,
+          sentence_id: sentenceId,
+          recording_file_id: fileId,
+          score: 0,
+          attempts: 0,
+          duration: 0
+        }
+      );
+    }
+
+    return { success: true, fileId };
+  } catch (error) {
+    console.error('Failed to save recording:', error);
+    return { error: 'Failed to save recording' };
+  }
+}
+
+/**
+ * Get the recording URL for a sentence
+ */
+export async function getRecording(sentenceId: string) {
+  const session = await auth();
+  if (!session?.user?.id) return { error: 'Unauthorized' };
+
+  const admin = getAdminClient();
+  const userId = session.user.id;
+
+  try {
+    // Get practice_progress for this sentence
+    const { documents: progress } = await admin.databases.listDocuments(
+      DATABASE_ID,
+      PRACTICE_PROGRESS_COLLECTION_ID,
+      [
+        Query.equal('user_id', userId),
+        Query.equal('sentence_id', sentenceId)
+      ]
+    );
+
+    if (progress.length === 0 || !progress[0].recording_file_id) {
+      return { recording: null };
+    }
+
+    const fileId = progress[0].recording_file_id;
+
+    // Get file view URL from Appwrite
+    const endpoint = process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT;
+    const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID;
+    
+    // Return the file ID - client will use the API route to stream it
+    return { 
+      recording: {
+        fileId,
+        url: `/api/recordings/${fileId}`,
+      }
+    };
+  } catch (error) {
+    console.error('Failed to get recording:', error);
+    return { error: 'Failed to get recording' };
+  }
+}
+
+/**
+ * Delete a user's recording for a sentence
+ */
+export async function deleteRecording(sentenceId: string) {
+  const session = await auth();
+  if (!session?.user?.id) return { error: 'Unauthorized' };
+
+  const admin = getAdminClient();
+  const userId = session.user.id;
+
+  try {
+    // Get practice_progress for this sentence
+    const { documents: progress } = await admin.databases.listDocuments(
+      DATABASE_ID,
+      PRACTICE_PROGRESS_COLLECTION_ID,
+      [
+        Query.equal('user_id', userId),
+        Query.equal('sentence_id', sentenceId)
+      ]
+    );
+
+    if (progress.length === 0 || !progress[0].recording_file_id) {
+      return { error: 'No recording found' };
+    }
+
+    const fileId = progress[0].recording_file_id;
+
+    // Delete the file from storage
+    try {
+      await admin.storage.deleteFile(RECORDINGS_BUCKET, fileId);
+    } catch (e) {
+      console.warn('Failed to delete recording file:', e);
+    }
+
+    // Clear the recording_file_id from practice_progress
+    await admin.databases.updateDocument(
+      DATABASE_ID,
+      PRACTICE_PROGRESS_COLLECTION_ID,
+      progress[0].$id,
+      { recording_file_id: null }
+    );
+
+    return { success: true };
+  } catch (error) {
+    console.error('Failed to delete recording:', error);
+    return { error: 'Failed to delete recording' };
+  }
 }

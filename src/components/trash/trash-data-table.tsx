@@ -139,7 +139,7 @@ export function TrashDataTable({
           )
         },
         cell: ({ row }) => (
-          <div className="max-w-[520px] whitespace-pre-wrap break-words font-medium">
+          <div className="max-w-[400px] truncate font-medium" title={row.getValue("title") as string}>
             {row.getValue("title") as string}
           </div>
         )
@@ -342,8 +342,8 @@ export function TrashDataTable({
         </div>
       )}
 
-      <div className="rounded-md border">
-        <Table>
+      <div className="rounded-md border overflow-x-auto">
+        <Table className="table-fixed w-full">
           <TableHeader>
             {table.getHeaderGroups().map((headerGroup) => (
               <TableRow key={headerGroup.id}>

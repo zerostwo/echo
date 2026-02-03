@@ -22,6 +22,108 @@ import { safeRevalidate, revalidateInBackground, revalidateVocabPaths } from '@/
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * Common English contractions mapped to their expanded forms.
+ * Each contraction maps to an array of words.
+ */
+const CONTRACTIONS: Record<string, string[]> = {
+    // Pronoun + be
+    "i'm": ["i", "am"],
+    "you're": ["you", "are"],
+    "we're": ["we", "are"],
+    "they're": ["they", "are"],
+    "he's": ["he", "is"],
+    "she's": ["she", "is"],
+    "it's": ["it", "is"],
+    "that's": ["that", "is"],
+    "there's": ["there", "is"],
+    "here's": ["here", "is"],
+    "what's": ["what", "is"],
+    "who's": ["who", "is"],
+    "how's": ["how", "is"],
+    "where's": ["where", "is"],
+    "when's": ["when", "is"],
+    "why's": ["why", "is"],
+    
+    // Pronoun + have
+    "i've": ["i", "have"],
+    "you've": ["you", "have"],
+    "we've": ["we", "have"],
+    "they've": ["they", "have"],
+    
+    // Pronoun + will
+    "i'll": ["i", "will"],
+    "you'll": ["you", "will"],
+    "we'll": ["we", "will"],
+    "they'll": ["they", "will"],
+    "he'll": ["he", "will"],
+    "she'll": ["she", "will"],
+    "it'll": ["it", "will"],
+    "that'll": ["that", "will"],
+    "there'll": ["there", "will"],
+    
+    // Pronoun + would/had
+    "i'd": ["i", "would"],
+    "you'd": ["you", "would"],
+    "we'd": ["we", "would"],
+    "they'd": ["they", "would"],
+    "he'd": ["he", "would"],
+    "she'd": ["she", "would"],
+    "it'd": ["it", "would"],
+    
+    // Negative contractions
+    "can't": ["can", "not"],
+    "cannot": ["can", "not"],
+    "won't": ["will", "not"],
+    "don't": ["do", "not"],
+    "doesn't": ["does", "not"],
+    "didn't": ["did", "not"],
+    "isn't": ["is", "not"],
+    "aren't": ["are", "not"],
+    "wasn't": ["was", "not"],
+    "weren't": ["were", "not"],
+    "hasn't": ["has", "not"],
+    "haven't": ["have", "not"],
+    "hadn't": ["had", "not"],
+    "couldn't": ["could", "not"],
+    "wouldn't": ["would", "not"],
+    "shouldn't": ["should", "not"],
+    "mustn't": ["must", "not"],
+    "mightn't": ["might", "not"],
+    "needn't": ["need", "not"],
+    "shan't": ["shall", "not"],
+    "ain't": ["am", "not"],
+    
+    // Other common contractions
+    "let's": ["let", "us"],
+    "y'all": ["you", "all"],
+    "ma'am": ["madam"],
+    "o'clock": ["of", "the", "clock"],
+};
+
+/**
+ * Expand a contraction into its component words.
+ * Returns the original word in an array if not a contraction.
+ */
+function expandContraction(word: string): string[] {
+    const lower = word.toLowerCase();
+    const expanded = CONTRACTIONS[lower];
+    if (expanded) {
+        return expanded;
+    }
+    
+    // Handle possessives ending in 's (e.g., "John's" → "John")
+    // But don't expand "it's", "he's", etc. (already handled above)
+    if (lower.endsWith("'s") && lower.length > 2) {
+        const base = lower.slice(0, -2);
+        // If it looks like a possessive noun (not a pronoun contraction)
+        return [base];
+    }
+    
+    // Not a contraction, return as-is (without apostrophe for lookup)
+    return [lower.replace(/'/g, '')];
+}
+
 export async function queryDictionary(wordList: string[]) {
     if (wordList.length === 0) return {};
 
@@ -105,16 +207,22 @@ export async function extractVocabulary(materialId: string) {
         let match;
         
         while ((match = wordRegex.exec(content)) !== null) {
-            const word = match[0].toLowerCase().replace(/'/g, ''); // Remove apostrophes for lookup
-            // Skip if too short, only digits, or only apostrophes
-            if (word.length > 1 && !/^\d+$/.test(word)) {
-                rawWords.add(word);
-                sentenceWords.push({ 
-                    sentenceId: sentence.$id, 
-                    rawWord: word,
-                    startIndex: match.index,
-                    endIndex: match.index + match[0].length,
-                });
+            const originalToken = match[0];
+            
+            // Expand contractions (e.g., "it's" → ["it", "is"], "you'll" → ["you", "will"])
+            const expandedWords = expandContraction(originalToken);
+            
+            for (const word of expandedWords) {
+                // Skip if too short, only digits, or only apostrophes
+                if (word.length > 1 && !/^\d+$/.test(word)) {
+                    rawWords.add(word);
+                    sentenceWords.push({ 
+                        sentenceId: sentence.$id, 
+                        rawWord: word,
+                        startIndex: match.index,
+                        endIndex: match.index + originalToken.length,
+                    });
+                }
             }
         }
     }
@@ -731,7 +839,8 @@ export async function getVocabPaginated(
                     'words',
                     [
                         Query.equal('$id', batchWordIds),
-                        Query.isNull('deleted_at')
+                        Query.isNull('deleted_at'),
+                        Query.limit(100) // Must specify limit, Appwrite default is only 25
                     ]
                 ),
                 admin.databases.listDocuments(
@@ -739,7 +848,9 @@ export async function getVocabPaginated(
                     'user_word_statuses',
                     [
                         Query.equal('user_id', userId),
-                        Query.equal('word_id', batchWordIds)
+                        Query.equal('word_id', batchWordIds),
+                        Query.isNull('deleted_at'), // Exclude soft-deleted words
+                        Query.limit(100) // Must specify limit, Appwrite default is only 25
                     ]
                 )
             ]);

@@ -276,32 +276,25 @@ export async function updateWordsStatus(wordIds: string[], status: string) {
     }
 }
 
-export async function restoreWord(wordId: string) {
+export async function restoreWord(statusId: string) {
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
     const admin = getAdminClient();
 
     try {
-        const word = await admin.databases.getDocument(APPWRITE_DATABASE_ID, 'words', wordId);
-        if (!word.deleted_at) return { error: 'Word is not in trash' };
+        // statusId is now the user_word_status ID, not the word ID
+        const status = await admin.databases.getDocument(APPWRITE_DATABASE_ID, 'user_word_statuses', statusId);
+        
+        if (!status) return { error: 'Word status not found' };
+        if (status.user_id !== session.user.id) return { error: 'Unauthorized' };
+        if (!status.deleted_at) return { error: 'Word is not in trash' };
 
-        // Check if user has status for this word (ownership check effectively)
-        const { documents: statuses } = await admin.databases.listDocuments(
-            APPWRITE_DATABASE_ID,
-            'user_word_statuses',
-            [
-                Query.equal('word_id', wordId),
-                Query.equal('user_id', session.user.id)
-            ]
-        );
-
-        if (statuses.length === 0) return { error: 'Word not found' };
-
+        // Restore by clearing deleted_at on user_word_status
         await admin.databases.updateDocument(
             APPWRITE_DATABASE_ID,
-            'words',
-            wordId,
+            'user_word_statuses',
+            statusId,
             { deleted_at: null }
         );
 
@@ -310,55 +303,69 @@ export async function restoreWord(wordId: string) {
 
         revalidatePath('/trash');
         revalidatePath('/vocab');
+        revalidatePath('/words');
         return { success: true };
     } catch (e) {
         return { error: 'Word not found' };
     }
 }
 
-export async function permanentlyDeleteWord(wordId: string) {
+export async function permanentlyDeleteWord(statusId: string) {
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
     const admin = getAdminClient();
 
     try {
-        const word = await admin.databases.getDocument(APPWRITE_DATABASE_ID, 'words', wordId);
+        // statusId is now the user_word_status ID
+        const status = await admin.databases.getDocument(APPWRITE_DATABASE_ID, 'user_word_statuses', statusId);
         
-        // Check ownership via status
-        const { documents: statuses } = await admin.databases.listDocuments(
+        if (!status) return { error: 'Word status not found' };
+        if (status.user_id !== session.user.id) return { error: 'Unauthorized' };
+        
+        const wordId = status.word_id;
+
+        // Get user's materials to only delete their word occurrences
+        const { documents: materials } = await admin.databases.listDocuments(
             APPWRITE_DATABASE_ID,
-            'user_word_statuses',
-            [
-                Query.equal('word_id', wordId),
-                Query.equal('user_id', session.user.id)
-            ]
+            'materials',
+            [Query.equal('user_id', session.user.id), Query.limit(1000)]
         );
+        const materialIds = materials.map(m => m.$id);
 
-        if (statuses.length === 0) return { error: 'Word not found in your trash' };
+        if (materialIds.length > 0) {
+            // Get sentences for user's materials
+            const { documents: sentences } = await admin.databases.listDocuments(
+                APPWRITE_DATABASE_ID,
+                'sentences',
+                [Query.equal('material_id', materialIds), Query.limit(5000)]
+            );
+            const sentenceIds = sentences.map(s => s.$id);
 
-        // Delete occurrences
-        const { documents: occs } = await admin.databases.listDocuments(
-            APPWRITE_DATABASE_ID,
-            'word_occurrences',
-            [
-                Query.equal('word_id', wordId),
-                Query.limit(5000)
-            ]
-        );
-        await Promise.all(occs.map(o => admin.databases.deleteDocument(APPWRITE_DATABASE_ID, 'word_occurrences', o.$id)));
+            if (sentenceIds.length > 0) {
+                // Delete word occurrences ONLY for user's sentences
+                const { documents: occs } = await admin.databases.listDocuments(
+                    APPWRITE_DATABASE_ID,
+                    'word_occurrences',
+                    [
+                        Query.equal('word_id', wordId),
+                        Query.equal('sentence_id', sentenceIds),
+                        Query.limit(5000)
+                    ]
+                );
+                await Promise.all(occs.map(o => admin.databases.deleteDocument(APPWRITE_DATABASE_ID, 'word_occurrences', o.$id)));
+            }
+        }
 
-        // Delete status
-        await admin.databases.deleteDocument(APPWRITE_DATABASE_ID, 'user_word_statuses', statuses[0].$id);
-
-        // Delete word
-        await admin.databases.deleteDocument(APPWRITE_DATABASE_ID, 'words', wordId);
+        // Delete user's word status (NOT the global word - other users might have it)
+        await admin.databases.deleteDocument(APPWRITE_DATABASE_ID, 'user_word_statuses', statusId);
 
         // Invalidate vocab cache
         await invalidateVocabCache(session.user.id);
 
         revalidatePath('/trash');
         revalidatePath('/vocab');
+        revalidatePath('/words');
         return { success: true };
     } catch (e) {
         console.error('Failed to delete word', e);
@@ -374,8 +381,8 @@ export async function deleteWords(wordIds: string[]) {
     const admin = getAdminClient();
 
     try {
-        // First verify user has access to these words
-        const validWordIds: string[] = [];
+        // Find user_word_statuses for these words
+        const statusesToDelete: { id: string; wordId: string }[] = [];
         
         for (let i = 0; i < wordIds.length; i += 50) {
             const batch = wordIds.slice(i, i + 50);
@@ -387,19 +394,20 @@ export async function deleteWords(wordIds: string[]) {
                     Query.equal('word_id', batch)
                 ]
             );
-            validWordIds.push(...statuses.map(s => s.word_id));
+            statusesToDelete.push(...statuses.map(s => ({ id: s.$id, wordId: s.word_id })));
         }
         
-        if (validWordIds.length === 0) {
+        if (statusesToDelete.length === 0) {
             return { error: 'No valid words to delete' };
         }
 
-        // Soft delete words by setting deleted_at
-        for (const id of validWordIds) {
+        // Soft delete user_word_statuses (NOT the global word)
+        // This keeps the deletion per-user instead of affecting all users
+        for (const status of statusesToDelete) {
             await admin.databases.updateDocument(
                 APPWRITE_DATABASE_ID,
-                'words',
-                id,
+                'user_word_statuses',
+                status.id,
                 { deleted_at: new Date().toISOString() }
             );
         }
@@ -408,9 +416,10 @@ export async function deleteWords(wordIds: string[]) {
         await invalidateVocabCache(session.user.id);
 
         revalidatePath('/vocab');
+        revalidatePath('/words');
         revalidatePath('/trash');
 
-        return { success: true, count: validWordIds.length };
+        return { success: true, count: statusesToDelete.length };
     } catch (e) {
         console.error('Failed to delete words:', e);
         return { error: 'Failed to delete words' };
@@ -750,133 +759,144 @@ export async function addWordRelation(wordId: string, relatedText: string, type:
     }
 
     // 4. Create the relation (Forward)
-    const { documents: existingRelation } = await admin.databases.listDocuments(
-        APPWRITE_DATABASE_ID,
-        'word_relations',
-        [
-            Query.equal('word_id', wordId),
-            Query.equal('related_word_id', relatedWordId),
-            Query.equal('relation_type', type)
-        ]
-    );
-
-    if (existingRelation.length === 0) {
-        await admin.databases.createDocument(
+    // Note: word_relations collection may not exist - handle gracefully
+    try {
+        const { documents: existingRelation } = await admin.databases.listDocuments(
             APPWRITE_DATABASE_ID,
             'word_relations',
-            ID.unique(),
-            {
-                word_id: wordId,
-                relation_type: type,
-                custom_text: normalizedText,
-                related_word_id: relatedWordId
-            }
+            [
+                Query.equal('word_id', wordId),
+                Query.equal('related_word_id', relatedWordId),
+                Query.equal('relation_type', type)
+            ]
         );
-    }
 
-    // 5. Create reverse relation (Bidirectional)
-    if (type === 'SYNONYM' || type === 'ANTONYM') {
-        try {
-            const { documents: existingReverse } = await admin.databases.listDocuments(
+        if (existingRelation.length === 0) {
+            await admin.databases.createDocument(
                 APPWRITE_DATABASE_ID,
                 'word_relations',
-                [
-                    Query.equal('word_id', relatedWordId),
-                    Query.equal('related_word_id', wordId),
-                    Query.equal('relation_type', type)
-                ]
+                ID.unique(),
+                {
+                    word_id: wordId,
+                    relation_type: type,
+                    custom_text: normalizedText,
+                    related_word_id: relatedWordId
+                }
             );
+        }
 
-            if (existingReverse.length === 0) {
-                const originalWord = await admin.databases.getDocument(APPWRITE_DATABASE_ID, 'words', wordId);
-                
-                await admin.databases.createDocument(
+        // 5. Create reverse relation (Bidirectional)
+        if (type === 'SYNONYM' || type === 'ANTONYM') {
+            try {
+                const { documents: existingReverse } = await admin.databases.listDocuments(
                     APPWRITE_DATABASE_ID,
                     'word_relations',
-                    ID.unique(),
-                    {
-                        word_id: relatedWordId,
-                        relation_type: type,
-                        custom_text: originalWord.text,
-                        related_word_id: wordId
-                    }
+                    [
+                        Query.equal('word_id', relatedWordId),
+                        Query.equal('related_word_id', wordId),
+                        Query.equal('relation_type', type)
+                    ]
                 );
+
+                if (existingReverse.length === 0) {
+                    const originalWord = await admin.databases.getDocument(APPWRITE_DATABASE_ID, 'words', wordId);
+                    
+                    await admin.databases.createDocument(
+                        APPWRITE_DATABASE_ID,
+                        'word_relations',
+                        ID.unique(),
+                        {
+                            word_id: relatedWordId,
+                            relation_type: type,
+                            custom_text: originalWord.text,
+                            related_word_id: wordId
+                        }
+                    );
+                }
+            } catch (e) {
+                console.error('Failed to create reverse relation:', e);
             }
-        } catch (e) {
-            console.error('Failed to create reverse relation:', e);
         }
-    }
 
-    // 6. Transitive Synonyms Logic
-    if (type === 'SYNONYM') {
-        try {
-            // Collect all unique word IDs in the synonym group
-            const groupIds = new Set<string>();
-            groupIds.add(wordId);
-            groupIds.add(relatedWordId);
-            
-            // Get existing synonyms
-            const { documents: existingRelations } = await admin.databases.listDocuments(
-                APPWRITE_DATABASE_ID,
-                'word_relations',
-                [
-                    Query.equal('relation_type', 'SYNONYM'),
-                    Query.equal('word_id', [wordId, relatedWordId]) // Appwrite OR
-                ]
-            );
+        // 6. Transitive Synonyms Logic
+        if (type === 'SYNONYM') {
+            try {
+                // Collect all unique word IDs in the synonym group
+                const groupIds = new Set<string>();
+                groupIds.add(wordId);
+                groupIds.add(relatedWordId);
                 
-            existingRelations.forEach(r => {
-                if (r.related_word_id) groupIds.add(r.related_word_id);
-            });
+                // Get existing synonyms
+                const { documents: existingRelations } = await admin.databases.listDocuments(
+                    APPWRITE_DATABASE_ID,
+                    'word_relations',
+                    [
+                        Query.equal('relation_type', 'SYNONYM'),
+                        Query.equal('word_id', [wordId, relatedWordId]) // Appwrite OR
+                    ]
+                );
+                    
+                existingRelations.forEach(r => {
+                    if (r.related_word_id) groupIds.add(r.related_word_id);
+                });
 
-            const groupArray = Array.from(groupIds);
+                const groupArray = Array.from(groupIds);
 
-            // Fetch texts
-            const { documents: wordsInGroup } = await admin.databases.listDocuments(
-                APPWRITE_DATABASE_ID,
-                'words',
-                [Query.equal('$id', groupArray)]
-            );
-            
-            const wordMap = new Map(wordsInGroup.map(w => [w.$id, w.text]));
+                // Fetch texts
+                const { documents: wordsInGroup } = await admin.databases.listDocuments(
+                    APPWRITE_DATABASE_ID,
+                    'words',
+                    [Query.equal('$id', groupArray)]
+                );
+                
+                const wordMap = new Map(wordsInGroup.map(w => [w.$id, w.text]));
 
-            // Fetch ALL existing relations within this group
-            // Appwrite doesn't support complex OR logic easily for pairs.
-            // We'll fetch all relations for these words and filter in memory.
-            const { documents: currentGroupRelations } = await admin.databases.listDocuments(
-                APPWRITE_DATABASE_ID,
-                'word_relations',
-                [
-                    Query.equal('word_id', groupArray),
-                    Query.equal('relation_type', 'SYNONYM')
-                ]
-            );
-            
-            const existingRelSet = new Set(
-                currentGroupRelations.map(r => `${r.word_id}:${r.related_word_id}`)
-            );
+                // Fetch ALL existing relations within this group
+                // Appwrite doesn't support complex OR logic easily for pairs.
+                // We'll fetch all relations for these words and filter in memory.
+                const { documents: currentGroupRelations } = await admin.databases.listDocuments(
+                    APPWRITE_DATABASE_ID,
+                    'word_relations',
+                    [
+                        Query.equal('word_id', groupArray),
+                        Query.equal('relation_type', 'SYNONYM')
+                    ]
+                );
+                
+                const existingRelSet = new Set(
+                    currentGroupRelations.map(r => `${r.word_id}:${r.related_word_id}`)
+                );
 
-            for (const id1 of groupArray) {
-                for (const id2 of groupArray) {
-                    if (id1 === id2) continue;
-                    if (!existingRelSet.has(`${id1}:${id2}`)) {
-                        await admin.databases.createDocument(
-                            APPWRITE_DATABASE_ID,
-                            'word_relations',
-                            ID.unique(),
-                            {
-                                word_id: id1,
-                                related_word_id: id2,
-                                relation_type: 'SYNONYM',
-                                custom_text: wordMap.get(id2) || ''
-                            }
-                        );
+                for (const id1 of groupArray) {
+                    for (const id2 of groupArray) {
+                        if (id1 === id2) continue;
+                        if (!existingRelSet.has(`${id1}:${id2}`)) {
+                            await admin.databases.createDocument(
+                                APPWRITE_DATABASE_ID,
+                                'word_relations',
+                                ID.unique(),
+                                {
+                                    word_id: id1,
+                                    related_word_id: id2,
+                                    relation_type: 'SYNONYM',
+                                    custom_text: wordMap.get(id2) || ''
+                                }
+                            );
+                        }
                     }
                 }
-            }
 
-        } catch (e) {
-            console.error('Failed to sync transitive synonyms:', e);
+            } catch (e) {
+                console.error('Failed to sync transitive synonyms:', e);
+            }
+        }
+    } catch (e: any) {
+        // Handle missing collection gracefully (collection not created yet)
+        if (e.code === 404 && e.type === 'collection_not_found') {
+            console.warn('[addWordRelation] word_relations collection not found - skipping relation creation');
+        } else {
+            console.error('[addWordRelation] Error creating relation:', e);
+            return { error: 'Failed to create word relation' };
         }
     }
 
@@ -895,7 +915,12 @@ export async function removeWordRelation(relationId: string) {
 
     try {
         await admin.databases.deleteDocument(APPWRITE_DATABASE_ID, 'word_relations', relationId);
-    } catch (e) {
+    } catch (e: any) {
+        // Handle missing collection gracefully (collection not created yet)
+        if (e.code === 404 && e.type === 'collection_not_found') {
+            console.warn('[removeWordRelation] word_relations collection not found');
+            return { success: true }; // Nothing to delete if collection doesn't exist
+        }
         console.error('Failed to remove word relation:', e);
         return { error: 'Failed to remove word relation' };
     }
@@ -910,31 +935,40 @@ export async function getWordRelations(wordId: string) {
 
     const admin = getAdminClient();
 
-    const { documents: relations } = await admin.databases.listDocuments(
-        APPWRITE_DATABASE_ID,
-        'word_relations',
-        [Query.equal('word_id', wordId)]
-    );
-
-    // Fetch related words details
-    const relatedWordIds = relations.map(r => r.related_word_id).filter(Boolean);
-    const relatedWordsMap = new Map();
-    
-    if (relatedWordIds.length > 0) {
-        const { documents: words } = await admin.databases.listDocuments(
+    try {
+        const { documents: relations } = await admin.databases.listDocuments(
             APPWRITE_DATABASE_ID,
-            'words',
-            [Query.equal('$id', relatedWordIds)]
+            'word_relations',
+            [Query.equal('word_id', wordId)]
         );
-        for (const w of words) relatedWordsMap.set(w.$id, w);
+
+        // Fetch related words details
+        const relatedWordIds = relations.map(r => r.related_word_id).filter(Boolean);
+        const relatedWordsMap = new Map();
+        
+        if (relatedWordIds.length > 0) {
+            const { documents: words } = await admin.databases.listDocuments(
+                APPWRITE_DATABASE_ID,
+                'words',
+                [Query.equal('$id', relatedWordIds)]
+            );
+            for (const w of words) relatedWordsMap.set(w.$id, w);
+        }
+
+        const result = relations.map(r => ({
+            ...r,
+            relatedWord: relatedWordsMap.get(r.related_word_id) || null
+        }));
+
+        return { relations: result };
+    } catch (e: any) {
+        // Handle missing collection gracefully (collection not created yet)
+        if (e.code === 404 && e.type === 'collection_not_found') {
+            return { relations: [] };
+        }
+        console.error('[getWordRelations] Error:', e);
+        return { relations: [] };
     }
-
-    const result = relations.map(r => ({
-        ...r,
-        relatedWord: relatedWordsMap.get(r.related_word_id) || null
-    }));
-
-    return { relations: result };
 }
 
 export async function getHardestWords(limit: number = 50) {

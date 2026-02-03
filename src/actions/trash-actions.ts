@@ -110,35 +110,51 @@ export async function getTrashItemsPaginated(
         
         const validSentences = sentences.filter(s => validMaterialIds.has(s.material_id));
 
-        // 4. Fetch Deleted Words
-        const wordQueries = [
+        // 4. Fetch Deleted Words (from user_word_statuses, NOT global words)
+        // Words are per-user via user_word_statuses, so we track deletion there
+        const statusQueries = [
+            Query.equal('user_id', userId),
             Query.isNotNull('deleted_at'),
             Query.limit(100)
         ];
-        if (search) wordQueries.push(Query.search('text', search));
 
-        const { documents: words } = await databases.listDocuments(
+        const { documents: deletedStatuses } = await databases.listDocuments(
             DATABASE_ID,
-            WORDS_COLLECTION_ID,
-            wordQueries
+            USER_WORD_STATUSES_COLLECTION_ID,
+            statusQueries
         );
 
-        const wordIds = words.map(w => w.$id);
-        const validWordIds = new Set<string>();
-
-        if (wordIds.length > 0) {
-            const { documents: statuses } = await databases.listDocuments(
-                DATABASE_ID,
-                USER_WORD_STATUSES_COLLECTION_ID,
-                [
-                    Query.equal('user_id', userId),
-                    Query.equal('word_id', wordIds)
-                ]
-            );
-            statuses.forEach(s => validWordIds.add(s.word_id));
+        // Fetch word details for deleted statuses
+        const deletedWordIds = deletedStatuses.map(s => s.word_id);
+        const wordsMap = new Map<string, any>();
+        
+        if (deletedWordIds.length > 0) {
+            for (let i = 0; i < deletedWordIds.length; i += 50) {
+                const batch = deletedWordIds.slice(i, i + 50);
+                const { documents: words } = await databases.listDocuments(
+                    DATABASE_ID,
+                    WORDS_COLLECTION_ID,
+                    [Query.equal('$id', batch), Query.limit(100)]
+                );
+                words.forEach(w => wordsMap.set(w.$id, w));
+            }
         }
 
-        const validWords = words.filter(w => validWordIds.has(w.$id));
+        // Filter by search if needed
+        let validWords = deletedStatuses.map(status => {
+            const word = wordsMap.get(status.word_id);
+            if (!word) return null;
+            return {
+                ...word,
+                statusId: status.$id,
+                deleted_at: status.deleted_at, // Use status deleted_at, not word's
+            };
+        }).filter(Boolean);
+        
+        if (search) {
+            const searchLower = search.toLowerCase();
+            validWords = validWords.filter(w => w.text?.toLowerCase().includes(searchLower));
+        }
 
         // Combine
         const allItems: TrashItem[] = [
@@ -166,8 +182,8 @@ export async function getTrashItemsPaginated(
                 size: null,
                 location: 'Material'
             })),
-            ...validWords.map(w => ({
-                id: w.$id,
+            ...validWords.map((w: any) => ({
+                id: w.statusId, // Use statusId for restore/delete operations
                 type: 'word' as const,
                 title: w.text,
                 deleted_at: w.deleted_at,

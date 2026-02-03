@@ -3,7 +3,7 @@
 import { useRef, useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { evaluateDictation } from '@/actions/listening-actions';
+import { evaluateDictation, saveRecording, getRecording, deleteRecording } from '@/actions/listening-actions';
 import { lookupWordByText } from '@/actions/word-actions';
 import { updateSentence } from '@/actions/sentence-actions';
 import { recordLearningSessionDuration } from '@/actions/learning-actions';
@@ -54,15 +54,40 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
     const [isRecording, setIsRecording] = useState(false);
     const [recordedAudioUrl, setRecordedAudioUrl] = useState<string | null>(null);
     const [isPlayingRecording, setIsPlayingRecording] = useState(false);
+    const [isSavingRecording, setIsSavingRecording] = useState(false);
+    const [hasStoredRecording, setHasStoredRecording] = useState(false);
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const audioChunksRef = useRef<Blob[]>([]);
     const recordedAudioRef = useRef<HTMLAudioElement | null>(null);
+    const currentBlobRef = useRef<Blob | null>(null);
+
+    // Load existing recording on sentence change
+    useEffect(() => {
+        const loadExistingRecording = async () => {
+            try {
+                const result = await getRecording(sentence.id);
+                if (result.recording?.url) {
+                    setRecordedAudioUrl(result.recording.url);
+                    setHasStoredRecording(true);
+                } else {
+                    setRecordedAudioUrl(null);
+                    setHasStoredRecording(false);
+                }
+            } catch (e) {
+                console.error('Failed to load existing recording:', e);
+            }
+        };
+        
+        loadExistingRecording();
+        setIsRecording(false);
+        setIsPlayingRecording(false);
+    }, [sentence.id]);
 
     // Voice recording functions
     const startRecording = async () => {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            const mediaRecorder = new MediaRecorder(stream);
+            const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
             mediaRecorderRef.current = mediaRecorder;
             audioChunksRef.current = [];
             
@@ -72,22 +97,44 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
                 }
             };
             
-            mediaRecorder.onstop = () => {
+            mediaRecorder.onstop = async () => {
                 const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+                currentBlobRef.current = audioBlob;
+                
+                // Create local URL for immediate playback
                 const audioUrl = URL.createObjectURL(audioBlob);
                 setRecordedAudioUrl(audioUrl);
                 
                 // Stop all tracks
                 stream.getTracks().forEach(track => track.stop());
+                
+                // Save to server
+                setIsSavingRecording(true);
+                try {
+                    const formData = new FormData();
+                    formData.append('audio', audioBlob, 'recording.webm');
+                    
+                    const result = await saveRecording(sentence.id, formData);
+                    if (result.success) {
+                        setHasStoredRecording(true);
+                        toast.success('Recording saved');
+                    } else {
+                        toast.error(result.error || 'Failed to save recording');
+                    }
+                } catch (e) {
+                    console.error('Failed to save recording:', e);
+                    toast.error('Failed to save recording');
+                } finally {
+                    setIsSavingRecording(false);
+                }
             };
             
             mediaRecorder.start();
             setIsRecording(true);
             
-            // Clear previous recording
-            if (recordedAudioUrl) {
+            // Clear previous local URL (server recording will be overwritten)
+            if (recordedAudioUrl && !hasStoredRecording) {
                 URL.revokeObjectURL(recordedAudioUrl);
-                setRecordedAudioUrl(null);
             }
         } catch (error) {
             console.error('Error starting recording:', error);
@@ -116,7 +163,7 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
         if (!recordedAudioRef.current) {
             recordedAudioRef.current = new Audio(recordedAudioUrl);
             recordedAudioRef.current.onended = () => setIsPlayingRecording(false);
-        } else {
+        } else if (recordedAudioRef.current.src !== recordedAudioUrl) {
             recordedAudioRef.current.src = recordedAudioUrl;
         }
         
@@ -130,24 +177,15 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
         }
     };
     
-    // Clean up recorded audio URL on unmount or sentence change
+    // Clean up local blob URLs on unmount
     useEffect(() => {
         return () => {
-            if (recordedAudioUrl) {
+            // Only revoke blob URLs, not server URLs
+            if (recordedAudioUrl && recordedAudioUrl.startsWith('blob:')) {
                 URL.revokeObjectURL(recordedAudioUrl);
             }
         };
     }, [recordedAudioUrl]);
-    
-    // Clear recording when sentence changes
-    useEffect(() => {
-        if (recordedAudioUrl) {
-            URL.revokeObjectURL(recordedAudioUrl);
-            setRecordedAudioUrl(null);
-        }
-        setIsRecording(false);
-        setIsPlayingRecording(false);
-    }, [sentence.id]);
 
     // Handle word click to show word details
     const handleWordClick = async (wordText: string) => {
@@ -535,6 +573,7 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
                                     variant={isRecording ? "destructive" : "outline"}
                                     size="sm"
                                     onClick={toggleRecording}
+                                    disabled={isSavingRecording}
                                     className={`gap-2 ${isRecording ? 'animate-pulse' : ''}`}
                                     title={isRecording ? "Stop recording" : "Start recording"}
                                 >
@@ -546,16 +585,17 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
                                     ) : (
                                         <>
                                             <Mic className="h-4 w-4" />
-                                            Record
+                                            {hasStoredRecording ? 'Re-record' : 'Record'}
                                         </>
                                     )}
                                 </Button>
                                 
-                                {recordedAudioUrl && (
+                                {recordedAudioUrl && !isRecording && (
                                     <Button
                                         variant="outline"
                                         size="sm"
                                         onClick={playRecordedAudio}
+                                        disabled={isSavingRecording}
                                         className="gap-2"
                                         title="Play your recording"
                                     >
@@ -578,6 +618,20 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
                                         <span className="w-2 h-2 bg-destructive rounded-full animate-pulse" />
                                         Recording...
                                     </span>
+                                )}
+                                
+                                {isSavingRecording && (
+                                    <span className="text-sm text-muted-foreground flex items-center gap-2">
+                                        <RefreshCw className="h-3 w-3 animate-spin" />
+                                        Saving...
+                                    </span>
+                                )}
+                                
+                                {hasStoredRecording && !isRecording && !isSavingRecording && (
+                                    <Badge variant="secondary" className="text-xs">
+                                        <Check className="h-3 w-3 mr-1" />
+                                        Saved
+                                    </Badge>
                                 )}
                             </div>
 
