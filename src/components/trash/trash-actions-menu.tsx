@@ -48,11 +48,11 @@ export function TrashActionsMenu({ item }: TrashActionsMenuProps) {
         ? await permanentlyDeleteSentence(item.id)
         : await permanentlyDeleteWord(item.id)
 
-    if (result.success) {
+    if ('success' in result && result.success) {
         toast.success("Item deleted permanently")
         router.refresh()
     } else {
-        toast.error(result.error || "Failed to delete item")
+        toast.error('error' in result ? result.error : "Failed to delete item")
     }
   }
 

@@ -259,7 +259,7 @@ export function TrashClient({
       let successCount = 0
       for (const item of itemsToDelete) {
           const res = await permanentlyDeleteItem(item.id, item.type)
-          if (res.success) successCount++
+          if ('success' in res && res.success) successCount++
       }
 
       if (successCount > 0) {

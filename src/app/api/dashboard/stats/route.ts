@@ -1,8 +1,14 @@
-'use server';
-
 import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { getAdminClient, APPWRITE_DATABASE_ID, Query } from '@/lib/appwrite';
+import { 
+  getCached, 
+  setCached, 
+  CACHE_PREFIXES,
+} from '@/lib/cache';
+import { dedupe } from '@/lib/dedupe';
+import { withQueryLogging } from '@/lib/query-logger';
+import { chunkArray } from '@/lib/pagination';
 
 export interface DashboardStats {
   heatmapData: Array<{
@@ -62,14 +68,31 @@ export async function GET() {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const admin = getAdminClient();
   const userId = session.user.id;
-  const now = new Date();
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000 - 1);
-  const yearStart = new Date(now.getFullYear(), 0, 1).toISOString();
+  
+  // Generate cache key
+  const cacheKey = `${CACHE_PREFIXES.DASHBOARD_STATS}${userId}`;
+  
+  // Check cache first
+  const cached = getCached<DashboardStats>(cacheKey);
+  if (cached) {
+    return NextResponse.json(cached);
+  }
 
-  try {
+  // Use dedupe to prevent concurrent identical requests
+  const stats = await dedupe(`dashboard:stats:${userId}`, async () => {
+    // Double-check cache after acquiring dedupe lock
+    const cachedAfterLock = getCached<DashboardStats>(cacheKey);
+    if (cachedAfterLock) {
+      return cachedAfterLock;
+    }
+
+    return withQueryLogging('getDashboardStats', async () => {
+      const admin = getAdminClient();
+      const now = new Date();
+      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000 - 1);
+      const yearStart = new Date(now.getFullYear(), 0, 1).toISOString();
     // 1. Materials
     const { documents: materials } = await admin.databases.listDocuments(
         APPWRITE_DATABASE_ID,
@@ -370,31 +393,30 @@ export async function GET() {
       } catch (e) {}
     }
 
-    const stats: DashboardStats = {
-      heatmapData,
-      wordsDueToday,
-      wordsReviewedTodayCount, // Using daily stats approximation
-      sentencesPracticedTodayCount: sentencesPracticedToday.length,
-      dailyGoals,
-      vocabSnapshot,
-      sentenceSnapshot,
-      hardestWords: hardestWordsDetails,
-      totalMaterials,
-      totalSentences,
-      totalWords,
-      totalPractices,
-      averageScore,
-      lastWord,
-      lastSentence,
-    };
+      const resultStats: DashboardStats = {
+        heatmapData,
+        wordsDueToday,
+        wordsReviewedTodayCount,
+        sentencesPracticedTodayCount: sentencesPracticedToday.length,
+        dailyGoals,
+        vocabSnapshot,
+        sentenceSnapshot,
+        hardestWords: hardestWordsDetails,
+        totalMaterials,
+        totalSentences,
+        totalWords,
+        totalPractices,
+        averageScore,
+        lastWord,
+        lastSentence,
+      };
 
-    return NextResponse.json(stats);
+      // Cache for 30 seconds (dashboard stats change frequently)
+      setCached(cacheKey, resultStats, 30000);
 
-  } catch (error) {
-    console.error('Dashboard stats error:', error);
-    return NextResponse.json(
-      { error: 'Failed to fetch dashboard stats' },
-      { status: 500 }
-    );
-  }
+      return resultStats;
+    }, { userId });
+  });
+
+  return NextResponse.json(stats);
 }

@@ -193,16 +193,25 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
 
   // Track previous materialId to detect real changes
   const prevMaterialIdRef = useRef<string | undefined>(materialId)
+  
+  // Track if initial data has been loaded to avoid double fetches
+  const initializedRef = useRef(false)
+  
+  // Track last fetch params to avoid duplicate requests
+  const lastFetchParamsRef = useRef<string>('')
 
   // Initialize data from initialData on first render only
   useEffect(() => {
-    setData(initialData.data || [])
-    setTotal(initialData.total)
-    setStats(initialData.stats)
-    setPage(initialData.page)
-    setTotalPages(initialData.totalPages)
+    if (!initializedRef.current) {
+      initializedRef.current = true
+      setData(initialData.data || [])
+      setTotal(initialData.total)
+      setStats(initialData.stats)
+      setPage(initialData.page)
+      setTotalPages(initialData.totalPages)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialData]) // Update when initialData changes (e.g. after adding a word)
+  }, []) // Only run once on mount
 
   // Reset filters and state only when materialId actually changes
   useEffect(() => {
@@ -232,6 +241,23 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
   }, [materialId, initialData])
 
   const fetchData = useCallback(async (newPage?: number, newPageSize?: number, newSortBy?: string, newSortOrder?: 'asc' | 'desc') => {
+    // Generate params key to detect duplicate requests
+    const paramsKey = JSON.stringify({
+      page: newPage ?? page,
+      pageSize: newPageSize ?? pageSize,
+      sortBy: newSortBy ?? sortBy,
+      sortOrder: newSortOrder ?? sortOrder,
+      search: debouncedSearch,
+      filters,
+      showMastered: settings?.vocabShowMastered
+    })
+    
+    // Skip if this is a duplicate request
+    if (paramsKey === lastFetchParamsRef.current) {
+      return
+    }
+    lastFetchParamsRef.current = paramsKey
+    
     setLoading(true)
     try {
       // Determine which material IDs to filter by
@@ -285,10 +311,16 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
     }
   }, [page, pageSize, debouncedSearch, filters, sortBy, sortOrder, settings])
 
-  // Fetch when filters change
+  // Fetch when filters change (but not on initial mount)
+  const filterChangeRef = useRef(false)
   useEffect(() => {
+    // Skip the first render since we have initialData
+    if (!filterChangeRef.current) {
+      filterChangeRef.current = true
+      return
+    }
     fetchData(1) // Reset to page 1 when filters change
-  }, [debouncedSearch, filters, settings?.vocabShowMastered])
+  }, [debouncedSearch, filters, settings?.vocabShowMastered, fetchData])
 
   const handlePageChange = (newPage: number) => {
     setPage(newPage)

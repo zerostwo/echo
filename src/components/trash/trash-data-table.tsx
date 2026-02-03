@@ -239,7 +239,7 @@ export function TrashDataTable({
           : item.type === 'dictionary'
             ? await permanentlyDeleteDictionary(item.id)
             : await permanentlyDeleteWord(item.id)
-      if (res.success) successCount++
+      if ('success' in res && res.success) successCount++
     }
     
     if (successCount > 0) {
@@ -282,7 +282,7 @@ export function TrashDataTable({
           ? await permanentlyDeleteDictionary(item.id)
           : await permanentlyDeleteWord(item.id)
     
-    if (res.success) {
+    if ('success' in res && res.success) {
       toast.success("Item deleted permanently", { id: toastId })
       router.refresh()
     } else {

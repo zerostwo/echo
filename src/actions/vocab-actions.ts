@@ -7,48 +7,20 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
 import { startOfDay } from 'date-fns';
-import { randomUUID } from 'crypto';
-import { revalidatePath } from 'next/cache';
 import { 
   getCached, 
   setCached, 
   generateCacheKey, 
-  CACHE_KEYS,
-  invalidateVocabCache 
-} from '@/lib/redis';
+  CACHE_PREFIXES,
+  invalidateVocabCache,
+  invalidateDashboardCache,
+} from '@/lib/cache';
+import { dedupe, generateDedupeKey } from '@/lib/dedupe';
+import { chunkArray } from '@/lib/pagination';
+import { withQueryLogging } from '@/lib/query-logger';
+import { safeRevalidate, revalidateInBackground, revalidateVocabPaths } from '@/lib/revalidate';
 
 const execFileAsync = promisify(execFile);
-const INTERNAL_REVALIDATE_TOKEN = process.env.INTERNAL_REVALIDATE_TOKEN;
-
-function safeRevalidate(paths: string[]) {
-    for (const path of paths) {
-        try {
-            revalidatePath(path);
-        } catch (err) {
-            console.warn(`[revalidate] Failed for ${path}:`, err);
-        }
-    }
-}
-
-const revalidateInBackground = async (paths: string[]) => {
-    const baseUrl =
-        process.env.NEXT_PUBLIC_SITE_URL ||
-        process.env.SITE_URL ||
-        (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : `http://localhost:${process.env.PORT || 3000}`);
-
-    try {
-        await fetch(`${baseUrl}/api/revalidate-paths`, {
-            method: 'POST',
-            headers: {
-                'content-type': 'application/json',
-                ...(INTERNAL_REVALIDATE_TOKEN ? { 'x-revalidate-token': INTERNAL_REVALIDATE_TOKEN } : {}),
-            },
-            body: JSON.stringify({ paths }),
-        });
-    } catch (err) {
-        console.warn('[revalidate] Background revalidation failed:', err);
-    }
-};
 
 export async function queryDictionary(wordList: string[]) {
     if (wordList.length === 0) return {};
@@ -560,12 +532,20 @@ export async function getVocabPaginated(
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
-    const admin = getAdminClient();
     const userId = session.user.id;
     const offset = (page - 1) * pageSize;
 
-    // Generate cache key
-    const cacheKey = generateCacheKey(CACHE_KEYS.VOCAB_PAGINATED, {
+    // Generate cache and dedupe keys
+    const cacheKey = generateCacheKey(CACHE_PREFIXES.VOCAB_PAGINATED, {
+        user_id: userId,
+        page,
+        pageSize,
+        filters,
+        sortBy,
+        sortOrder
+    });
+
+    const dedupeKey = generateDedupeKey('getVocabPaginated', {
         user_id: userId,
         page,
         pageSize,
@@ -575,16 +555,23 @@ export async function getVocabPaginated(
     });
 
     // Try to get from cache first
-    const cached = await getCached<PaginatedVocabResult>(cacheKey);
+    const cached = getCached<PaginatedVocabResult>(cacheKey);
     if (cached) {
-        console.log(`[${new Date().toISOString()}] [getVocabPaginated] Cache hit`);
         return cached;
     }
 
-    console.log(`[${new Date().toISOString()}] [getVocabPaginated] Cache miss, fetching from database`);
+    // Use dedupe to prevent concurrent identical requests
+    return dedupe(dedupeKey, async () => {
+        // Double-check cache after acquiring dedupe lock
+        const cachedAfterLock = getCached<PaginatedVocabResult>(cacheKey);
+        if (cachedAfterLock) {
+            return cachedAfterLock;
+        }
 
-    try {
-        const wordFrequencyMap = new Map<string, { frequency: number; sentenceIds: string[] }>();
+        return withQueryLogging('getVocabPaginated', async () => {
+            const admin = getAdminClient();
+
+            const wordFrequencyMap = new Map<string, { frequency: number; sentenceIds: string[] }>();
         let dictionaryWordIds: string[] | null = null;
 
         // Step 0: Get Dictionary Words if needed
@@ -717,18 +704,18 @@ export async function getVocabPaginated(
             wordIds = Array.from(wordFrequencyMap.keys());
         }
 
-        if (wordIds.length === 0) {
-            const emptyResult: PaginatedVocabResult = {
-                data: [],
-                total: 0,
-                page,
-                pageSize,
-                totalPages: 0,
-                stats: { totalWords: 0, masteredWords: 0, learningWords: 0, newWords: 0, newWords24h: 0, masteredWords24h: 0, dueToday: 0, overdueWords: 0, averageRetention: 0 }
-            };
-            await setCached(cacheKey, emptyResult, 60);
-            return emptyResult;
-        }
+            if (wordIds.length === 0) {
+                const emptyResult: PaginatedVocabResult = {
+                    data: [],
+                    total: 0,
+                    page,
+                    pageSize,
+                    totalPages: 0,
+                    stats: { totalWords: 0, masteredWords: 0, learningWords: 0, newWords: 0, newWords24h: 0, masteredWords24h: 0, dueToday: 0, overdueWords: 0, averageRetention: 0 }
+                };
+                setCached(cacheKey, emptyResult, 60000);
+                return emptyResult;
+            }
 
         // Step 4 & 5: Get word details and user statuses in parallel
         const allWords: any[] = [];
@@ -968,31 +955,29 @@ export async function getVocabPaginated(
         const totalPages = Math.ceil(total / pageSize);
         const paginatedData = mergedWords.slice(offset, offset + pageSize);
 
-        const result: PaginatedVocabResult = {
-            data: paginatedData,
-            total,
-            page,
-            pageSize,
-            totalPages,
-            stats: { 
-                totalWords, 
-                masteredWords, 
-                learningWords,
-                newWords,
-                newWords24h, 
-                masteredWords24h,
-                dueToday,
-                overdueWords,
-                averageRetention: Math.round(avgRetention),
-            }
-        };
+            const result: PaginatedVocabResult = {
+                data: paginatedData,
+                total,
+                page,
+                pageSize,
+                totalPages,
+                stats: { 
+                    totalWords, 
+                    masteredWords, 
+                    learningWords,
+                    newWords,
+                    newWords24h, 
+                    masteredWords24h,
+                    dueToday,
+                    overdueWords,
+                    averageRetention: Math.round(avgRetention),
+                }
+            };
 
-        // Cache the result for 2 minutes
-        await setCached(cacheKey, result, 120);
+            // Cache the result for 2 minutes (120000ms)
+            setCached(cacheKey, result, 120000);
 
-        return result;
-    } catch (error) {
-        console.error('[getVocabPaginated] Error:', error);
-        return { error: 'Failed to fetch vocabulary' };
-    }
+            return result;
+        }, { user_id: userId, page, pageSize });
+    });
 }

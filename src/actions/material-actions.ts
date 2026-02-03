@@ -8,52 +8,27 @@ import { writeFile, unlink } from 'fs/promises';
 import { createWriteStream } from 'fs';
 import { pipeline } from 'stream/promises';
 import path from 'path';
-import { revalidatePath } from 'next/cache';
 import { transcribeFile } from '@/services/transcription';
 import { extractVocabulary } from './vocab-actions';
 import { createNotification } from './notification-actions';
 import { startOfDay } from 'date-fns';
 import os from 'os';
-import { randomUUID } from 'crypto';
 import { 
   getCached, 
   setCached, 
   generateCacheKey, 
-  CACHE_KEYS,
+  CACHE_PREFIXES,
   invalidateMaterialsCache,
-  invalidateVocabCache
-} from '@/lib/redis';
+  invalidateVocabCache,
+  invalidateDashboardCache,
+} from '@/lib/cache';
+import { dedupe, generateDedupeKey } from '@/lib/dedupe';
+import { chunkArray, processBatchedParallel } from '@/lib/pagination';
+import { withQueryLogging } from '@/lib/query-logger';
+import { safeRevalidate, revalidateInBackground, revalidateMaterialPaths } from '@/lib/revalidate';
 
 const MATERIALS_BUCKET = 'materials';
-const INTERNAL_REVALIDATE_TOKEN = process.env.INTERNAL_REVALIDATE_TOKEN;
-const safeRevalidate = (paths: string[]) => {
-    for (const path of paths) {
-        try {
-            revalidatePath(path);
-        } catch (err) {
-            console.warn(`[revalidate] Failed for ${path}:`, err);
-        }
-    }
-};
-const revalidateInBackground = async (paths: string[]) => {
-    const baseUrl =
-        process.env.NEXT_PUBLIC_SITE_URL ||
-        process.env.SITE_URL ||
-        (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : `http://localhost:${process.env.PORT || 3000}`);
 
-    try {
-        await fetch(`${baseUrl}/api/revalidate-paths`, {
-            method: 'POST',
-            headers: {
-                'content-type': 'application/json',
-                ...(INTERNAL_REVALIDATE_TOKEN ? { 'x-revalidate-token': INTERNAL_REVALIDATE_TOKEN } : {}),
-            },
-            body: JSON.stringify({ paths }),
-        });
-    } catch (err) {
-        console.warn('[revalidate] Background revalidation failed:', err);
-    }
-};
 const duplicateDateFormatter = new Intl.DateTimeFormat('en-US', {
     year: 'numeric',
     month: 'short',
@@ -140,10 +115,10 @@ export async function registerUploadedMaterial(
         }
 
         // Invalidate cache
-        await invalidateMaterialsCache(session.user.id);
+        invalidateMaterialsCache(session.user.id);
+        invalidateDashboardCache(session.user.id);
         
-        revalidatePath('/materials');
-        revalidatePath('/dashboard');
+        revalidateMaterialPaths();
         return { success: true, materialId: material.$id };
     } catch (e) {
         console.error("Register upload error:", e);
@@ -298,12 +273,12 @@ export async function uploadMaterial(formData: FormData) {
       'material'
     );
 
-    // Invalidate cache
-    await invalidateMaterialsCache(session.user.id);
+        // Invalidate cache
+        invalidateMaterialsCache(session.user.id);
+        invalidateDashboardCache(session.user.id);
 
-    revalidatePath('/materials');
-    revalidatePath('/dashboard');
-    return { success: true, materialId: material.$id };
+        revalidateMaterialPaths();
+        return { success: true, materialId: material.$id };
   } catch (e) {
       console.error("Upload error:", e);
       return { error: 'Upload failed' };
@@ -334,13 +309,11 @@ export async function deleteMaterial(materialId: string) {
         );
 
         // Invalidate cache
-        await Promise.all([
-            invalidateMaterialsCache(session.user.id),
-            invalidateVocabCache(session.user.id)
-        ]);
+        invalidateMaterialsCache(session.user.id);
+        invalidateVocabCache(session.user.id);
+        invalidateDashboardCache(session.user.id);
 
-        revalidatePath('/materials');
-        revalidatePath('/dashboard');
+        revalidateMaterialPaths();
         return { success: true };
     } catch (e) {
         return { error: 'Failed to delete material' };
@@ -370,24 +343,71 @@ export async function restoreMaterial(materialId: string) {
         );
         
         // Invalidate cache
-        await Promise.all([
-            invalidateMaterialsCache(session.user.id),
-            invalidateVocabCache(session.user.id)
-        ]);
+        invalidateMaterialsCache(session.user.id);
+        invalidateVocabCache(session.user.id);
+        invalidateDashboardCache(session.user.id);
         
-        revalidatePath('/materials');
-        revalidatePath('/trash');
+        safeRevalidate(['/materials', '/trash', '/dashboard']);
         return { success: true };
     } catch (e) {
         return { error: 'Failed to restore material' };
     }
 }
 
+/**
+ * Queue for background orphan word cleanup
+ * This runs asynchronously to avoid blocking the delete request
+ */
+const orphanCleanupQueue: Array<{ wordIds: string[]; userId: string }> = [];
+let isProcessingOrphanCleanup = false;
+
+async function processOrphanCleanupQueue() {
+    if (isProcessingOrphanCleanup) return;
+    isProcessingOrphanCleanup = true;
+
+    while (orphanCleanupQueue.length > 0) {
+        const task = orphanCleanupQueue.shift();
+        if (!task) continue;
+
+        const admin = getAdminClient();
+        console.log(`[OrphanCleanup] Processing ${task.wordIds.length} words`);
+
+        // Process in batches of 10 to avoid overwhelming the DB
+        for (const wordId of task.wordIds) {
+            try {
+                const { total } = await admin.databases.listDocuments(
+                    APPWRITE_DATABASE_ID,
+                    'word_occurrences',
+                    [Query.equal('word_id', wordId), Query.limit(1)]
+                );
+                
+                if (total === 0) {
+                    await admin.databases.updateDocument(
+                        APPWRITE_DATABASE_ID,
+                        'words',
+                        wordId,
+                        { deleted_at: new Date().toISOString() }
+                    );
+                }
+            } catch {
+                // Word might not exist, ignore
+            }
+        }
+
+        // Invalidate caches after cleanup
+        invalidateVocabCache(task.userId);
+    }
+
+    isProcessingOrphanCleanup = false;
+}
+
 export async function permanentlyDeleteMaterial(materialId: string) {
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
-    try {
+    const userId = session.user.id;
+
+    return withQueryLogging('permanentlyDeleteMaterial', async () => {
         const admin = getAdminClient();
 
         const material = await admin.databases.getDocument(
@@ -396,7 +416,7 @@ export async function permanentlyDeleteMaterial(materialId: string) {
             materialId
         );
 
-        if (!material || material.user_id !== session.user.id) return { error: 'Material not found' };
+        if (!material || material.user_id !== userId) return { error: 'Material not found' };
 
         // 1. Get all sentences for this material
         const { documents: sentences } = await admin.databases.listDocuments(
@@ -408,99 +428,92 @@ export async function permanentlyDeleteMaterial(materialId: string) {
         const sentenceIds = sentences.map(s => s.$id);
         console.log(`[permanentlyDeleteMaterial] Found ${sentenceIds.length} sentences to delete`);
 
-        // 2. Get all word_occurrences for these sentences
+        // 2. Get all word_occurrences for these sentences (parallel batch fetch)
         const wordIdsToCheck = new Set<string>();
         
         if (sentenceIds.length > 0) {
-            for (let i = 0; i < sentenceIds.length; i += 50) {
-                const batch = sentenceIds.slice(i, i + 50);
-                const { documents: occurrences } = await admin.databases.listDocuments(
-                    APPWRITE_DATABASE_ID,
-                    'word_occurrences',
-                    [Query.equal('sentence_id', batch), Query.limit(5000)]
-                );
-                
-                // Track word IDs for orphan cleanup later
-                for (const occ of occurrences) {
-                    wordIdsToCheck.add(occ.word_id);
-                }
-                
-                // Delete word_occurrences
-                await Promise.all(occurrences.map(occ => 
-                    admin.databases.deleteDocument(APPWRITE_DATABASE_ID, 'word_occurrences', occ.$id)
-                ));
+            const chunks = chunkArray(sentenceIds, 100);
+            const occurrenceResults = await Promise.all(
+                chunks.map(batch =>
+                    admin.databases.listDocuments(
+                        APPWRITE_DATABASE_ID,
+                        'word_occurrences',
+                        [Query.equal('sentence_id', batch), Query.limit(5000)]
+                    )
+                )
+            );
+
+            const allOccurrences = occurrenceResults.flatMap(r => r.documents);
+            
+            // Track word IDs for orphan cleanup
+            for (const occ of allOccurrences) {
+                wordIdsToCheck.add(occ.word_id);
             }
+
+            // Delete all occurrences in parallel (batched)
+            const occChunks = chunkArray(allOccurrences, 25);
+            await Promise.all(
+                occChunks.map(batch =>
+                    Promise.all(batch.map(occ =>
+                        admin.databases.deleteDocument(APPWRITE_DATABASE_ID, 'word_occurrences', occ.$id)
+                    ))
+                )
+            );
         }
         
-        console.log(`[permanentlyDeleteMaterial] Deleted word_occurrences, checking ${wordIdsToCheck.size} words for orphans`);
+        console.log(`[permanentlyDeleteMaterial] Deleted word_occurrences, ${wordIdsToCheck.size} words to check`);
 
-        // 3. Delete practice_progress for these sentences
+        // 3. Delete practice_progress for these sentences (parallel)
         if (sentenceIds.length > 0) {
-            for (let i = 0; i < sentenceIds.length; i += 50) {
-                const batch = sentenceIds.slice(i, i + 50);
-                const { documents: practices } = await admin.databases.listDocuments(
-                    APPWRITE_DATABASE_ID,
-                    'practice_progress',
-                    [Query.equal('sentence_id', batch)]
-                );
-                
-                await Promise.all(practices.map(p => 
-                    admin.databases.deleteDocument(APPWRITE_DATABASE_ID, 'practice_progress', p.$id)
-                ));
-            }
+            const chunks = chunkArray(sentenceIds, 100);
+            const practiceResults = await Promise.all(
+                chunks.map(batch =>
+                    admin.databases.listDocuments(
+                        APPWRITE_DATABASE_ID,
+                        'practice_progress',
+                        [Query.equal('sentence_id', batch), Query.limit(5000)]
+                    )
+                )
+            );
+
+            const allPractices = practiceResults.flatMap(r => r.documents);
+            const practiceChunks = chunkArray(allPractices, 25);
+            await Promise.all(
+                practiceChunks.map(batch =>
+                    Promise.all(batch.map(p =>
+                        admin.databases.deleteDocument(APPWRITE_DATABASE_ID, 'practice_progress', p.$id)
+                    ))
+                )
+            );
         }
 
-        // 4. Delete sentences
-        await Promise.all(sentences.map(s => 
-            admin.databases.deleteDocument(APPWRITE_DATABASE_ID, 'sentences', s.$id)
-        ));
+        // 4. Delete sentences (parallel, batched)
+        const sentenceChunks = chunkArray(sentences, 25);
+        await Promise.all(
+            sentenceChunks.map(batch =>
+                Promise.all(batch.map(s =>
+                    admin.databases.deleteDocument(APPWRITE_DATABASE_ID, 'sentences', s.$id)
+                ))
+            )
+        );
         
         console.log(`[permanentlyDeleteMaterial] Deleted ${sentences.length} sentences`);
 
-        // 5. Clean up orphaned words (soft delete words that no longer have any occurrences)
-        for (const wordId of wordIdsToCheck) {
-            try {
-                const { total } = await admin.databases.listDocuments(
-                    APPWRITE_DATABASE_ID,
-                    'word_occurrences',
-                    [Query.equal('word_id', wordId), Query.limit(1)]
-                );
-                
-                if (total === 0) {
-                    // No more occurrences for this word - soft delete it
-                    const word = await admin.databases.getDocument(
-                        APPWRITE_DATABASE_ID,
-                        'words',
-                        wordId
-                    );
-                    
-                    if (!word.deleted_at) {
-                        await admin.databases.updateDocument(
-                            APPWRITE_DATABASE_ID,
-                            'words',
-                            wordId,
-                            { deleted_at: new Date().toISOString() }
-                        );
-                    }
-                }
-            } catch (e) {
-                // Word might not exist, ignore
-            }
+        // 5. Schedule orphan word cleanup for BACKGROUND processing (non-blocking)
+        if (wordIdsToCheck.size > 0) {
+            orphanCleanupQueue.push({ wordIds: Array.from(wordIdsToCheck), userId });
+            // Start processing but don't await
+            processOrphanCleanupQueue().catch(console.error);
         }
 
-        // 6. Delete file from disk or storage
+        // 6. Delete file from storage
         try {
             if (material.file_path.startsWith('http')) {
                 // External URL - do nothing
             } else if (path.isAbsolute(material.file_path)) {
-                // Local file (legacy)
                 await unlink(material.file_path);
             } else {
-                // Appwrite Storage
-                await admin.storage.deleteFile(
-                    MATERIALS_BUCKET,
-                    material.file_path
-                );
+                await admin.storage.deleteFile(MATERIALS_BUCKET, material.file_path);
             }
         } catch (e) {
             console.error("Failed to delete file:", e);
@@ -517,33 +530,26 @@ export async function permanentlyDeleteMaterial(materialId: string) {
         const userDoc = await admin.databases.getDocument(
             APPWRITE_DATABASE_ID,
             'users',
-            session.user.id
+            userId
         );
             
         if (userDoc) {
-             await admin.databases.updateDocument(
+            await admin.databases.updateDocument(
                 APPWRITE_DATABASE_ID,
                 'users',
-                session.user.id,
+                userId,
                 { used_space: Math.max(0, (userDoc.used_space || 0) - material.size) }
-             );
+            );
         }
 
         // Invalidate caches
-        await Promise.all([
-            invalidateMaterialsCache(session.user.id),
-            invalidateVocabCache(session.user.id)
-        ]);
+        invalidateMaterialsCache(userId);
+        invalidateVocabCache(userId);
+        invalidateDashboardCache(userId);
 
-        revalidatePath('/materials');
-        revalidatePath('/trash');
-        revalidatePath('/dashboard');
-        revalidatePath('/words');
+        safeRevalidate(['/materials', '/trash', '/dashboard', '/words']);
         return { success: true };
-    } catch (e) {
-        console.error('[permanentlyDeleteMaterial] Error:', e);
-        return { error: 'Failed to permanently delete material' };
-    }
+    }, { materialId });
 }
 
 export async function moveMaterial(materialId: string, newFolderId: string | null) {
@@ -563,7 +569,8 @@ export async function moveMaterial(materialId: string, newFolderId: string | nul
             { folder_id: newFolderId }
         );
         
-        revalidatePath('/materials');
+        invalidateMaterialsCache(session.user.id);
+        safeRevalidate(['/materials']);
         return { success: true };
     } catch (e) {
         return { error: 'Failed to move material' };
@@ -571,7 +578,7 @@ export async function moveMaterial(materialId: string, newFolderId: string | nul
 }
 
 export async function renameMaterial(materialId: string, newTitle: string) {
-     const session = await auth();
+    const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
     try {
@@ -587,7 +594,8 @@ export async function renameMaterial(materialId: string, newTitle: string) {
             { title: newTitle }
         );
 
-        revalidatePath('/materials');
+        invalidateMaterialsCache(session.user.id);
+        safeRevalidate(['/materials']);
         return { success: true };
     } catch (e) {
         return { error: 'Failed to rename material' };
@@ -919,12 +927,20 @@ export async function getMaterialsPaginated(
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
-    const admin = getAdminClient();
     const userId = session.user.id;
     const offset = (page - 1) * pageSize;
 
-    // Generate cache key
-    const cacheKey = generateCacheKey(CACHE_KEYS.MATERIALS_PAGINATED, {
+    // Generate cache and dedupe keys
+    const cacheKey = generateCacheKey(CACHE_PREFIXES.MATERIALS_PAGINATED, {
+        user_id: userId,
+        page,
+        pageSize,
+        filters,
+        sortBy,
+        sortOrder
+    });
+    
+    const dedupeKey = generateDedupeKey('getMaterialsPaginated', {
         user_id: userId,
         page,
         pageSize,
@@ -934,195 +950,201 @@ export async function getMaterialsPaginated(
     });
 
     // Try to get from cache first
-    const cached = await getCached<PaginatedMaterialResult>(cacheKey);
+    const cached = getCached<PaginatedMaterialResult>(cacheKey);
     if (cached) {
-        console.log('[getMaterialsPaginated] Cache hit');
         return cached;
     }
 
-    console.log('[getMaterialsPaginated] Cache miss, fetching from database');
-
-    try {
-        // Step 1: Get materials with basic info only
-        const queries = [
-            Query.equal('user_id', userId),
-            Query.isNull('deleted_at')
-        ];
-
-        if (filters.folderId === 'unfiled') {
-            queries.push(Query.isNull('folder_id'));
-        } else if (filters.folderId) {
-            queries.push(Query.equal('folder_id', filters.folderId));
+    // Use dedupe to prevent concurrent identical requests
+    return dedupe(dedupeKey, async () => {
+        // Double-check cache after acquiring dedupe lock
+        const cachedAfterLock = getCached<PaginatedMaterialResult>(cacheKey);
+        if (cachedAfterLock) {
+            return cachedAfterLock;
         }
 
-        if (filters.search) {
-            queries.push(Query.search('title', filters.search));
-        }
+        return withQueryLogging('getMaterialsPaginated', async () => {
+            const admin = getAdminClient();
 
-        // Sanitize sortBy to ensure it's a valid attribute in the schema
-        const validSortAttributes = ['title', 'created_at', 'updated_at', 'size', '$createdAt', '$updatedAt'];
-        let sortAttribute = sortBy;
-        
-        if (sortBy === 'created_at') {
-            sortAttribute = '$createdAt';
-        } else if (sortBy === 'updated_at') {
-            sortAttribute = '$updatedAt';
-        } else if (!validSortAttributes.includes(sortBy)) {
-            // Fallback for computed fields or invalid attributes
-            sortAttribute = '$createdAt';
-        }
-
-        if (sortOrder === 'asc') {
-            queries.push(Query.orderAsc(sortAttribute));
-        } else {
-            queries.push(Query.orderDesc(sortAttribute));
-        }
-
-        queries.push(Query.limit(pageSize));
-        queries.push(Query.offset(offset));
-
-        const { documents: materials, total: count } = await admin.databases.listDocuments(
-            APPWRITE_DATABASE_ID,
-            'materials',
-            queries
-        );
-
-        if (!materials || materials.length === 0) {
-            const emptyResult: PaginatedMaterialResult = {
-                data: [],
-                total: count || 0,
-                page,
-                pageSize,
-                totalPages: Math.ceil((count || 0) / pageSize),
-            };
-            await setCached(cacheKey, emptyResult, 60);
-            return emptyResult;
-        }
-
-        // Step 2: Get stats for these materials
-        const materialIds = materials.map((m: any) => m.$id);
-
-        // Fetch sentences
-        const { documents: sentences } = await admin.databases.listDocuments(
-            APPWRITE_DATABASE_ID,
-            'sentences',
-            [
-                Query.equal('material_id', materialIds),
+            // Step 1: Get materials with basic info only
+            const queries = [
+                Query.equal('user_id', userId),
                 Query.isNull('deleted_at')
-            ]
-        );
+            ];
 
-        // Fetch practices
-        const { documents: practices } = await admin.databases.listDocuments(
-            APPWRITE_DATABASE_ID,
-            'practice_progress',
-            [Query.equal('user_id', userId)]
-        );
-
-        // Fetch occurrences
-        const sentenceIds = sentences.map(s => s.$id);
-        let occurrences: any[] = [];
-        if (sentenceIds.length > 0) {
-             // Fetch with explicit limit (Appwrite default is only 25)
-             const { documents } = await admin.databases.listDocuments(
-                 APPWRITE_DATABASE_ID,
-                 'word_occurrences',
-                 [
-                     Query.equal('sentence_id', sentenceIds),
-                     Query.limit(5000)
-                 ]
-             );
-             occurrences = documents;
-        }
-
-        // Build lookup maps
-        const sentencesByMaterial = new Map<string, string[]>();
-        const sentenceIdSet = new Set<string>();
-        
-        sentences.forEach((s: any) => {
-            if (!sentencesByMaterial.has(s.material_id)) {
-                sentencesByMaterial.set(s.material_id, []);
+            if (filters.folderId === 'unfiled') {
+                queries.push(Query.isNull('folder_id'));
+            } else if (filters.folderId) {
+                queries.push(Query.equal('folder_id', filters.folderId));
             }
-            sentencesByMaterial.get(s.material_id)!.push(s.$id);
-            sentenceIdSet.add(s.$id);
-        });
 
-        const practicesBySentence = new Map<string, any>();
-        practices.forEach((p: any) => {
-            if (sentenceIdSet.has(p.sentence_id)) {
-                practicesBySentence.set(p.sentence_id, p);
+            if (filters.search) {
+                queries.push(Query.search('title', filters.search));
             }
-        });
 
-        const occurrencesBySentence = new Map<string, Set<string>>();
-        occurrences.forEach((o: any) => {
-            if (sentenceIdSet.has(o.sentence_id)) {
-                if (!occurrencesBySentence.has(o.sentence_id)) {
-                    occurrencesBySentence.set(o.sentence_id, new Set());
-                }
-                occurrencesBySentence.get(o.sentence_id)!.add(o.word_id);
-            }
-        });
-
-        // Process materials to calculate stats
-        const processedMaterials = materials.map((m: any) => {
-            const materialSentenceIds = sentencesByMaterial.get(m.$id) || [];
-            const totalSentences = materialSentenceIds.length;
+            // Sanitize sortBy to ensure it's a valid attribute in the schema
+            const validSortAttributes = ['title', 'created_at', 'updated_at', 'size', '$createdAt', '$updatedAt'];
+            let sortAttribute = sortBy;
             
-            let practicedSentences = 0;
-            let totalScore = 0;
-            let totalDuration = 0;
-            let totalAttempts = 0;
-            const uniqueWordIds = new Set<string>();
+            if (sortBy === 'created_at') {
+                sortAttribute = '$createdAt';
+            } else if (sortBy === 'updated_at') {
+                sortAttribute = '$updatedAt';
+            } else if (!validSortAttributes.includes(sortBy)) {
+                sortAttribute = '$createdAt';
+            }
 
-            materialSentenceIds.forEach((sentenceId: string) => {
-                const practice = practicesBySentence.get(sentenceId);
-                if (practice) {
-                    practicedSentences++;
-                    totalScore += practice.score || 0;
-                    totalDuration += practice.duration || 0;
-                    totalAttempts += practice.attempts || 0;
+            if (sortOrder === 'asc') {
+                queries.push(Query.orderAsc(sortAttribute));
+            } else {
+                queries.push(Query.orderDesc(sortAttribute));
+            }
+
+            queries.push(Query.limit(pageSize));
+            queries.push(Query.offset(offset));
+
+            const { documents: materials, total: count } = await admin.databases.listDocuments(
+                APPWRITE_DATABASE_ID,
+                'materials',
+                queries
+            );
+
+            if (!materials || materials.length === 0) {
+                const emptyResult: PaginatedMaterialResult = {
+                    data: [],
+                    total: count || 0,
+                    page,
+                    pageSize,
+                    totalPages: Math.ceil((count || 0) / pageSize),
+                };
+                setCached(cacheKey, emptyResult, 60000);
+                return emptyResult;
+            }
+
+            // Step 2: Get stats for these materials (parallel fetches)
+            const materialIds = materials.map((m: any) => m.$id);
+
+            // Fetch sentences, practices in parallel
+            const [sentencesRes, practicesRes] = await Promise.all([
+                admin.databases.listDocuments(
+                    APPWRITE_DATABASE_ID,
+                    'sentences',
+                    [Query.equal('material_id', materialIds), Query.isNull('deleted_at'), Query.limit(5000)]
+                ),
+                admin.databases.listDocuments(
+                    APPWRITE_DATABASE_ID,
+                    'practice_progress',
+                    [Query.equal('user_id', userId), Query.limit(5000)]
+                )
+            ]);
+
+            const sentences = sentencesRes.documents;
+            const practices = practicesRes.documents;
+
+            // Fetch occurrences if there are sentences
+            const sentenceIds = sentences.map(s => s.$id);
+            let occurrences: any[] = [];
+            if (sentenceIds.length > 0) {
+                // Batch fetch occurrences in parallel chunks
+                const chunks = chunkArray(sentenceIds, 100);
+                const occurrenceResults = await Promise.all(
+                    chunks.map(batch => 
+                        admin.databases.listDocuments(
+                            APPWRITE_DATABASE_ID,
+                            'word_occurrences',
+                            [Query.equal('sentence_id', batch), Query.limit(5000)]
+                        )
+                    )
+                );
+                occurrences = occurrenceResults.flatMap(r => r.documents);
+            }
+
+            // Build lookup maps
+            const sentencesByMaterial = new Map<string, string[]>();
+            const sentenceIdSet = new Set<string>();
+            
+            sentences.forEach((s: any) => {
+                if (!sentencesByMaterial.has(s.material_id)) {
+                    sentencesByMaterial.set(s.material_id, []);
                 }
-                
-                const wordIds = occurrencesBySentence.get(sentenceId);
-                if (wordIds) {
-                    wordIds.forEach(wid => uniqueWordIds.add(wid));
+                sentencesByMaterial.get(s.material_id)!.push(s.$id);
+                sentenceIdSet.add(s.$id);
+            });
+
+            const practicesBySentence = new Map<string, any>();
+            practices.forEach((p: any) => {
+                if (sentenceIdSet.has(p.sentence_id)) {
+                    practicesBySentence.set(p.sentence_id, p);
                 }
             });
 
-            const avgScore = practicedSentences > 0 ? Math.round(totalScore / practicedSentences) : 0;
-            
-            return {
-                ...m,
-                id: m.$id, // Map $id to id for frontend compatibility
-                stats: {
-                    practicedCount: practicedSentences,
-                    totalSentences: totalSentences,
-                    avgScore: avgScore,
-                    vocabCount: uniqueWordIds.size,
-                    duration: totalDuration,
-                    attempts: totalAttempts
+            const occurrencesBySentence = new Map<string, Set<string>>();
+            occurrences.forEach((o: any) => {
+                if (sentenceIdSet.has(o.sentence_id)) {
+                    if (!occurrencesBySentence.has(o.sentence_id)) {
+                        occurrencesBySentence.set(o.sentence_id, new Set());
+                    }
+                    occurrencesBySentence.get(o.sentence_id)!.add(o.word_id);
                 }
+            });
+
+            // Process materials to calculate stats
+            const processedMaterials = materials.map((m: any) => {
+                const materialSentenceIds = sentencesByMaterial.get(m.$id) || [];
+                const totalSentences = materialSentenceIds.length;
+                
+                let practicedSentences = 0;
+                let totalScore = 0;
+                let totalDuration = 0;
+                let totalAttempts = 0;
+                const uniqueWordIds = new Set<string>();
+
+                materialSentenceIds.forEach((sentenceId: string) => {
+                    const practice = practicesBySentence.get(sentenceId);
+                    if (practice) {
+                        practicedSentences++;
+                        totalScore += practice.score || 0;
+                        totalDuration += practice.duration || 0;
+                        totalAttempts += practice.attempts || 0;
+                    }
+                    
+                    const wordIds = occurrencesBySentence.get(sentenceId);
+                    if (wordIds) {
+                        wordIds.forEach(wid => uniqueWordIds.add(wid));
+                    }
+                });
+
+                const avgScore = practicedSentences > 0 ? Math.round(totalScore / practicedSentences) : 0;
+                
+                return {
+                    ...m,
+                    id: m.$id,
+                    stats: {
+                        practicedCount: practicedSentences,
+                        totalSentences: totalSentences,
+                        avgScore: avgScore,
+                        vocabCount: uniqueWordIds.size,
+                        duration: totalDuration,
+                        attempts: totalAttempts
+                    }
+                };
+            });
+
+            const total = count || 0;
+            const totalPages = Math.ceil(total / pageSize);
+
+            const result: PaginatedMaterialResult = {
+                data: processedMaterials,
+                total,
+                page,
+                pageSize,
+                totalPages,
             };
-        });
 
-        const total = count || 0;
-        const totalPages = Math.ceil(total / pageSize);
+            // Cache the result for 2 minutes
+            setCached(cacheKey, result, 120000);
 
-        const result: PaginatedMaterialResult = {
-            data: processedMaterials,
-            total,
-            page,
-            pageSize,
-            totalPages,
-        };
-
-        // Cache the result for 2 minutes
-        await setCached(cacheKey, result, 120);
-
-        return result;
-    } catch (error) {
-        console.error('[getMaterialsPaginated] Error:', error);
-        return { error: 'Failed to fetch materials' };
-    }
+            return result;
+        }, { user_id: userId, page, pageSize });
+    });
 }
