@@ -22,6 +22,7 @@ const EXPORT_BUCKET_ID = 'exports';
 export async function createExportJob(userId: string, options: ExportOptions) {
   const admin = getAdminClient();
   
+  // Note: Appwrite auto-manages $createdAt
   const job = await admin.databases.createDocument(
     APPWRITE_DATABASE_ID,
     'export_jobs',
@@ -29,8 +30,7 @@ export async function createExportJob(userId: string, options: ExportOptions) {
     {
       user_id: userId,
       options: JSON.stringify(options),
-      status: "queued",
-      created_at: new Date().toISOString(),
+      status: "queued"
     }
   );
 

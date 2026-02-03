@@ -9,7 +9,7 @@ import { updateSentence } from '@/actions/sentence-actions';
 import { recordLearningSessionDuration } from '@/actions/learning-actions';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
-import { Play, RotateCw, Check, ArrowRight, ArrowLeft, Pause, Eye, EyeOff, RefreshCw, Keyboard, X, ChevronLeft, ChevronRight, Plus, Minus } from 'lucide-react';
+import { Play, RotateCw, Check, ArrowRight, ArrowLeft, Pause, Eye, EyeOff, RefreshCw, Keyboard, X, ChevronLeft, ChevronRight, Plus, Minus, Mic, Square, Volume2 } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
@@ -49,6 +49,105 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
     const [selectedWord, setSelectedWord] = useState<any>(null);
     const [wordSheetOpen, setWordSheetOpen] = useState(false);
     const [loadingWord, setLoadingWord] = useState(false);
+    
+    // Voice recording state
+    const [isRecording, setIsRecording] = useState(false);
+    const [recordedAudioUrl, setRecordedAudioUrl] = useState<string | null>(null);
+    const [isPlayingRecording, setIsPlayingRecording] = useState(false);
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    const audioChunksRef = useRef<Blob[]>([]);
+    const recordedAudioRef = useRef<HTMLAudioElement | null>(null);
+
+    // Voice recording functions
+    const startRecording = async () => {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const mediaRecorder = new MediaRecorder(stream);
+            mediaRecorderRef.current = mediaRecorder;
+            audioChunksRef.current = [];
+            
+            mediaRecorder.ondataavailable = (event) => {
+                if (event.data.size > 0) {
+                    audioChunksRef.current.push(event.data);
+                }
+            };
+            
+            mediaRecorder.onstop = () => {
+                const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+                const audioUrl = URL.createObjectURL(audioBlob);
+                setRecordedAudioUrl(audioUrl);
+                
+                // Stop all tracks
+                stream.getTracks().forEach(track => track.stop());
+            };
+            
+            mediaRecorder.start();
+            setIsRecording(true);
+            
+            // Clear previous recording
+            if (recordedAudioUrl) {
+                URL.revokeObjectURL(recordedAudioUrl);
+                setRecordedAudioUrl(null);
+            }
+        } catch (error) {
+            console.error('Error starting recording:', error);
+            toast.error('Failed to access microphone. Please check your permissions.');
+        }
+    };
+    
+    const stopRecording = () => {
+        if (mediaRecorderRef.current && isRecording) {
+            mediaRecorderRef.current.stop();
+            setIsRecording(false);
+        }
+    };
+    
+    const toggleRecording = () => {
+        if (isRecording) {
+            stopRecording();
+        } else {
+            startRecording();
+        }
+    };
+    
+    const playRecordedAudio = () => {
+        if (!recordedAudioUrl) return;
+        
+        if (!recordedAudioRef.current) {
+            recordedAudioRef.current = new Audio(recordedAudioUrl);
+            recordedAudioRef.current.onended = () => setIsPlayingRecording(false);
+        } else {
+            recordedAudioRef.current.src = recordedAudioUrl;
+        }
+        
+        if (isPlayingRecording) {
+            recordedAudioRef.current.pause();
+            recordedAudioRef.current.currentTime = 0;
+            setIsPlayingRecording(false);
+        } else {
+            recordedAudioRef.current.play();
+            setIsPlayingRecording(true);
+        }
+    };
+    
+    // Clean up recorded audio URL on unmount or sentence change
+    useEffect(() => {
+        return () => {
+            if (recordedAudioUrl) {
+                URL.revokeObjectURL(recordedAudioUrl);
+            }
+        };
+    }, [recordedAudioUrl]);
+    
+    // Clear recording when sentence changes
+    useEffect(() => {
+        if (recordedAudioUrl) {
+            URL.revokeObjectURL(recordedAudioUrl);
+            setRecordedAudioUrl(null);
+        }
+        setIsRecording(false);
+        setIsPlayingRecording(false);
+    }, [sentence.id]);
 
     // Handle word click to show word details
     const handleWordClick = async (wordText: string) => {
@@ -427,6 +526,59 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
                                 >
                                     <RefreshCw className="h-4 w-4" />
                                 </Button>
+                            </div>
+                            
+                            {/* Voice Recording Section */}
+                            <div className="flex items-center justify-center gap-3 py-3 px-4 bg-muted/20 rounded-lg border border-dashed">
+                                <span className="text-sm text-muted-foreground">Speaking Practice:</span>
+                                <Button
+                                    variant={isRecording ? "destructive" : "outline"}
+                                    size="sm"
+                                    onClick={toggleRecording}
+                                    className={`gap-2 ${isRecording ? 'animate-pulse' : ''}`}
+                                    title={isRecording ? "Stop recording" : "Start recording"}
+                                >
+                                    {isRecording ? (
+                                        <>
+                                            <Square className="h-4 w-4 fill-current" />
+                                            Stop
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Mic className="h-4 w-4" />
+                                            Record
+                                        </>
+                                    )}
+                                </Button>
+                                
+                                {recordedAudioUrl && (
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={playRecordedAudio}
+                                        className="gap-2"
+                                        title="Play your recording"
+                                    >
+                                        {isPlayingRecording ? (
+                                            <>
+                                                <Pause className="h-4 w-4" />
+                                                Pause
+                                            </>
+                                        ) : (
+                                            <>
+                                                <Volume2 className="h-4 w-4" />
+                                                Play Recording
+                                            </>
+                                        )}
+                                    </Button>
+                                )}
+                                
+                                {isRecording && (
+                                    <span className="text-sm text-destructive font-medium flex items-center gap-2">
+                                        <span className="w-2 h-2 bg-destructive rounded-full animate-pulse" />
+                                        Recording...
+                                    </span>
+                                )}
                             </div>
 
                             {/* Transcript Viewer (Collapsible) */}

@@ -132,8 +132,7 @@ export async function updateUser(prevState: any, formData: FormData) {
             session.user.id,
             {
                 display_name: displayName,
-                email: email, // Sync email
-                updated_at: new Date().toISOString()
+                email: email // Sync email
             }
         );
     } catch (e) {
@@ -223,8 +222,7 @@ export async function uploadAvatar(formData: FormData) {
         'users',
         session.user.id,
         { 
-            image: avatarUrl,
-            updated_at: new Date().toISOString()
+            image: avatarUrl
         }
     );
 
@@ -265,8 +263,7 @@ export async function updateSettings(settings: any) {
           'users',
           session.user.id,
           { 
-            settings: JSON.stringify(newSettings),
-            updated_at: new Date().toISOString() 
+            settings: JSON.stringify(newSettings)
           }
       );
 

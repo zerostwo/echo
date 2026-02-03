@@ -176,19 +176,21 @@ async function processImportJob(jobId: string, mode: "merge" | "overwrite") {
     // --- OVERWRITE MODE: DELETE EXISTING DATA ---
     if (mode === "overwrite") {
         // Helper to delete all documents in a collection for a user
+        // Don't use cursor-based pagination when deleting - fetch first batch until empty
         const deleteForUser = async (collectionId: string, userIdField: string = 'user_id') => {
-            let cursor = null;
-            while (true) {
-                const queries = [
-                    Query.equal(userIdField, userId),
-                    Query.limit(100)
-                ];
-                if (cursor) queries.push(Query.cursorAfter(cursor));
+            const maxIterations = 100; // Safety limit
+            let iterations = 0;
+            
+            while (iterations < maxIterations) {
+                iterations++;
                 
                 const { documents } = await admin.databases.listDocuments(
                     APPWRITE_DATABASE_ID,
                     collectionId,
-                    queries
+                    [
+                        Query.equal(userIdField, userId),
+                        Query.limit(100)
+                    ]
                 );
                 
                 if (documents.length === 0) break;
@@ -196,8 +198,6 @@ async function processImportJob(jobId: string, mode: "merge" | "overwrite") {
                 await Promise.all(documents.map(doc => 
                     admin.databases.deleteDocument(APPWRITE_DATABASE_ID, collectionId, doc.$id)
                 ));
-                
-                if (documents.length < 100) break;
             }
         };
 

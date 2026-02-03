@@ -261,17 +261,33 @@ export async function updateSentence(sentenceId: string, payload: SentenceUpdate
 
         const effectiveContent = editedContent ?? sentence.content;
 
+        // Build update payload - only include edited_content if the attribute exists in schema
+        // Check if edited_content exists in the fetched sentence (indicates schema support)
+        const supportsEditedContent = 'edited_content' in sentence;
+        
+        const updatePayload: Record<string, any> = {
+            start_time: safeStart,
+            end_time: endTime,
+            order: payload.order ?? sentence.order
+        };
+        
+        // Only include edited_content if the schema supports it
+        if (supportsEditedContent) {
+            updatePayload.edited_content = editedContent;
+        } else {
+            // If schema doesn't support edited_content, update the content field directly
+            // This is a fallback - ideally the Appwrite schema should have edited_content attribute
+            console.warn('[updateSentence] edited_content attribute not in schema. Please add it to Appwrite sentences collection.');
+            if (editedContent !== null) {
+                updatePayload.content = editedContent;
+            }
+        }
+
         const updated = await databases.updateDocument(
             DATABASE_ID,
             SENTENCES_COLLECTION_ID,
             sentenceId,
-            {
-                edited_content: editedContent,
-                start_time: safeStart,
-                end_time: endTime,
-                order: payload.order ?? sentence.order,
-                updated_at: new Date().toISOString(),
-            }
+            updatePayload
         );
 
         // Only update vocabulary if content has changed
@@ -587,12 +603,10 @@ export async function getSentencesPaginated(
             Query.isNull('deleted_at'),
         ];
 
-        // Apply search filter
+        // Apply search filter - only search on content field
+        // edited_content may not exist in all Appwrite setups
         if (filters.search) {
-            queries.push(Query.or([
-                Query.search('content', filters.search),
-                Query.search('edited_content', filters.search)
-            ]));
+            queries.push(Query.search('content', filters.search));
         }
 
         // Apply sorting
@@ -732,17 +746,22 @@ export async function mergeSentences(sentenceIds: string[]) {
             .join(' ');
 
         // Update first sentence
+        // Build update payload - only include edited_content if the attribute exists in schema
+        const supportsEditedContent = 'edited_content' in firstSentence;
+        const mergeUpdatePayload: Record<string, any> = {
+            content: mergedContent,
+            start_time: newStartTime,
+            end_time: newEndTime
+        };
+        if (supportsEditedContent) {
+            mergeUpdatePayload.edited_content = null;
+        }
+        
         await databases.updateDocument(
             DATABASE_ID,
             SENTENCES_COLLECTION_ID,
             firstSentence.$id,
-            {
-                content: mergedContent,
-                edited_content: null,
-                start_time: newStartTime,
-                end_time: newEndTime,
-                updated_at: new Date().toISOString(),
-            }
+            mergeUpdatePayload
         );
 
         // Soft delete others
@@ -846,16 +865,21 @@ export async function splitSentence(sentenceId: string, splitIndex: number) {
         const splitTime = sentence.start_time + (totalDuration * splitRatio);
 
         // Update first sentence
+        // Build update payload - only include edited_content if the attribute exists in schema
+        const supportsEditedContent = 'edited_content' in sentence;
+        const splitUpdatePayload: Record<string, any> = {
+            content: firstPart,
+            end_time: splitTime
+        };
+        if (supportsEditedContent) {
+            splitUpdatePayload.edited_content = null;
+        }
+        
         await databases.updateDocument(
             DATABASE_ID,
             SENTENCES_COLLECTION_ID,
             sentenceId,
-            {
-                content: firstPart,
-                edited_content: null,
-                end_time: splitTime,
-                updated_at: new Date().toISOString(),
-            }
+            splitUpdatePayload
         );
 
         // Insert second sentence
@@ -868,8 +892,7 @@ export async function splitSentence(sentenceId: string, splitIndex: number) {
                 content: secondPart,
                 start_time: splitTime,
                 end_time: sentence.end_time,
-                order: sentence.order, // Same order, rely on start_time for secondary sort
-                updated_at: new Date().toISOString(),
+                order: sentence.order // Same order, rely on start_time for secondary sort
             }
         );
 

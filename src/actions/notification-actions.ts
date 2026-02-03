@@ -163,19 +163,23 @@ export async function markAllAsRead(): Promise<{ success?: boolean, error?: stri
   try {
     const { databases } = await getAdminClient();
     
-    let cursor = null;
-    do {
-        const queries = [
-            Query.equal('user_id', session.user.id),
-            Query.equal('is_read', false),
-            Query.limit(100)
-        ];
-        if (cursor) queries.push(Query.cursorAfter(cursor));
+    // Don't use cursor-based pagination when modifying documents
+    // Instead, keep fetching until no more unread documents
+    let processedCount = 0;
+    const maxIterations = 100; // Safety limit
+    let iterations = 0;
+    
+    while (iterations < maxIterations) {
+        iterations++;
         
         const { documents } = await databases.listDocuments(
             DATABASE_ID, 
             NOTIFICATIONS_COLLECTION_ID, 
-            queries
+            [
+                Query.equal('user_id', session.user.id),
+                Query.equal('is_read', false),
+                Query.limit(100)
+            ]
         );
         
         if (documents.length === 0) break;
@@ -189,8 +193,8 @@ export async function markAllAsRead(): Promise<{ success?: boolean, error?: stri
             )
         ));
         
-        cursor = documents[documents.length - 1].$id;
-    } while (true);
+        processedCount += documents.length;
+    }
 
     return { success: true };
   } catch (e) {
@@ -237,18 +241,23 @@ export async function clearAllNotifications(): Promise<{ success?: boolean, erro
   try {
     const { databases } = await getAdminClient();
     
-    let cursor = null;
-    do {
-        const queries = [
-            Query.equal('user_id', session.user.id),
-            Query.limit(100)
-        ];
-        if (cursor) queries.push(Query.cursorAfter(cursor));
+    // Don't use cursor-based pagination when deleting documents
+    // The cursor document gets deleted, causing "cursor not found" errors
+    // Instead, keep fetching the first batch until no more documents
+    let processedCount = 0;
+    const maxIterations = 100; // Safety limit
+    let iterations = 0;
+    
+    while (iterations < maxIterations) {
+        iterations++;
         
         const { documents } = await databases.listDocuments(
             DATABASE_ID, 
             NOTIFICATIONS_COLLECTION_ID, 
-            queries
+            [
+                Query.equal('user_id', session.user.id),
+                Query.limit(100)
+            ]
         );
         
         if (documents.length === 0) break;
@@ -261,8 +270,8 @@ export async function clearAllNotifications(): Promise<{ success?: boolean, erro
             )
         ));
         
-        cursor = documents[documents.length - 1].$id;
-    } while (true);
+        processedCount += documents.length;
+    }
 
     return { success: true };
   } catch (e) {

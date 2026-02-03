@@ -142,39 +142,11 @@ export async function GET() {
         ]
     );
 
-    // 6. Hardest Words
-    // Filter in memory from wordStatuses
-    const hardestWordsList = wordStatuses
+    // 6. Hardest Words - will be filtered later after we know which words are in user's materials
+    // Keeping candidates for now
+    const hardestWordsCandidates = wordStatuses
         .filter((s: any) => s.error_count > 0)
-        .sort((a: any, b: any) => b.error_count - a.error_count)
-        .slice(0, 5);
-        
-    // Fetch word details for hardest words
-    const hardestWordsDetails = [];
-    if (hardestWordsList.length > 0) {
-        const { documents: hwDocs } = await admin.databases.listDocuments(
-            APPWRITE_DATABASE_ID,
-            'words',
-            [Query.equal('$id', hardestWordsList.map((s: any) => s.word_id))]
-        );
-        
-        for (const status of hardestWordsList) {
-            const word = hwDocs.find(w => w.$id === status.word_id);
-            if (word) {
-                hardestWordsDetails.push({
-                    id: word.$id,
-                    text: word.text,
-                    errorCount: status.error_count,
-                    translation: word.translation,
-                    phonetic: word.phonetic,
-                    pos: word.pos,
-                    definition: word.definition,
-                    tag: word.tag,
-                    exchange: word.exchange,
-                });
-            }
-        }
-    }
+        .sort((a: any, b: any) => b.error_count - a.error_count);
 
     // 7. User Settings
     const user = await admin.databases.getDocument(APPWRITE_DATABASE_ID, 'users', userId);
@@ -223,8 +195,72 @@ export async function GET() {
         duration: stat.study_duration || 0,
     }));
 
-    // Vocab Snapshot
-    const vocabSnapshot = wordStatuses.reduce(
+    // Get unique word IDs from user's materials (via word_occurrences)
+    const wordIdsInMaterials = new Set<string>();
+    if (materialIds.length > 0) {
+        // Get all sentences for user's materials
+        const allSentenceIds: string[] = [];
+        for (let i = 0; i < materialIds.length; i += 100) {
+            const batch = materialIds.slice(i, i + 100);
+            const { documents: sentencesDocs } = await admin.databases.listDocuments(
+                APPWRITE_DATABASE_ID,
+                'sentences',
+                [
+                    Query.equal('material_id', batch),
+                    Query.isNull('deleted_at'),
+                    Query.limit(5000)
+                ]
+            );
+            allSentenceIds.push(...sentencesDocs.map((s: any) => s.$id));
+        }
+        
+        // Get word occurrences for these sentences
+        if (allSentenceIds.length > 0) {
+            for (let i = 0; i < allSentenceIds.length; i += 100) {
+                const batch = allSentenceIds.slice(i, i + 100);
+                const { documents: occurrences } = await admin.databases.listDocuments(
+                    APPWRITE_DATABASE_ID,
+                    'word_occurrences',
+                    [
+                        Query.equal('sentence_id', batch),
+                        Query.limit(5000)
+                    ]
+                );
+                occurrences.forEach((o: any) => wordIdsInMaterials.add(o.word_id));
+            }
+        }
+    }
+
+    // Also add words from user's dictionaries
+    const { documents: dictionaries } = await admin.databases.listDocuments(
+        APPWRITE_DATABASE_ID,
+        'dictionaries',
+        [
+            Query.equal('user_id', userId),
+            Query.isNull('deleted_at')
+        ]
+    );
+    
+    if (dictionaries.length > 0) {
+        const dictIds = dictionaries.map((d: any) => d.$id);
+        for (let i = 0; i < dictIds.length; i += 100) {
+            const batch = dictIds.slice(i, i + 100);
+            const { documents: dictWords } = await admin.databases.listDocuments(
+                APPWRITE_DATABASE_ID,
+                'dictionary_words',
+                [Query.equal('dictionary_id', batch)]
+            );
+            dictWords.forEach((dw: any) => wordIdsInMaterials.add(dw.word_id));
+        }
+    }
+
+    // Filter word statuses to only include words in user's materials/dictionaries
+    const relevantWordStatuses = wordStatuses.filter((ws: any) => 
+        wordIdsInMaterials.has(ws.word_id)
+    );
+
+    // Vocab Snapshot - only count words in user's materials/dictionaries
+    const vocabSnapshot = relevantWordStatuses.reduce(
       (acc: { new: number; learning: number; mastered: number }, ws: any) => {
         if (ws.status === 'NEW') acc.new++;
         else if (ws.status === 'LEARNING') acc.learning++;
@@ -233,14 +269,46 @@ export async function GET() {
       },
       { new: 0, learning: 0, mastered: 0 }
     );
-    const totalWords = wordStatuses.length;
+    const totalWords = relevantWordStatuses.length;
 
-    // Words Due Today
-    const wordsDueToday = wordStatuses.filter((ws: any) => {
+    // Words Due Today - only count words in user's materials/dictionaries
+    const wordsDueToday = relevantWordStatuses.filter((ws: any) => {
         if (ws.status !== 'NEW' && ws.status !== 'LEARNING') return false;
-        if (!ws.fsrs_due) return true; // Treat null as due? Or not? Original query: fsrs_due.is.null OR fsrs_due.lte.todayEnd
+        if (!ws.fsrs_due) return true;
         return new Date(ws.fsrs_due) <= todayEnd;
     }).length;
+
+    // Hardest Words - filter to only include words in user's materials/dictionaries
+    const hardestWordsList = hardestWordsCandidates
+        .filter((s: any) => wordIdsInMaterials.has(s.word_id))
+        .slice(0, 5);
+    
+    // Fetch word details for hardest words
+    const hardestWordsDetails: any[] = [];
+    if (hardestWordsList.length > 0) {
+        const { documents: hwDocs } = await admin.databases.listDocuments(
+            APPWRITE_DATABASE_ID,
+            'words',
+            [Query.equal('$id', hardestWordsList.map((s: any) => s.word_id))]
+        );
+        
+        for (const status of hardestWordsList) {
+            const word = hwDocs.find((w: any) => w.$id === status.word_id);
+            if (word) {
+                hardestWordsDetails.push({
+                    id: word.$id,
+                    text: word.text,
+                    errorCount: status.error_count,
+                    translation: word.translation,
+                    phonetic: word.phonetic,
+                    pos: word.pos,
+                    definition: word.definition,
+                    tag: word.tag,
+                    exchange: word.exchange,
+                });
+            }
+        }
+    }
 
     // Sentence Snapshot
     const practicedIds = new Set(practices.map((p: any) => p.sentence_id));
@@ -254,20 +322,22 @@ export async function GET() {
         mastered: masteredCount
     };
 
-    // Last Word Reviewed
-    // We need to find the last updated status or review.
-    // If we can't query reviews by user, we use status updated_at.
-    const lastUpdatedStatus = wordStatuses.sort((a: any, b: any) => 
+    // Last Word Reviewed - only from words in user's materials/dictionaries
+    const lastUpdatedStatus = relevantWordStatuses.sort((a: any, b: any) => 
         new Date(b.$updatedAt).getTime() - new Date(a.$updatedAt).getTime()
     )[0];
     
     let lastWord = null;
     if (lastUpdatedStatus) {
-        const word = await admin.databases.getDocument(APPWRITE_DATABASE_ID, 'words', lastUpdatedStatus.word_id);
-        lastWord = {
-            id: word.$id,
-            text: word.text
-        };
+        try {
+            const word = await admin.databases.getDocument(APPWRITE_DATABASE_ID, 'words', lastUpdatedStatus.word_id);
+            lastWord = {
+                id: word.$id,
+                text: word.text
+            };
+        } catch (e) {
+            // Word might have been deleted
+        }
     }
 
     // Last Sentence Practiced

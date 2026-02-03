@@ -87,8 +87,7 @@ export async function registerUser(prevState: string | undefined, formData: Form
                 email,
                 password: hashedPassword,
                 verification_token: verificationToken,
-                email_verified: false, 
-                updated_at: new Date().toISOString(),
+                email_verified: false
             }
         );
     } catch (createError: any) {

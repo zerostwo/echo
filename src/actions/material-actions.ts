@@ -398,7 +398,97 @@ export async function permanentlyDeleteMaterial(materialId: string) {
 
         if (!material || material.user_id !== session.user.id) return { error: 'Material not found' };
 
-        // Delete file from disk or storage
+        // 1. Get all sentences for this material
+        const { documents: sentences } = await admin.databases.listDocuments(
+            APPWRITE_DATABASE_ID,
+            'sentences',
+            [Query.equal('material_id', materialId), Query.limit(5000)]
+        );
+        
+        const sentenceIds = sentences.map(s => s.$id);
+        console.log(`[permanentlyDeleteMaterial] Found ${sentenceIds.length} sentences to delete`);
+
+        // 2. Get all word_occurrences for these sentences
+        const wordIdsToCheck = new Set<string>();
+        
+        if (sentenceIds.length > 0) {
+            for (let i = 0; i < sentenceIds.length; i += 50) {
+                const batch = sentenceIds.slice(i, i + 50);
+                const { documents: occurrences } = await admin.databases.listDocuments(
+                    APPWRITE_DATABASE_ID,
+                    'word_occurrences',
+                    [Query.equal('sentence_id', batch), Query.limit(5000)]
+                );
+                
+                // Track word IDs for orphan cleanup later
+                for (const occ of occurrences) {
+                    wordIdsToCheck.add(occ.word_id);
+                }
+                
+                // Delete word_occurrences
+                await Promise.all(occurrences.map(occ => 
+                    admin.databases.deleteDocument(APPWRITE_DATABASE_ID, 'word_occurrences', occ.$id)
+                ));
+            }
+        }
+        
+        console.log(`[permanentlyDeleteMaterial] Deleted word_occurrences, checking ${wordIdsToCheck.size} words for orphans`);
+
+        // 3. Delete practice_progress for these sentences
+        if (sentenceIds.length > 0) {
+            for (let i = 0; i < sentenceIds.length; i += 50) {
+                const batch = sentenceIds.slice(i, i + 50);
+                const { documents: practices } = await admin.databases.listDocuments(
+                    APPWRITE_DATABASE_ID,
+                    'practice_progress',
+                    [Query.equal('sentence_id', batch)]
+                );
+                
+                await Promise.all(practices.map(p => 
+                    admin.databases.deleteDocument(APPWRITE_DATABASE_ID, 'practice_progress', p.$id)
+                ));
+            }
+        }
+
+        // 4. Delete sentences
+        await Promise.all(sentences.map(s => 
+            admin.databases.deleteDocument(APPWRITE_DATABASE_ID, 'sentences', s.$id)
+        ));
+        
+        console.log(`[permanentlyDeleteMaterial] Deleted ${sentences.length} sentences`);
+
+        // 5. Clean up orphaned words (soft delete words that no longer have any occurrences)
+        for (const wordId of wordIdsToCheck) {
+            try {
+                const { total } = await admin.databases.listDocuments(
+                    APPWRITE_DATABASE_ID,
+                    'word_occurrences',
+                    [Query.equal('word_id', wordId), Query.limit(1)]
+                );
+                
+                if (total === 0) {
+                    // No more occurrences for this word - soft delete it
+                    const word = await admin.databases.getDocument(
+                        APPWRITE_DATABASE_ID,
+                        'words',
+                        wordId
+                    );
+                    
+                    if (!word.deleted_at) {
+                        await admin.databases.updateDocument(
+                            APPWRITE_DATABASE_ID,
+                            'words',
+                            wordId,
+                            { deleted_at: new Date().toISOString() }
+                        );
+                    }
+                }
+            } catch (e) {
+                // Word might not exist, ignore
+            }
+        }
+
+        // 6. Delete file from disk or storage
         try {
             if (material.file_path.startsWith('http')) {
                 // External URL - do nothing
@@ -416,13 +506,14 @@ export async function permanentlyDeleteMaterial(materialId: string) {
             console.error("Failed to delete file:", e);
         }
 
+        // 7. Delete the material document
         await admin.databases.deleteDocument(
             APPWRITE_DATABASE_ID,
             'materials',
             materialId
         );
 
-        // Update usage
+        // 8. Update usage
         const userDoc = await admin.databases.getDocument(
             APPWRITE_DATABASE_ID,
             'users',
@@ -438,11 +529,19 @@ export async function permanentlyDeleteMaterial(materialId: string) {
              );
         }
 
+        // Invalidate caches
+        await Promise.all([
+            invalidateMaterialsCache(session.user.id),
+            invalidateVocabCache(session.user.id)
+        ]);
+
         revalidatePath('/materials');
         revalidatePath('/trash');
         revalidatePath('/dashboard');
+        revalidatePath('/words');
         return { success: true };
     } catch (e) {
+        console.error('[permanentlyDeleteMaterial] Error:', e);
         return { error: 'Failed to permanently delete material' };
     }
 }
@@ -599,7 +698,7 @@ async function performTranscription(materialId: string, userId: string) {
         ));
 
         // Insert new sentences
-        const now = new Date().toISOString();
+        // Note: Appwrite auto-manages $createdAt and $updatedAt, so we don't need to set them
         const sentences = result.segments.map((seg: any, i: number) => {
             const startTime = Number.isFinite(seg.start) ? seg.start : 0;
             const endTime = Number.isFinite(seg.end) ? seg.end : 0;
@@ -608,9 +707,7 @@ async function performTranscription(materialId: string, userId: string) {
                 start_time: startTime,
                 end_time: endTime,
                 content: seg.text,
-                order: i,
-                created_at: now,
-                updated_at: now
+                order: i
             };
         });
         
@@ -631,6 +728,7 @@ async function performTranscription(materialId: string, userId: string) {
             : 0;
         
         // Update material status with transcription metadata
+        // Note: Only update fields that exist in the Appwrite schema
         await admin.databases.updateDocument(
             APPWRITE_DATABASE_ID,
             'materials',
@@ -640,8 +738,6 @@ async function performTranscription(materialId: string, userId: string) {
                 transcription_engine: transcriptionOptions.engine,
                 transcription_model: transcriptionOptions.model,
                 transcription_language: result.language || transcriptionOptions.language || null,
-                transcription_vad_filter: transcriptionOptions.engine === 'faster-whisper' ? transcriptionOptions.vad_filter : null,
-                transcription_compute_type: transcriptionOptions.engine === 'faster-whisper' ? transcriptionOptions.compute_type : null,
                 transcription_time: result.duration,
                 duration: mediaDuration
             }
@@ -927,11 +1023,14 @@ export async function getMaterialsPaginated(
         const sentenceIds = sentences.map(s => s.$id);
         let occurrences: any[] = [];
         if (sentenceIds.length > 0) {
-             // If too many IDs, might need chunking. Assuming reasonable page size.
+             // Fetch with explicit limit (Appwrite default is only 25)
              const { documents } = await admin.databases.listDocuments(
                  APPWRITE_DATABASE_ID,
                  'word_occurrences',
-                 [Query.equal('sentence_id', sentenceIds)]
+                 [
+                     Query.equal('sentence_id', sentenceIds),
+                     Query.limit(5000)
+                 ]
              );
              occurrences = documents;
         }

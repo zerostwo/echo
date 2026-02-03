@@ -467,8 +467,7 @@ async function getWordsFromDictionary(
                   fsrs_state: State.New,
                   fsrs_reps: 0,
                   fsrs_lapses: 0,
-                  error_count: 0,
-                  updated_at: new Date().toISOString()
+                  error_count: 0
               }
           );
       } catch (e) {
@@ -507,7 +506,7 @@ async function getWordsFromMaterial(
   const sentenceIds = sentences.map((s: any) => s.$id);
   
   // Get word occurrences
-  // Batch fetch occurrences
+  // Batch fetch occurrences with explicit limit (Appwrite default is only 25)
   const wordIdsSet = new Set<string>();
   
   for (let i = 0; i < sentenceIds.length; i += 50) {
@@ -515,7 +514,10 @@ async function getWordsFromMaterial(
       const { documents: occurrences } = await admin.databases.listDocuments(
           APPWRITE_DATABASE_ID,
           'word_occurrences',
-          [Query.equal('sentence_id', batch)]
+          [
+              Query.equal('sentence_id', batch),
+              Query.limit(5000)
+          ]
       );
       for (const occ of occurrences) wordIdsSet.add(occ.word_id);
   }
@@ -646,8 +648,7 @@ async function getWordsFromMaterial(
                   fsrs_lapses: 0,
                   fsrs_elapsed_days: 0,
                   fsrs_scheduled_days: 0,
-                  error_count: 0,
-                  updated_at: new Date().toISOString()
+                  error_count: 0
               }
           );
           statusMap.set(w.$id, newStatus);
@@ -843,8 +844,7 @@ export async function recordReview(params: {
           fsrs_state: newCard.state,
           fsrs_last_review: now.toISOString(),
           error_count: isCorrect ? wordStatus.error_count : (wordStatus.error_count || 0) + 1,
-          last_error_at: isCorrect ? wordStatus.last_error_at : now.toISOString(),
-          updated_at: now.toISOString(),
+          last_error_at: isCorrect ? wordStatus.last_error_at : now.toISOString()
       }
   );
 
@@ -916,8 +916,7 @@ export async function markAsMastered(userWordStatusId: string): Promise<ReviewRe
           status: 'MASTERED',
           fsrs_stability: 365, // Very high stability - won't be scheduled for a long time
           fsrs_state: State.Review,
-          fsrs_last_review: now.toISOString(),
-          updated_at: now.toISOString(),
+          fsrs_last_review: now.toISOString()
       }
   );
 
@@ -969,7 +968,10 @@ export async function getLearningStats(materialId?: string, dictionaryId?: strin
         const { documents: occurrences } = await admin.databases.listDocuments(
             APPWRITE_DATABASE_ID,
             'word_occurrences',
-            [Query.equal('sentence_id', batch)]
+            [
+                Query.equal('sentence_id', batch),
+                Query.limit(5000)
+            ]
         );
         for (const occ of occurrences) wordIdsInScope.add(occ.word_id);
       }
@@ -1101,7 +1103,10 @@ export async function getWordsForContextListening(
           const { documents: occurrences } = await admin.databases.listDocuments(
               APPWRITE_DATABASE_ID,
               'word_occurrences',
-              [Query.equal('sentence_id', batch)]
+              [
+                  Query.equal('sentence_id', batch),
+                  Query.limit(5000)
+              ]
           );
           for (const occ of occurrences) wordIdsSet.add(occ.word_id);
       }
@@ -1338,17 +1343,18 @@ export async function recordLearningSessionDuration(durationSeconds: number): Pr
     if (existingStats.length > 0) {
       // Update existing record
       const existingStat = existingStats[0];
+      // Note: Appwrite auto-manages $updatedAt, no need to set updated_at
       await admin.databases.updateDocument(
           APPWRITE_DATABASE_ID,
           'daily_study_stats',
           existingStat.$id,
           {
-              study_duration: existingStat.study_duration + durationSeconds,
-              updated_at: new Date().toISOString(),
+              study_duration: existingStat.study_duration + durationSeconds
           }
       );
     } else {
       // Create new record
+      // Note: Appwrite auto-manages $createdAt and $updatedAt
       await admin.databases.createDocument(
           APPWRITE_DATABASE_ID,
           'daily_study_stats',
@@ -1358,8 +1364,7 @@ export async function recordLearningSessionDuration(durationSeconds: number): Pr
               date: todayStr,
               study_duration: durationSeconds,
               words_added: 0,
-              sentences_added: 0,
-              updated_at: new Date().toISOString(),
+              sentences_added: 0
           }
       );
     }

@@ -5,6 +5,20 @@ import { NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import path from 'path';
 
+// Handle CORS preflight requests
+export async function OPTIONS() {
+    return new NextResponse(null, {
+        status: 204,
+        headers: {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+            'Access-Control-Allow-Headers': 'Range, Content-Type',
+            'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Accept-Ranges',
+            'Access-Control-Max-Age': '86400',
+        },
+    });
+}
+
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
     const { id } = await params;
     const session = await auth();
@@ -33,6 +47,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     // Check if it is a local file (legacy support)
     const isLocalFile = path.isAbsolute(filePath) && existsSync(filePath);
 
+    // Common CORS headers for local files
+    const corsHeaders = {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+        'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Accept-Ranges',
+    };
+
     if (isLocalFile) {
         const stat = statSync(filePath);
         const fileSize = stat.size;
@@ -54,6 +75,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
                     'Accept-Ranges': 'bytes',
                     'Content-Length': chunksize.toString(),
                     'Content-Type': material.mime_type || 'audio/mpeg',
+                    ...corsHeaders,
                 },
             });
         } else {
@@ -64,6 +86,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
                 headers: {
                     'Content-Length': fileSize.toString(),
                     'Content-Type': material.mime_type || 'audio/mpeg',
+                    'Accept-Ranges': 'bytes',
+                    ...corsHeaders,
                 },
             });
         }
@@ -122,16 +146,28 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
             headers: fetchHeaders
         });
 
-        if (!upstreamResponse.ok) {
+        // Check for successful response (200 for full content, 206 for partial content)
+        if (!upstreamResponse.ok && upstreamResponse.status !== 206) {
             console.error(`Upstream fetch failed: ${upstreamResponse.status} ${upstreamResponse.statusText}`);
             return new NextResponse('Failed to fetch file from storage', { status: upstreamResponse.status });
         }
 
         // Forward relevant headers
         const responseHeaders = new Headers();
-        responseHeaders.set('Content-Type', upstreamResponse.headers.get('Content-Type') || material.mime_type || 'audio/mpeg');
-        responseHeaders.set('Content-Length', upstreamResponse.headers.get('Content-Length') || '');
+        const contentType = upstreamResponse.headers.get('Content-Type') || material.mime_type || 'audio/mpeg';
+        const contentLength = upstreamResponse.headers.get('Content-Length');
+        
+        responseHeaders.set('Content-Type', contentType);
+        if (contentLength) {
+            responseHeaders.set('Content-Length', contentLength);
+        }
         responseHeaders.set('Accept-Ranges', 'bytes');
+        
+        // Add CORS headers for cross-origin audio playback
+        responseHeaders.set('Access-Control-Allow-Origin', '*');
+        responseHeaders.set('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+        responseHeaders.set('Access-Control-Allow-Headers', 'Range');
+        responseHeaders.set('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
         
         if (upstreamResponse.headers.has('Content-Range')) {
             responseHeaders.set('Content-Range', upstreamResponse.headers.get('Content-Range')!);

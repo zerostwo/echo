@@ -180,8 +180,7 @@ export async function updateWordStatus(wordId: string, status: string) {
                 'user_word_statuses',
                 existing[0].$id,
                 {
-                    status: status,
-                    updated_at: new Date().toISOString()
+                    status: status
                 }
             );
         } else {
@@ -193,8 +192,7 @@ export async function updateWordStatus(wordId: string, status: string) {
                 {
                     user_id: session.user.id,
                     word_id: wordId,
-                    status: status,
-                    updated_at: new Date().toISOString()
+                    status: status
                 }
             );
         }
@@ -249,8 +247,7 @@ export async function updateWordsStatus(wordIds: string[], status: string) {
                 'user_word_statuses',
                 id,
                 {
-                    status: status,
-                    updated_at: new Date().toISOString()
+                    status: status
                 }
             );
         }
@@ -264,8 +261,7 @@ export async function updateWordsStatus(wordIds: string[], status: string) {
                 {
                     user_id: session.user.id,
                     word_id: wordId,
-                    status: status,
-                    updated_at: new Date().toISOString()
+                    status: status
                 }
             );
         }
@@ -345,7 +341,10 @@ export async function permanentlyDeleteWord(wordId: string) {
         const { documents: occs } = await admin.databases.listDocuments(
             APPWRITE_DATABASE_ID,
             'word_occurrences',
-            [Query.equal('word_id', wordId)]
+            [
+                Query.equal('word_id', wordId),
+                Query.limit(5000)
+            ]
         );
         await Promise.all(occs.map(o => admin.databases.deleteDocument(APPWRITE_DATABASE_ID, 'word_occurrences', o.$id)));
 
@@ -473,7 +472,10 @@ export async function editWord(wordId: string, newWordText: string) {
             const { documents: occs } = await admin.databases.listDocuments(
                 APPWRITE_DATABASE_ID,
                 'word_occurrences',
-                [Query.equal('word_id', wordId)]
+                [
+                    Query.equal('word_id', wordId),
+                    Query.limit(5000)
+                ]
             );
             
             for (const occ of occs) {
@@ -713,8 +715,7 @@ export async function addWordRelation(wordId: string, relatedText: string, type:
             {
                 user_id: session.user.id,
                 word_id: relatedWordId,
-                status: 'NEW',
-                updated_at: new Date().toISOString()
+                status: 'NEW'
             }
         );
     }
@@ -768,8 +769,7 @@ export async function addWordRelation(wordId: string, relatedText: string, type:
                 word_id: wordId,
                 relation_type: type,
                 custom_text: normalizedText,
-                related_word_id: relatedWordId,
-                created_at: new Date().toISOString()
+                related_word_id: relatedWordId
             }
         );
     }
@@ -798,8 +798,7 @@ export async function addWordRelation(wordId: string, relatedText: string, type:
                         word_id: relatedWordId,
                         relation_type: type,
                         custom_text: originalWord.text,
-                        related_word_id: wordId,
-                        created_at: new Date().toISOString()
+                        related_word_id: wordId
                     }
                 );
             }
@@ -869,8 +868,7 @@ export async function addWordRelation(wordId: string, relatedText: string, type:
                                 word_id: id1,
                                 related_word_id: id2,
                                 relation_type: 'SYNONYM',
-                                custom_text: wordMap.get(id2) || '',
-                                created_at: new Date().toISOString()
+                                custom_text: wordMap.get(id2) || ''
                             }
                         );
                     }

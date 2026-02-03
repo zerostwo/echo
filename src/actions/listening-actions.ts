@@ -114,8 +114,7 @@ export async function evaluateDictation(sentenceId: string, userText: string, du
                 {
                     score: score,
                     attempts: (existingProgress.attempts || 0) + 1,
-                    duration: (existingProgress.duration || 0) + duration,
-                    updated_at: new Date().toISOString()
+                    duration: (existingProgress.duration || 0) + duration
                 }
             );
         } else {
@@ -128,8 +127,7 @@ export async function evaluateDictation(sentenceId: string, userText: string, du
                     sentence_id: sentenceId,
                     score: score,
                     attempts: 1,
-                    duration: duration,
-                    updated_at: new Date().toISOString()
+                    duration: duration
                 }
             );
         }
@@ -153,8 +151,7 @@ export async function evaluateDictation(sentenceId: string, userText: string, du
                 DAILY_STUDY_STATS_COLLECTION_ID,
                 existingStat.$id,
                 { 
-                    study_duration: (existingStat.study_duration || 0) + duration,
-                    updated_at: new Date().toISOString()
+                    study_duration: (existingStat.study_duration || 0) + duration
                 }
             );
         } else {
@@ -165,8 +162,7 @@ export async function evaluateDictation(sentenceId: string, userText: string, du
                 {
                     user_id: session.user.id,
                     date: today,
-                    study_duration: duration,
-                    updated_at: new Date().toISOString()
+                    study_duration: duration
                 }
             );
         }
@@ -324,8 +320,7 @@ async function updateWordStatusOnDictationError(
         fsrs_state: newCard.state,
         fsrs_last_review: now.toISOString(),
         error_count: (existingStatus.error_count || 0) + 1,
-        last_error_at: now.toISOString(),
-        updated_at: now.toISOString(),
+        last_error_at: now.toISOString()
       }
     );
   } else {
@@ -352,8 +347,7 @@ async function updateWordStatusOnDictationError(
         fsrs_state: afterError.state,
         fsrs_last_review: now.toISOString(),
         error_count: 1,
-        last_error_at: now.toISOString(),
-        updated_at: now.toISOString(),
+        last_error_at: now.toISOString()
       }
     );
   }
@@ -432,8 +426,7 @@ async function updateWordStatusOnDictationSuccess(
         fsrs_reps: newCard.reps,
         fsrs_lapses: newCard.lapses,
         fsrs_state: newCard.state,
-        fsrs_last_review: now.toISOString(),
-        updated_at: now.toISOString(),
+        fsrs_last_review: now.toISOString()
       }
     );
   }

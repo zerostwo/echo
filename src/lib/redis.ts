@@ -4,12 +4,9 @@ import Redis from 'ioredis';
 let redisClient: Redis | null = null;
 
 function getRedisClient(): Redis | null {
-  // User explicitly stated they are not using Redis anymore.
-  // Returning null to disable all Redis functionality.
-  return null;
-
-  /*
+  // Enable Redis caching when REDIS_URL is configured
   if (!process.env.REDIS_URL) {
+    // Redis not configured - caching disabled
     return null;
   }
 
@@ -35,7 +32,6 @@ function getRedisClient(): Redis | null {
   }
 
   return redisClient;
-  */
 }
 
 // Default TTL: 5 minutes

@@ -163,21 +163,29 @@ export async function extractVocabulary(materialId: string) {
         dictResults = { ...dictResults, ...batchRes };
     }
     
-    // Build lemma map
-    const lemmaMap = new Map<string, any>(); // lemmaText -> dict data
+    // Build lemma map - include words without dictionary data
+    const lemmaMap = new Map<string, any>(); // lemmaText -> dict data (may be null for unknown words)
     const rawToLemma = new Map<string, string>(); // raw word -> lemma text
     
     for (const raw of rawWordList) {
         const data = dictResults[raw];
         if (data) {
+            // Word found in dictionary - use lemma from dictionary
             const lemma = data.word; 
             lemmaMap.set(lemma, data);
             rawToLemma.set(raw, lemma);
+        } else {
+            // Word not in dictionary - use raw word as lemma
+            // This ensures all words from the material are tracked
+            if (!lemmaMap.has(raw)) {
+                lemmaMap.set(raw, null); // null indicates no dictionary data
+            }
+            rawToLemma.set(raw, raw);
         }
     }
     
     const lemmaTexts = Array.from(lemmaMap.keys());
-    console.log(`[extractVocabulary] Found ${lemmaTexts.length} unique lemmas.`);
+    console.log(`[extractVocabulary] Found ${lemmaTexts.length} unique lemmas (${lemmaMap.size - Object.keys(dictResults).length} without dictionary data).`);
 
     // 4. Check which lemmas already exist in database
     const existingWords = new Map<string, string>(); // text -> id
@@ -211,15 +219,14 @@ export async function extractVocabulary(materialId: string) {
     const wordsToInsert = [];
     for (const lemma of newLemmasToInsert) {
         const d = lemmaMap.get(lemma);
-        if (!d) continue;
-        
+        // Create word even if no dictionary data (d is null)
+        // This ensures all words from the material are tracked
         wordsToInsert.push({
-            // id: randomUUID(), // Appwrite generates ID or we provide
             text: lemma,
-            phonetic: d.phonetic,
-            translation: d.translation,
-            pos: d.pos,
-            definition: d.definition,
+            phonetic: d?.phonetic || null,
+            translation: d?.translation || null,
+            pos: d?.pos || null,
+            definition: d?.definition || null,
             deleted_at: null,
         });
     }
@@ -287,8 +294,7 @@ export async function extractVocabulary(materialId: string) {
             statusesToInsert.push({
                 user_id: session.user.id,
                 word_id: wordId,
-                status: "NEW",
-                updated_at: new Date().toISOString()
+                status: "NEW"
             });
         }
     }
@@ -338,7 +344,10 @@ export async function extractVocabulary(materialId: string) {
             const { documents: occs } = await admin.databases.listDocuments(
                 APPWRITE_DATABASE_ID,
                 'word_occurrences',
-                [Query.equal('sentence_id', batchIds)]
+                [
+                    Query.equal('sentence_id', batchIds),
+                    Query.limit(5000)
+                ]
             );
             
             await Promise.all(occs.map(o => admin.databases.deleteDocument(APPWRITE_DATABASE_ID, 'word_occurrences', o.$id)));
@@ -353,13 +362,9 @@ export async function extractVocabulary(materialId: string) {
     const endTime = Date.now();
     totalDuration = (endTime - startTime) / 1000;
 
-    // Update Material with extraction time
-    await admin.databases.updateDocument(
-        APPWRITE_DATABASE_ID,
-        'materials',
-        materialId,
-        { vocab_extraction_time: totalDuration }
-    );
+    // Note: vocab_extraction_time field doesn't exist in Appwrite schema
+    // Just log the extraction time instead
+    console.log(`[extractVocabulary] Extraction completed in ${totalDuration}s`);
 
     // 8. Update Daily Stats
     if (newWordsCount > 0) {
@@ -437,14 +442,17 @@ export async function getMaterialVocab(materialId: string) {
     const sentenceIds = sentences.map(s => s.$id);
 
     // 2. Get all word occurrences in these sentences
-    // Must batch query
+    // Must batch query with explicit limit (Appwrite default is only 25)
     const occurrences: any[] = [];
     for (let i = 0; i < sentenceIds.length; i += 50) {
         const batch = sentenceIds.slice(i, i + 50);
         const { documents } = await admin.databases.listDocuments(
             APPWRITE_DATABASE_ID,
             'word_occurrences',
-            [Query.equal('sentence_id', batch)]
+            [
+                Query.equal('sentence_id', batch),
+                Query.limit(5000)
+            ]
         );
         occurrences.push(...documents);
     }
@@ -630,7 +638,7 @@ export async function getVocabPaginated(
             }
 
             if (sentenceIds.length > 0) {
-                // Get word occurrences - use larger batch size
+                // Get word occurrences - use larger batch size with explicit limit
                 const allOccurrences: any[] = [];
                 
                 for (let i = 0; i < sentenceIds.length; i += 50) {
@@ -638,7 +646,10 @@ export async function getVocabPaginated(
                     const { documents: occs } = await admin.databases.listDocuments(
                         APPWRITE_DATABASE_ID,
                         'word_occurrences',
-                        [Query.equal('sentence_id', batchIds)]
+                        [
+                            Query.equal('sentence_id', batchIds),
+                            Query.limit(5000) // Must specify limit, Appwrite default is only 25
+                        ]
                     );
                     allOccurrences.push(...occs);
                 }

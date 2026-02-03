@@ -40,8 +40,7 @@ export async function verifyEmail(token: string, newEmail?: string, type?: strin
             user.$id,
             {
                 email: newEmail,
-                verification_token: null,
-                updated_at: new Date().toISOString()
+                verification_token: null
             }
         );
         

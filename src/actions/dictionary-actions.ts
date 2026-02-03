@@ -54,7 +54,10 @@ export async function createDictionaryFromFilter(name: string, description: stri
                   const { documents: occs } = await admin.databases.listDocuments(
                       APPWRITE_DATABASE_ID,
                       'word_occurrences',
-                      [Query.equal('sentence_id', batch)]
+                      [
+                          Query.equal('sentence_id', batch),
+                          Query.limit(5000)
+                      ]
                   );
                   occurrences.push(...occs);
               }
@@ -177,6 +180,7 @@ export async function createDictionaryFromFilter(name: string, description: stri
   }
 
   // Create Dictionary
+  // Note: Appwrite auto-manages $createdAt and $updatedAt
   const dictionary = await admin.databases.createDocument(
       APPWRITE_DATABASE_ID,
       'dictionaries',
@@ -185,9 +189,7 @@ export async function createDictionaryFromFilter(name: string, description: stri
           name,
           description,
           user_id: userId,
-          filter: JSON.stringify(filters),
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
+          filter: JSON.stringify(filters)
       }
   );
 
@@ -346,8 +348,7 @@ export async function addWordToDictionaryByText(dictionaryId: string, text: stri
           {
               user_id: session.user.id,
               word_id: wordId!,
-              status: 'NEW',
-              updated_at: new Date().toISOString()
+              status: 'NEW'
           }
       );
   }
@@ -368,6 +369,7 @@ export async function createDictionary(data: {
   }
   const admin = getAdminClient();
 
+  // Note: Appwrite auto-manages $createdAt and $updatedAt
   const dictionary = await admin.databases.createDocument(
       APPWRITE_DATABASE_ID,
       'dictionaries',
@@ -377,9 +379,7 @@ export async function createDictionary(data: {
           description: data.description,
           is_system: data.isSystem || false,
           filter: data.filter,
-          user_id: session.user.id,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
+          user_id: session.user.id
       }
   );
 
@@ -675,18 +675,26 @@ export async function permanentlyDeleteDictionary(id: string) {
       // Delete dictionary words first (cascade)
       // Appwrite doesn't cascade automatically unless configured.
       // We should delete dictionary_words manually to be safe.
+      // Don't use cursor-based pagination when deleting - fetch first batch until empty
       
-      let cursor = null;
-      do {
-          const queries = [Query.equal('dictionary_id', id), Query.limit(100)];
-          if (cursor) queries.push(Query.cursorAfter(cursor));
+      const maxIterations = 100; // Safety limit
+      let iterations = 0;
+      
+      while (iterations < maxIterations) {
+          iterations++;
           
-          const { documents } = await admin.databases.listDocuments(APPWRITE_DATABASE_ID, 'dictionary_words', queries);
+          const { documents } = await admin.databases.listDocuments(
+              APPWRITE_DATABASE_ID, 
+              'dictionary_words', 
+              [Query.equal('dictionary_id', id), Query.limit(100)]
+          );
+          
           if (documents.length === 0) break;
           
-          await Promise.all(documents.map(d => admin.databases.deleteDocument(APPWRITE_DATABASE_ID, 'dictionary_words', d.$id)));
-          cursor = documents[documents.length - 1].$id;
-      } while (true);
+          await Promise.all(documents.map(d => 
+              admin.databases.deleteDocument(APPWRITE_DATABASE_ID, 'dictionary_words', d.$id)
+          ));
+      }
 
       await admin.databases.deleteDocument(APPWRITE_DATABASE_ID, 'dictionaries', id);
   } catch (e) {
@@ -712,10 +720,7 @@ export async function updateDictionary(id: string, data: { name?: string; descri
           APPWRITE_DATABASE_ID,
           'dictionaries',
           id,
-          {
-              ...data,
-              updated_at: new Date().toISOString()
-          }
+          data
       );
       return { ...updated, id: updated.$id };
   } catch (e) {

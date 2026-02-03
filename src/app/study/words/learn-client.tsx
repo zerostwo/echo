@@ -907,11 +907,14 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
   }, [currentWord, loadOptions, updateSettings]);
 
   // Initialize options for multiple choice
+  // Only load options when mode changes to multiple_choice (not when currentWord changes)
+  // The resetForNextWord function handles loading options when navigating between words
   useEffect(() => {
-    if (mode === 'multiple_choice' && currentWord) {
+    if (mode === 'multiple_choice' && currentWord && options.length === 0 && !isLoadingOptions) {
       loadOptions(currentWord);
     }
-  }, [mode, currentWord, loadOptions]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]); // Only depend on mode, not currentWord
 
   // Auto-play pronunciation for multiple_choice mode (en_to_zh)
   useEffect(() => {
