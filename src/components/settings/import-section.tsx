@@ -8,6 +8,8 @@ import { toast } from "sonner"
 import { Loader2, Upload, AlertTriangle } from "lucide-react"
 import { Progress } from "@/components/ui/progress"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { useMutation, useQuery } from "@tanstack/react-query"
+import { fetchJson } from "@/lib/api-client"
 
 export function ImportSection() {
   const [file, setFile] = React.useState<File | null>(null)
@@ -23,15 +25,27 @@ export function ImportSection() {
     }
   }
 
-  const handleImport = async () => {
-    if (!file) return
+  const { data: importStatus } = useQuery({
+    queryKey: ["import", "status", jobId],
+    queryFn: () => fetchJson<{ status: string; error?: string }>(`/api/import/status?jobId=${jobId}`),
+    enabled: !!jobId,
+    refetchInterval: 2000,
+  })
 
-    setUploading(true)
-    setProgress(0)
-    
-    try {
+  React.useEffect(() => {
+    if (!importStatus) return
+    setStatus(importStatus.status)
+    if (importStatus.status === "finished" || importStatus.status === "failed") {
+      setUploading(false)
+      if (importStatus.status === "finished") toast.success("Import completed successfully")
+      else toast.error(`Import failed: ${importStatus.error || "Unknown error"}`)
+    }
+  }, [importStatus])
+
+  const importMutation = useMutation({
+    mutationFn: async () => {
       const formData = new FormData()
-      formData.append("file", file)
+      formData.append("file", file as File)
       formData.append("mode", mode)
 
       // Simulate upload progress
@@ -48,38 +62,25 @@ export function ImportSection() {
       setProgress(100)
 
       if (!res.ok) throw new Error("Upload failed")
-      
-      const job = await res.json()
+      return res.json()
+    },
+    onSuccess: (job) => {
       setJobId(job.id)
       setStatus(job.status)
       toast.success("Import started")
-      
-      // Start polling
-      pollStatus(job.id)
-    } catch (error) {
+    },
+    onError: () => {
       toast.error("Failed to start import")
       setUploading(false)
-    }
-  }
+    },
+  })
 
-  const pollStatus = async (id: string) => {
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(`/api/import/status?jobId=${id}`)
-        if (res.ok) {
-          const job = await res.json()
-          setStatus(job.status)
-          if (job.status === "finished" || job.status === "failed") {
-            clearInterval(interval)
-            setUploading(false)
-            if (job.status === "finished") toast.success("Import completed successfully")
-            else toast.error(`Import failed: ${job.error}`)
-          }
-        }
-      } catch (e) {
-        // ignore
-      }
-    }, 2000)
+  const handleImport = async () => {
+    if (!file) return
+
+    setUploading(true)
+    setProgress(0)
+    importMutation.mutate()
   }
 
   return (

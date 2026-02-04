@@ -938,8 +938,12 @@ export async function getMaterialsPaginated(
         sortOrder
     });
 
-    return withCache(cacheKey, 60, async () => {
-        return withQueryLogging('getMaterialsPaginated', async () => {
+    return withCache(
+        cacheKey,
+        60,
+        async () => {
+            try {
+                return await withQueryLogging('getMaterialsPaginated', async () => {
             const admin = getAdminClient();
 
             // Step 1: Get materials with basic info only
@@ -1149,6 +1153,15 @@ export async function getMaterialsPaginated(
             };
 
             return result;
-        }, { user_id: userId, page, pageSize });
-    });
+                }, { user_id: userId, page, pageSize });
+            } catch (error) {
+                console.error('[getMaterialsPaginated] Error:', error);
+                return { error: 'Failed to fetch materials' } as { error: string };
+            }
+        },
+        {
+            timeoutMs: 30000,
+            shouldCache: (value) => !(typeof value === 'object' && value !== null && 'error' in value),
+        }
+    );
 }

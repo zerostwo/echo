@@ -713,8 +713,12 @@ export async function getVocabPaginated(
         sortOrder
     });
 
-    return withCache(cacheKey, 60, async () => {
-        return withQueryLogging('getVocabPaginated', async () => {
+    return withCache(
+        cacheKey,
+        60,
+        async () => {
+            try {
+                return await withQueryLogging('getVocabPaginated', async () => {
             const admin = getAdminClient();
 
             const wordFrequencyMap = new Map<string, { frequency: number; sentenceIds: string[] }>();
@@ -1124,6 +1128,15 @@ export async function getVocabPaginated(
             };
 
             return result;
-        }, { user_id: userId, page, pageSize });
-    });
+                }, { user_id: userId, page, pageSize });
+            } catch (error) {
+                console.error('[getVocabPaginated] Error:', error);
+                return { error: 'Failed to fetch vocabulary' } as { error: string };
+            }
+        },
+        {
+            timeoutMs: 30000,
+            shouldCache: (value) => !(typeof value === 'object' && value !== null && 'error' in value),
+        }
+    );
 }

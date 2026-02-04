@@ -9,6 +9,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { HeaderPortal } from '@/components/header-portal';
+import { getMaterialFileProxyUrl, getMaterialFileViewUrl } from '@/lib/appwrite-urls';
 import { 
   Dialog,
   DialogContent,
@@ -482,10 +483,10 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
     const startTime = sentence.start_time ?? 0;
     const endTime = sentence.end_time ?? 0;
 
-    if (!materialId) return;
-
-    const src = `/api/materials/${materialId}/stream`;
-    const fullSrc = window.location.origin + src;
+    const filePath = sentence.material?.filePath || sentence.material?.file_path || (sentence as any).material_file_path;
+    const src = getMaterialFileProxyUrl(materialId) || getMaterialFileViewUrl(filePath);
+    if (!materialId || !src) return;
+    const fullSrc = src.startsWith('http') ? src : window.location.origin + src;
     
     const playAudio = () => {
       audio.currentTime = startTime;
@@ -626,7 +627,9 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
                 material_id: o.sentence.material_id,
                 material: {
                     id: o.sentence.material.id,
-                    title: o.sentence.material.title
+                    title: o.sentence.material.title,
+                    filePath: o.sentence.material.file_path,
+                    mimeType: o.sentence.material.mime_type,
                 }
             }
         }));
@@ -687,10 +690,10 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
     const startTime = occ.sentence.start_time ?? 0;
     const endTime = occ.sentence.end_time ?? 0;
 
-    if (!materialId) return;
-
-    const src = `/api/materials/${materialId}/stream`;
-    const fullSrc = window.location.origin + src;
+    const filePath = occ.sentence.material?.filePath || occ.sentence.material?.file_path || (occ.sentence as any).material_file_path;
+    const src = getMaterialFileViewUrl(filePath);
+    if (!materialId || !src) return;
+    const fullSrc = src.startsWith('http') ? src : window.location.origin + src;
     
     const playAudio = () => {
       if (forceReplay || playingSentenceId !== occ.sentence.id || audio.currentTime >= endTime || audio.currentTime < startTime) {

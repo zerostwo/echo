@@ -1,12 +1,7 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { getAdminClient, APPWRITE_DATABASE_ID, Query } from '@/lib/appwrite';
-import { 
-  withCache,
-  CACHE_PREFIXES,
-} from '@/lib/cache';
 import { withQueryLogging } from '@/lib/query-logger';
-import { chunkArray } from '@/lib/pagination';
 
 export interface DashboardStats {
   heatmapData: Array<{
@@ -68,48 +63,69 @@ export async function GET() {
 
   const userId = session.user.id;
   
-  // Generate cache key
-  const cacheKey = `${CACHE_PREFIXES.DASHBOARD_STATS}${userId}`;
-  
-  const stats = await withCache(cacheKey, 60, async () => {
-    return withQueryLogging('getDashboardStats', async () => {
+  try {
+    const stats = await withQueryLogging('getDashboardStats', async () => {
       const admin = getAdminClient();
       const now = new Date();
       const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
       const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000 - 1);
       const yearStart = new Date(now.getFullYear(), 0, 1).toISOString();
-    // 1. Materials
-    const { documents: materials } = await admin.databases.listDocuments(
-        APPWRITE_DATABASE_ID,
-        'materials',
-        [
+
+      const [
+        materialsResult,
+        practicesResult,
+        dailyStatsResult,
+        wordStatusesResult,
+        user,
+        dictionariesResult,
+      ] = await Promise.all([
+        admin.databases.listDocuments(
+          APPWRITE_DATABASE_ID,
+          'materials',
+          [
             Query.equal('user_id', userId),
             Query.isNull('deleted_at')
-        ]
-    );
-    
-    // Get sentence counts for materials
-    // This is expensive if we iterate. 
-    // Alternative: Get all sentences for user's materials?
-    // Or just count total sentences for user.
-    
-    // 2. Practice Progress
-    const { documents: practices } = await admin.databases.listDocuments(
-        APPWRITE_DATABASE_ID,
-        'practice_progress',
-        [Query.equal('user_id', userId)]
-    );
-
-    // 3. Daily Stats (Heatmap)
-    const { documents: dailyStats } = await admin.databases.listDocuments(
-        APPWRITE_DATABASE_ID,
-        'daily_study_stats',
-        [
+          ]
+        ),
+        admin.databases.listDocuments(
+          APPWRITE_DATABASE_ID,
+          'practice_progress',
+          [Query.equal('user_id', userId)]
+        ),
+        admin.databases.listDocuments(
+          APPWRITE_DATABASE_ID,
+          'daily_study_stats',
+          [
             Query.equal('user_id', userId),
             Query.greaterThanEqual('date', yearStart),
             Query.orderAsc('date')
-        ]
-    );
+          ]
+        ),
+        admin.databases.listDocuments(
+          APPWRITE_DATABASE_ID,
+          'user_word_statuses',
+          [
+            Query.equal('user_id', userId),
+            Query.isNull('deleted_at'),
+            Query.limit(5000)
+          ]
+        ),
+        admin.databases.getDocument(APPWRITE_DATABASE_ID, 'users', userId),
+        admin.databases.listDocuments(
+          APPWRITE_DATABASE_ID,
+          'dictionaries',
+          [
+            Query.equal('user_id', userId),
+            Query.isNull('deleted_at')
+          ]
+        ),
+      ]);
+
+      const materials = materialsResult.documents;
+      const practices = practicesResult.documents;
+      const dailyStats = dailyStatsResult.documents;
+      const wordStatuses = wordStatusesResult.documents;
+      const dictionaries = dictionariesResult.documents;
 
     // 4. Today's Reviews
     // Reviews don't have user_id directly usually, but we can try to filter by time and then check ownership?
@@ -124,8 +140,11 @@ export async function GET() {
     // daily_study_stats has words_reviewed count!
     
     // Let's use daily_study_stats for today's counts if available.
-    const todayStat = dailyStats.find(s => s.date.startsWith(todayStart.toISOString().split('T')[0]));
-    const wordsReviewedTodayCount = todayStat?.words_reviewed || 0; // Assuming this field exists or we calculate
+    const wordsReviewedTodayCount = wordStatuses.filter((ws: any) => {
+        if (!ws.fsrs_last_review) return false;
+        const reviewedAt = new Date(ws.fsrs_last_review);
+        return reviewedAt >= todayStart && reviewedAt <= todayEnd;
+    }).length;
     
     // If we need exact reviews for some reason (e.g. response time), we might need a better way.
     // But for dashboard stats, maybe we can skip detailed review fetching if we just need count.
@@ -136,29 +155,11 @@ export async function GET() {
     // BUT, we can get today's updated statuses?
     // Let's stick to what we can get.
     
-    // 5. Word Statuses
-    // We need all statuses for vocab snapshot.
-    // This could be large.
-    // Let's fetch with a high limit or loop.
-    // For dashboard, maybe 5000 is enough?
-    const { documents: wordStatuses } = await admin.databases.listDocuments(
-        APPWRITE_DATABASE_ID,
-        'user_word_statuses',
-        [
-            Query.equal('user_id', userId),
-            Query.isNull('deleted_at'),
-            Query.limit(5000) 
-        ]
-    );
-
     // 6. Hardest Words - will be filtered later after we know which words are in user's materials
     // Keeping candidates for now
     const hardestWordsCandidates = wordStatuses
         .filter((s: any) => s.error_count > 0)
         .sort((a: any, b: any) => b.error_count - a.error_count);
-
-    // 7. User Settings
-    const user = await admin.databases.getDocument(APPWRITE_DATABASE_ID, 'users', userId);
 
     // 8. Sentences Practiced Today
     const sentencesPracticedToday = practices.filter((p: any) => {
@@ -241,15 +242,6 @@ export async function GET() {
     }
 
     // Also add words from user's dictionaries
-    const { documents: dictionaries } = await admin.databases.listDocuments(
-        APPWRITE_DATABASE_ID,
-        'dictionaries',
-        [
-            Query.equal('user_id', userId),
-            Query.isNull('deleted_at')
-        ]
-    );
-    
     if (dictionaries.length > 0) {
         const dictIds = dictionaries.map((d: any) => d.$id);
         for (let i = 0; i < dictIds.length; i += 100) {
@@ -399,8 +391,15 @@ export async function GET() {
       };
 
       return resultStats;
-    }, { user_id: userId });
-  });
+        }, { user_id: userId });
 
-  return NextResponse.json(stats);
+    return NextResponse.json(stats, {
+      headers: {
+        'Cache-Control': 'no-store, max-age=0',
+      },
+    });
+  } catch (error) {
+    console.error('[getDashboardStats] Error:', error);
+    return NextResponse.json({ error: 'Failed to fetch dashboard stats' }, { status: 500 });
+  }
 }

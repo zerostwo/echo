@@ -17,6 +17,7 @@ import { useRouter } from 'next/navigation';
 import { useBreadcrumb } from '@/context/breadcrumb-context';
 import { HeaderPortal } from '@/components/header-portal';
 import { WordDetailSheet } from '@/app/words/word-detail-sheet';
+import { getMaterialFileProxyUrl, getMaterialFileViewUrl } from '@/lib/appwrite-urls';
 import {
   Dialog,
   DialogContent,
@@ -29,12 +30,14 @@ import {
 interface Props {
   sentence: any;
   materialId: string;
+  materialFilePath?: string | null;
+  materialMimeType?: string | null;
   nextId?: string;
   prevId?: string;
   displayIndex?: number;
 }
 
-export default function PracticeInterface({ sentence, materialId, nextId, prevId, displayIndex }: Props) {
+export default function PracticeInterface({ sentence, materialId, materialFilePath, materialMimeType, nextId, prevId, displayIndex }: Props) {
     const router = useRouter();
     const { setItems } = useBreadcrumb();
     const audioRef = useRef<HTMLAudioElement>(null);
@@ -527,11 +530,16 @@ export default function PracticeInterface({ sentence, materialId, nextId, prevId
                         <CardContent className="space-y-6">
                             {/* Audio Controls */}
                             <div className="flex items-center justify-center gap-4 py-4 bg-muted/30 rounded-xl">
-                                <audio 
-                                    ref={audioRef} 
-                                    src={`/api/materials/${materialId}/stream`} 
-                                    preload="auto"
-                                />
+                                <audio ref={audioRef} preload="auto">
+                                    <source
+                                        src={
+                                            getMaterialFileProxyUrl(materialId)
+                                                || getMaterialFileViewUrl(materialFilePath || sentence?.material?.filePath || sentence?.material?.file_path)
+                                                || undefined
+                                        }
+                                        type={materialMimeType || undefined}
+                                    />
+                                </audio>
                                 
                                 <Button 
                                     variant="outline" 

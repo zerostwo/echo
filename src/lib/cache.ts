@@ -1,11 +1,11 @@
 import 'server-only';
 
-import { dedupe } from '@/lib/dedupe';
 import { getRedisClient } from '@/lib/redis';
 
 interface CacheEntry<T> {
   value: T;
-  expiresAt: number;
+  freshUntil: number;
+  staleUntil: number;
 }
 
 class LRUCache<T = unknown> {
@@ -18,10 +18,10 @@ class LRUCache<T = unknown> {
     this.defaultTTL = defaultTTLMs;
   }
 
-  get(key: string): T | null {
+  get(key: string): CacheEntry<T> | null {
     const entry = this.cache.get(key);
     if (!entry) return null;
-    if (Date.now() > entry.expiresAt) {
+    if (Date.now() > entry.staleUntil) {
       this.cache.delete(key);
       return null;
     }
@@ -30,9 +30,8 @@ class LRUCache<T = unknown> {
     return entry.value;
   }
 
-  set(key: string, value: T, ttlMs?: number): void {
+  set(key: string, value: CacheEntry<T>, ttlMs?: number): void {
     const ttl = ttlMs ?? this.defaultTTL;
-    const expiresAt = Date.now() + ttl;
 
     if (this.cache.has(key)) {
       this.cache.delete(key);
@@ -44,7 +43,7 @@ class LRUCache<T = unknown> {
       this.cache.delete(firstKey);
     }
 
-    this.cache.set(key, { value, expiresAt });
+    this.cache.set(key, value);
   }
 
   delete(key: string): void {
@@ -63,7 +62,7 @@ class LRUCache<T = unknown> {
   }
 }
 
-const localCache = new LRUCache<unknown>();
+const localCache = new LRUCache<CacheEntry<unknown>>();
 
 export const CACHE_PREFIXES = {
   VOCAB_PAGINATED: 'vocab:page:',
@@ -89,35 +88,62 @@ export function generateCacheKey(prefix: string, params: Record<string, unknown>
   return `${prefix}${[...userIdPart, ...sortedParams].join('&')}`;
 }
 
-export async function getCache<T>(key: string): Promise<T | null> {
+async function getCacheEntry<T>(key: string): Promise<CacheEntry<T> | null> {
   const redis = getRedisClient();
   if (redis) {
     try {
       const data = await redis.get(key);
       if (data === null) return null;
-      return JSON.parse(data) as T;
+      const parsed = JSON.parse(data) as CacheEntry<T> | T;
+      if (parsed && typeof parsed === 'object' && 'value' in parsed && 'freshUntil' in parsed && 'staleUntil' in parsed) {
+        return parsed as CacheEntry<T>;
+      }
+      const now = Date.now();
+      return {
+        value: parsed as T,
+        freshUntil: 0,
+        staleUntil: now + 1000,
+      };
     } catch (error) {
       console.warn('[Cache] Redis get error:', error);
     }
   }
 
-  return localCache.get(key) as T | null;
+  return localCache.get(key) as CacheEntry<T> | null;
 }
 
-export async function setCache<T>(key: string, value: T, ttlSeconds: number): Promise<void> {
-  const ttlMs = ttlSeconds * 1000;
+export async function getCache<T>(key: string): Promise<T | null> {
+  const entry = await getCacheEntry<T>(key);
+  if (!entry) return null;
+  if (Date.now() > entry.staleUntil) return null;
+  return entry.value;
+}
+
+export async function setCache<T>(
+  key: string,
+  value: T,
+  ttlSeconds: number,
+  staleSeconds: number = ttlSeconds
+): Promise<void> {
+  const ttlMs = staleSeconds * 1000;
+  const now = Date.now();
+  const entry: CacheEntry<T> = {
+    value,
+    freshUntil: now + ttlSeconds * 1000,
+    staleUntil: now + staleSeconds * 1000,
+  };
   const redis = getRedisClient();
 
   if (redis) {
     try {
-      await redis.setex(key, ttlSeconds, JSON.stringify(value));
+      await redis.setex(key, staleSeconds, JSON.stringify(entry));
       return;
     } catch (error) {
       console.warn('[Cache] Redis set error:', error);
     }
   }
 
-  localCache.set(key, value, ttlMs);
+  localCache.set(key, entry, ttlMs);
 }
 
 async function deleteByPattern(pattern: string): Promise<number> {
@@ -161,19 +187,82 @@ export async function deleteCache(keyOrPattern: string): Promise<number> {
   return 1;
 }
 
+export interface CacheOptions<T> {
+  timeoutMs?: number;
+  shouldCache?: (value: T) => boolean;
+  staleSeconds?: number;
+}
+
+const refreshInFlight = new Map<string, Promise<void>>();
+
+async function refreshCacheInBackground<T>(
+  key: string,
+  ttlSeconds: number,
+  staleSeconds: number,
+  factory: () => Promise<T>,
+  shouldCache: (value: T) => boolean,
+  timeoutMs: number
+): Promise<void> {
+  if (refreshInFlight.has(key)) return;
+
+  const refreshPromise = (async () => {
+    try {
+      const value = await Promise.race([
+        factory(),
+        new Promise<T>((_, reject) =>
+          setTimeout(() => reject(new Error(`Cache factory timeout: ${key}`)), timeoutMs)
+        ),
+      ]);
+
+      if (shouldCache(value)) {
+        await setCache(key, value, ttlSeconds, staleSeconds);
+      }
+    } catch (error) {
+      console.warn(`[Cache] Background refresh failed: ${key}`, error);
+    } finally {
+      refreshInFlight.delete(key);
+    }
+  })();
+
+  refreshInFlight.set(key, refreshPromise);
+}
+
 export async function withCache<T>(
   key: string,
   ttlSeconds: number,
-  factory: () => Promise<T>
+  factory: () => Promise<T>,
+  options: CacheOptions<T> = {}
 ): Promise<T> {
-  return dedupe(`cache:${key}`, async () => {
-    const cached = await getCache<T>(key);
-    if (cached !== null) return cached;
+  const timeoutMs = options.timeoutMs ?? 30000;
+  const shouldCache = options.shouldCache ?? (() => true);
+  const staleSeconds = options.staleSeconds ?? Math.max(ttlSeconds * 3, 300);
 
-    const value = await factory();
-    await setCache(key, value, ttlSeconds);
-    return value;
-  });
+  const cached = await getCacheEntry<T>(key);
+  const now = Date.now();
+
+  if (cached) {
+    if (now <= cached.freshUntil) {
+      return cached.value;
+    }
+
+    if (now <= cached.staleUntil) {
+      void refreshCacheInBackground(key, ttlSeconds, staleSeconds, factory, shouldCache, timeoutMs);
+      return cached.value;
+    }
+  }
+
+  const value = await Promise.race([
+    factory(),
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`Cache factory timeout: ${key}`)), timeoutMs)
+    ),
+  ]);
+
+  if (shouldCache(value)) {
+    await setCache(key, value, ttlSeconds, staleSeconds);
+  }
+
+  return value;
 }
 
 export async function invalidateUserCache(userId: string): Promise<void> {

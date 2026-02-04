@@ -15,6 +15,8 @@ import { ID, Query } from 'node-appwrite';
 import { queryDictionary } from './vocab-actions';
 import { revalidatePath } from 'next/cache';
 
+let warnedEditedContentMissing = false;
+
 type SentenceUpdatePayload = {
     content: string;
     startTime: number;
@@ -277,7 +279,10 @@ export async function updateSentence(sentenceId: string, payload: SentenceUpdate
         } else {
             // If schema doesn't support edited_content, update the content field directly
             // This is a fallback - ideally the Appwrite schema should have edited_content attribute
-            console.warn('[updateSentence] edited_content attribute not in schema. Please add it to Appwrite sentences collection.');
+            if (!warnedEditedContentMissing) {
+                warnedEditedContentMissing = true;
+                console.warn('[updateSentence] edited_content attribute not in schema. Please add it to Appwrite sentences collection.');
+            }
             if (editedContent !== null) {
                 updatePayload.content = editedContent;
             }
@@ -597,37 +602,110 @@ export async function getSentencesPaginated(
             return { error: 'Material not found or unauthorized' };
         }
 
-        // Build queries
-        const queries = [
+        // Build base queries
+        const baseQueries = [
             Query.equal('material_id', materialId),
             Query.isNull('deleted_at'),
         ];
 
         // Apply search filter - only search on content field
         // edited_content may not exist in all Appwrite setups
-        if (filters.search) {
-            queries.push(Query.search('content', filters.search));
-        }
-
         // Apply sorting
         const orderColumn = sortBy === 'order' ? 'order' : sortBy === 'start_time' ? 'start_time' : 'order';
+        const sortQueries: any[] = [];
         if (sortOrder === 'asc') {
-            queries.push(Query.orderAsc(orderColumn));
-            if (orderColumn === 'order') queries.push(Query.orderAsc('start_time'));
+            sortQueries.push(Query.orderAsc(orderColumn));
+            if (orderColumn === 'order') sortQueries.push(Query.orderAsc('start_time'));
         } else {
-            queries.push(Query.orderDesc(orderColumn));
-            if (orderColumn === 'order') queries.push(Query.orderDesc('start_time'));
+            sortQueries.push(Query.orderDesc(orderColumn));
+            if (orderColumn === 'order') sortQueries.push(Query.orderDesc('start_time'));
         }
 
-        // Apply pagination
-        queries.push(Query.limit(pageSize));
-        queries.push(Query.offset(offset));
+        const isFulltextIndexError = (error: any) => {
+            const message = error?.message || error?.response || '';
+            return typeof message === 'string' && message.includes('requires a fulltext index');
+        };
 
-        const { documents: sentences, total } = await databases.listDocuments(
-            DATABASE_ID,
-            SENTENCES_COLLECTION_ID,
-            queries
-        );
+        const fetchAllSentences = async () => {
+            const all: any[] = [];
+            const limit = 100;
+            let currentOffset = 0;
+            let total = 0;
+
+            while (true) {
+                const queries = [
+                    ...baseQueries,
+                    ...sortQueries,
+                    Query.limit(limit),
+                    Query.offset(currentOffset),
+                ];
+
+                const res = await databases.listDocuments(
+                    DATABASE_ID,
+                    SENTENCES_COLLECTION_ID,
+                    queries
+                );
+
+                total = res.total;
+                all.push(...res.documents);
+
+                currentOffset += res.documents.length;
+                if (res.documents.length < limit || currentOffset >= total) break;
+            }
+
+            return all;
+        };
+
+        let sentences: any[] = [];
+        let total = 0;
+
+        if (filters.search) {
+            try {
+                const queries = [
+                    ...baseQueries,
+                    Query.search('content', filters.search),
+                    ...sortQueries,
+                    Query.limit(pageSize),
+                    Query.offset(offset),
+                ];
+
+                const res = await databases.listDocuments(
+                    DATABASE_ID,
+                    SENTENCES_COLLECTION_ID,
+                    queries
+                );
+                sentences = res.documents;
+                total = res.total;
+            } catch (error) {
+                if (!isFulltextIndexError(error)) throw error;
+
+                // Fallback: load all and filter in memory when fulltext index is missing
+                const allSentences = await fetchAllSentences();
+                const needle = filters.search.toLowerCase();
+                const filtered = allSentences.filter((s: any) => {
+                    const text = (s.edited_content ?? s.content ?? '').toString().toLowerCase();
+                    return text.includes(needle);
+                });
+
+                total = filtered.length;
+                sentences = filtered.slice(offset, offset + pageSize);
+            }
+        } else {
+            const queries = [
+                ...baseQueries,
+                ...sortQueries,
+                Query.limit(pageSize),
+                Query.offset(offset),
+            ];
+
+            const res = await databases.listDocuments(
+                DATABASE_ID,
+                SENTENCES_COLLECTION_ID,
+                queries
+            );
+            sentences = res.documents;
+            total = res.total;
+        }
 
         // Fetch practice progress for these sentences
         const sentenceIds = sentences.map(s => s.$id);

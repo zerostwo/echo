@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { ActivityHeatmap } from './activity-heatmap';
 import { TodayTasksCard } from './today-tasks-card';
 import { VocabSnapshotCard } from './vocab-snapshot-card';
 import { SentenceSnapshotCard } from './sentence-snapshot-card';
-import { ContinueLearningCard } from './continue-learning-card';
 import { HardestWordsCard } from './hardest-words-card';
 import { SummaryRow } from './summary-row';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -14,6 +14,8 @@ import { HeaderPortal } from '@/components/header-portal';
 import { NotificationsDialog } from '@/components/notifications-dialog';
 import { Button } from '@/components/ui/button';
 import { Bell } from 'lucide-react';
+import { fetchJson } from '@/lib/api-client';
+import { getUnreadCount } from '@/actions/notification-actions';
 
 interface DashboardStats {
   heatmapData: Array<{ date: string; duration: number }>;
@@ -98,31 +100,34 @@ function DashboardSkeleton() {
 }
 
 export function DashboardContent() {
-  const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const {
+    data: stats,
+    isLoading,
+    error,
+  } = useQuery({
+    queryKey: ['dashboard', 'stats'],
+    queryFn: () => fetchJson<DashboardStats>('/api/dashboard/stats', { cache: 'no-store' }),
+  });
+
+  const {
+    data: unreadData,
+    refetch: refetchUnread,
+  } = useQuery({
+    queryKey: ['notifications', 'unread'],
+    queryFn: () => getUnreadCount(),
+    refetchInterval: 30000,
+  });
 
   useEffect(() => {
-    async function fetchStats() {
-      try {
-        const response = await fetch('/api/dashboard/stats');
-        if (!response.ok) {
-          throw new Error('Failed to fetch dashboard stats');
-        }
-        const data = await response.json();
-        setStats(data);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'An error occurred');
-      } finally {
-        setLoading(false);
-      }
+    if (!notificationsOpen) {
+      refetchUnread();
     }
+  }, [notificationsOpen, refetchUnread]);
 
-    fetchStats();
-  }, []);
+  const unreadCount = unreadData?.count ?? 0;
 
-  if (loading) {
+  if (isLoading) {
     return <DashboardSkeleton />;
   }
 
@@ -130,7 +135,7 @@ export function DashboardContent() {
     return (
       <div className="flex flex-1 items-center justify-center p-4">
         <div className="text-center">
-          <p className="text-muted-foreground">{error || 'Failed to load dashboard'}</p>
+          <p className="text-muted-foreground">Failed to load dashboard</p>
         </div>
       </div>
     );
@@ -140,8 +145,13 @@ export function DashboardContent() {
     <div className="flex flex-1 flex-col gap-2 pt-0">
       <HeaderPortal>
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="icon" onClick={() => setNotificationsOpen(true)}>
+          <Button variant="ghost" size="icon" onClick={() => setNotificationsOpen(true)} className="relative">
             <Bell className="h-4 w-4" />
+            {unreadCount > 0 && (
+              <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-destructive text-destructive-foreground text-[10px] leading-[18px] text-center">
+                {unreadCount > 99 ? '99+' : unreadCount}
+              </span>
+            )}
           </Button>
           <NotificationsDialog open={notificationsOpen} onOpenChange={setNotificationsOpen} />
         </div>

@@ -170,6 +170,7 @@ export default async function MaterialDetailPage({ params }: { params: Promise<{
     id: material.$id,
     isProcessed: material.is_processed,
     mimeType: material.mime_type,
+    filePath: material.file_path,
     sentences: firstSentence ? [{ id: firstSentence.$id }] : [],
     stats: {
       totalSentences: sentenceCount || 0,

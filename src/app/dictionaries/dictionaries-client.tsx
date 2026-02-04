@@ -174,6 +174,15 @@ export function DictionariesClient({
   
   const router = useRouter()
 
+  useEffect(() => {
+    setData(initialData.data || [])
+    setTotal(initialData.total)
+    setPage(initialData.page)
+    setPageSize(initialData.pageSize)
+    setTotalPages(initialData.totalPages)
+    setRowSelection({})
+  }, [initialData])
+
   const fetchData = useCallback(async (newPage?: number, newPageSize?: number, newSortBy?: string, newSortOrder?: 'asc' | 'desc') => {
     setLoading(true)
     try {

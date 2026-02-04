@@ -103,10 +103,11 @@ export default async function ListeningPage({ params }: { params: Promise<{ sent
     <PracticeInterface 
         sentence={mappedSentence} 
         materialId={sentence.material_id}
+        materialFilePath={material.file_path}
+        materialMimeType={material.mime_type}
         nextId={nextId}
         prevId={prevId}
         displayIndex={displayIndex}
     />
   );
 }
-

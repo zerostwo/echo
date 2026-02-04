@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
@@ -9,6 +10,7 @@ import { toast } from "sonner"
 import { Loader2, Download, FileArchive, CheckCircle2, AlertCircle } from "lucide-react"
 import { format } from "date-fns"
 import { Progress } from "@/components/ui/progress"
+import { fetchJson } from "@/lib/api-client"
 
 interface ExportJob {
   id: string
@@ -18,8 +20,8 @@ interface ExportJob {
 }
 
 export function ExportSection() {
+  const queryClient = useQueryClient()
   const [loading, setLoading] = React.useState(false)
-  const [history, setHistory] = React.useState<ExportJob[]>([])
   const [options, setOptions] = React.useState({
     learning: true,
     vocab: true,
@@ -29,91 +31,70 @@ export function ExportSection() {
   })
   const [pollingJobId, setPollingJobId] = React.useState<string | null>(null)
 
-  const fetchHistory = React.useCallback(async () => {
-    try {
-      const res = await fetch("/api/export/history")
-      if (res.ok) {
-        const data = await res.json()
-        setHistory(data)
-        
-        // Check if any job is processing
-        const processingJob = data.find((job: ExportJob) => job.status === "processing" || job.status === "queued")
-        if (processingJob) {
-            setPollingJobId(processingJob.id)
-        }
+  const { data: history = [] } = useQuery({
+    queryKey: ["export", "history"],
+    queryFn: () => fetchJson<ExportJob[]>("/api/export/history"),
+  })
+
+  React.useEffect(() => {
+    if (pollingJobId) return
+    const processingJob = history.find((job: ExportJob) => job.status === "processing" || job.status === "queued")
+    if (processingJob) setPollingJobId(processingJob.id)
+  }, [history, pollingJobId])
+
+  const { data: exportStatus } = useQuery({
+    queryKey: ["export", "status", pollingJobId],
+    queryFn: () => fetchJson<ExportJob>(`/api/export/status?jobId=${pollingJobId}`),
+    enabled: !!pollingJobId,
+    refetchInterval: 2000,
+  })
+
+  React.useEffect(() => {
+    if (!exportStatus) return
+    if (exportStatus.status === "finished" || exportStatus.status === "failed") {
+      setPollingJobId(null)
+      queryClient.invalidateQueries({ queryKey: ["export", "history"] })
+      if (exportStatus.status === "finished") {
+        toast.success("Export completed successfully", {
+          action: {
+            label: "Download",
+            onClick: () => handleDownload(exportStatus.id),
+          },
+        })
+      } else {
+        toast.error("Export failed")
       }
-    } catch (error) {
-      console.error("Failed to fetch export history", error)
     }
-  }, [])
+  }, [exportStatus, queryClient])
 
-  React.useEffect(() => {
-    fetchHistory()
-  }, [fetchHistory])
-
-  // Polling effect
-  React.useEffect(() => {
-    if (!pollingJobId) return
-
-    const interval = setInterval(async () => {
-        try {
-            const res = await fetch(`/api/export/status?jobId=${pollingJobId}`)
-            if (res.ok) {
-                const job = await res.json()
-                if (job.status === "finished") {
-                    setPollingJobId(null)
-                    fetchHistory()
-                    toast.success("Export completed successfully", {
-                        action: {
-                            label: "Download",
-                            onClick: () => handleDownload(job.id)
-                        }
-                    })
-                } else if (job.status === "failed") {
-                    setPollingJobId(null)
-                    fetchHistory()
-                    toast.error("Export failed")
-                }
-            }
-        } catch (e) {
-            // ignore
-        }
-    }, 2000)
-
-    return () => clearInterval(interval)
-  }, [pollingJobId, fetchHistory])
-
-  const handleExport = async () => {
-    setLoading(true)
-    try {
-      const res = await fetch("/api/export/create", {
+  const exportMutation = useMutation({
+    mutationFn: () =>
+      fetchJson<ExportJob>("/api/export/create", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ include: options }),
-      })
-      
-      if (!res.ok) throw new Error("Failed to start export")
-      
-      const job = await res.json()
+      }),
+    onSuccess: (job) => {
       toast.success("Export started")
       setPollingJobId(job.id)
-      fetchHistory()
-    } catch (error) {
-      toast.error("Failed to start export")
-    } finally {
-      setLoading(false)
-    }
+      queryClient.invalidateQueries({ queryKey: ["export", "history"] })
+    },
+    onError: () => toast.error("Failed to start export"),
+    onSettled: () => setLoading(false),
+  })
+
+  const downloadMutation = useMutation({
+    mutationFn: (jobId: string) => fetchJson<{ url: string }>(`/api/export/download?jobId=${jobId}`),
+    onSuccess: ({ url }) => window.open(url, "_blank"),
+    onError: () => toast.error("Failed to download export"),
+  })
+
+  const handleExport = () => {
+    setLoading(true)
+    exportMutation.mutate()
   }
 
-  const handleDownload = async (jobId: string) => {
-    try {
-      const res = await fetch(`/api/export/download?jobId=${jobId}`)
-      if (!res.ok) throw new Error("Failed to get download URL")
-      const { url } = await res.json()
-      window.open(url, "_blank")
-    } catch (error) {
-      toast.error("Failed to download export")
-    }
+  const handleDownload = (jobId: string) => {
+    downloadMutation.mutate(jobId)
   }
 
   const allSelected = Object.values(options).every(Boolean)
@@ -262,4 +243,3 @@ export function ExportSection() {
     </div>
   )
 }
-

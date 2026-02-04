@@ -139,8 +139,17 @@ export async function getTrashItemsPaginated(
             statusQueries
         );
 
+        // Deduplicate deleted statuses by word_id (keep latest deleted_at)
+        const deletedByWord = new Map<string, { deleted_at: string }>();
+        for (const s of deletedStatuses) {
+            const existing = deletedByWord.get(s.word_id);
+            if (!existing || new Date(s.deleted_at).getTime() > new Date(existing.deleted_at).getTime()) {
+                deletedByWord.set(s.word_id, { deleted_at: s.deleted_at });
+            }
+        }
+
         // Fetch word details for deleted statuses
-        const deletedWordIds = deletedStatuses.map(s => s.word_id);
+        const deletedWordIds = Array.from(deletedByWord.keys());
         const wordsMap = new Map<string, any>();
         
         if (deletedWordIds.length > 0) {
@@ -156,13 +165,13 @@ export async function getTrashItemsPaginated(
         }
 
         // Filter by search if needed
-        let validWords = deletedStatuses.map(status => {
-            const word = wordsMap.get(status.word_id);
+        let validWords = deletedWordIds.map(wordId => {
+            const word = wordsMap.get(wordId);
             if (!word) return null;
             return {
                 ...word,
-                statusId: status.$id,
-                deleted_at: status.deleted_at, // Use status deleted_at, not word's
+                wordId,
+                deleted_at: deletedByWord.get(wordId)!.deleted_at, // Use status deleted_at, not word's
             };
         }).filter(Boolean);
         
@@ -198,7 +207,7 @@ export async function getTrashItemsPaginated(
                 location: 'Material'
             })),
             ...validWords.map((w: any) => ({
-                id: w.statusId, // Use statusId for restore/delete operations
+                id: w.wordId, // Use wordId for restore/delete operations
                 type: 'word' as const,
                 title: w.text,
                 deleted_at: w.deleted_at,

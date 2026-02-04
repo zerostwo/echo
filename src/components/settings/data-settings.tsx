@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { format } from "date-fns"
 import { 
   RefreshCw, 
@@ -29,28 +30,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { cn } from "@/lib/utils"
-
-// Mock Data for History
-const MOCK_HISTORY = [
-  {
-    id: "1",
-    createdAt: new Date("2025-12-08T21:07:00"),
-    status: "finished",
-    size: "12.5 MB",
-  },
-  {
-    id: "2",
-    createdAt: new Date("2025-12-07T14:30:00"),
-    status: "failed",
-    error: "Network Error",
-  },
-  {
-    id: "3",
-    createdAt: new Date("2025-12-06T09:15:00"),
-    status: "finished",
-    size: "11.2 MB",
-  },
-]
+import { fetchJson } from "@/lib/api-client"
 
 interface ExportJob {
   id: string
@@ -61,6 +41,8 @@ interface ExportJob {
 }
 
 export function DataSettings() {
+  const queryClient = useQueryClient()
+
   // State for Export
   const [exportOptions, setExportOptions] = React.useState({
     user: true,
@@ -71,70 +53,67 @@ export function DataSettings() {
   })
   const [isExporting, setIsExporting] = React.useState(false)
   const [isImporting, setIsImporting] = React.useState(false)
-  const [history, setHistory] = React.useState<ExportJob[]>([])
   const [pollingJobId, setPollingJobId] = React.useState<string | null>(null)
 
   // State for Import
   const [importMode, setImportMode] = React.useState<"merge" | "overwrite">("merge")
   const [importFile, setImportFile] = React.useState<File | null>(null)
 
-  // Fetch History
-  const fetchHistory = React.useCallback(async () => {
-    try {
-      const res = await fetch("/api/export/history")
-      if (res.ok) {
-        const data = await res.json()
-        // If no data from API, use mock data for demonstration if needed, 
-        // but in production we should use real data.
-        // For now, let's append mock data if the list is empty to show the UI as requested
-        if (data.length === 0 && process.env.NODE_ENV === 'development') {
-             // setHistory(MOCK_HISTORY as any) // Uncomment to force mock data
-             setHistory(data)
-        } else {
-             setHistory(data)
-        }
-        
-        // Check for processing jobs
-        const processingJob = data.find((job: ExportJob) => job.status === "processing" || job.status === "queued")
-        if (processingJob) {
-            setPollingJobId(processingJob.id)
-        }
+  const importMutation = useMutation({
+    mutationFn: async ({ file, mode }: { file: File; mode: string }) => {
+      const formData = new FormData()
+      formData.append("file", file)
+      formData.append("mode", mode)
+
+      const res = await fetch("/api/import/upload", {
+        method: "POST",
+        body: formData,
+      })
+
+      if (!res.ok) throw new Error("Upload failed")
+      return res.json()
+    },
+    onSuccess: () => {
+      toast.success("Import started")
+      toast.info("Import is processing in the background.")
+    },
+    onError: () => toast.error("Failed to start import"),
+    onSettled: () => {
+      setIsImporting(false)
+      setImportFile(null)
+    },
+  })
+
+  const { data: history = [] } = useQuery({
+    queryKey: ["export", "history"],
+    queryFn: () => fetchJson<ExportJob[]>("/api/export/history"),
+  })
+
+  React.useEffect(() => {
+    if (pollingJobId) return
+    const processingJob = history.find((job: ExportJob) => job.status === "processing" || job.status === "queued")
+    if (processingJob) setPollingJobId(processingJob.id)
+  }, [history, pollingJobId])
+
+  const { data: exportStatus } = useQuery({
+    queryKey: ["export", "status", pollingJobId],
+    queryFn: () => fetchJson<ExportJob>(`/api/export/status?jobId=${pollingJobId}`),
+    enabled: !!pollingJobId,
+    refetchInterval: 2000,
+  })
+
+  React.useEffect(() => {
+    if (!exportStatus) return
+    if (exportStatus.status === "finished" || exportStatus.status === "failed") {
+      setPollingJobId(null)
+      queryClient.invalidateQueries({ queryKey: ["export", "history"] })
+      if (exportStatus.status === "finished") {
+        toast.success("Export completed")
+      } else {
+        toast.error("Export failed")
       }
-    } catch (error) {
-      console.error("Failed to fetch history", error)
     }
-  }, [])
-
-  React.useEffect(() => {
-    fetchHistory()
-  }, [fetchHistory])
-
-  // Polling
-  React.useEffect(() => {
-    if (!pollingJobId) return
-
-    const interval = setInterval(async () => {
-        try {
-            const res = await fetch(`/api/export/status?jobId=${pollingJobId}`)
-            if (res.ok) {
-                const job = await res.json()
-                if (job.status === "finished" || job.status === "failed") {
-                    setPollingJobId(null)
-                    fetchHistory()
-                    if (job.status === "finished") {
-                        toast.success("Export completed")
-                    } else {
-                        toast.error("Export failed")
-                    }
-                }
-            }
-        } catch (e) {
-            // ignore
-        }
-    }, 2000)
-
-    return () => clearInterval(interval)
-  }, [pollingJobId, fetchHistory])
+  }, [exportStatus, queryClient])
 
 
   // Handlers
@@ -148,55 +127,48 @@ export function DataSettings() {
     })
   }
 
-  const handleExport = async () => {
-    setIsExporting(true)
-    try {
-      const res = await fetch("/api/export/create", {
+  const exportMutation = useMutation({
+    mutationFn: () =>
+      fetchJson<ExportJob>("/api/export/create", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ include: exportOptions }),
-      })
-      
-      if (!res.ok) throw new Error("Failed to start export")
-      
-      const job = await res.json()
+      }),
+    onSuccess: (job) => {
       toast.success("Export started")
       setPollingJobId(job.id)
-      fetchHistory()
-    } catch (error) {
-      toast.error("Failed to start export")
-    } finally {
-      setIsExporting(false)
-    }
-  }
+      queryClient.invalidateQueries({ queryKey: ["export", "history"] })
+    },
+    onError: () => toast.error("Failed to start export"),
+    onSettled: () => setIsExporting(false),
+  })
 
-  const handleDownload = async (jobId: string) => {
-    try {
-      const res = await fetch(`/api/export/download?jobId=${jobId}`)
-      if (!res.ok) throw new Error("Failed to get download URL")
-      const { url } = await res.json()
-      window.open(url, "_blank")
-    } catch (error) {
-      toast.error("Failed to download export")
-    }
-  }
+  const downloadMutation = useMutation({
+    mutationFn: (jobId: string) => fetchJson<{ url: string }>(`/api/export/download?jobId=${jobId}`),
+    onSuccess: ({ url }) => window.open(url, "_blank"),
+    onError: () => toast.error("Failed to download export"),
+  })
 
-  const handleDelete = async (jobId: string) => {
-    try {
-      const res = await fetch(`/api/export/delete?jobId=${jobId}`, {
-        method: "DELETE",
-      })
-      
-      if (!res.ok) throw new Error("Failed to delete export")
-      
+  const deleteMutation = useMutation({
+    mutationFn: (jobId: string) =>
+      fetchJson(`/api/export/delete?jobId=${jobId}`, { method: "DELETE" }),
+    onSuccess: () => {
       toast.success("Export deleted")
-      // Optimistically update UI
-      setHistory(prev => prev.filter(job => job.id !== jobId))
-      // Or refetch
-      // fetchHistory()
-    } catch (error) {
-      toast.error("Failed to delete export")
-    }
+      queryClient.invalidateQueries({ queryKey: ["export", "history"] })
+    },
+    onError: () => toast.error("Failed to delete export"),
+  })
+
+  const handleExport = () => {
+    setIsExporting(true)
+    exportMutation.mutate()
+  }
+
+  const handleDownload = (jobId: string) => {
+    downloadMutation.mutate(jobId)
+  }
+
+  const handleDelete = (jobId: string) => {
+    deleteMutation.mutate(jobId)
   }
 
   const handleFileDrop = (e: React.DragEvent) => {
@@ -221,36 +193,7 @@ export function DataSettings() {
     // Reuse isExporting or add isImporting? Let's add isImporting
     setIsImporting(true)
     
-    try {
-      const formData = new FormData()
-      formData.append("file", importFile)
-      formData.append("mode", importMode)
-
-      const res = await fetch("/api/import/upload", {
-        method: "POST",
-        body: formData,
-      })
-
-      if (!res.ok) throw new Error("Upload failed")
-      
-      const job = await res.json()
-      toast.success("Import started")
-      
-      // Start polling for import status
-      // We can reuse the polling mechanism but we need to know if it's import or export
-      // The current polling logic is tied to export history.
-      // Let's add a simple separate polling for import or just show a toast.
-      // For better UX, we should probably track it.
-      
-      // For now, just notify user.
-      toast.info("Import is processing in the background.")
-      
-    } catch (error) {
-      toast.error("Failed to start import")
-    } finally {
-      setIsImporting(false)
-      setImportFile(null)
-    }
+    importMutation.mutate({ file: importFile, mode: importMode })
   }
 
   const allSelected = Object.values(exportOptions).every(Boolean)

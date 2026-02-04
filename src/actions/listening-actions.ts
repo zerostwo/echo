@@ -17,6 +17,7 @@ import { InputFile } from 'node-appwrite/file';
 import * as Diff from 'diff';
 import { revalidatePath } from 'next/cache';
 import { startOfDay } from 'date-fns';
+import { getRecordingFileViewUrl } from '@/lib/appwrite-urls';
 import { 
   createEmptyCard, 
   fsrs, 
@@ -586,15 +587,12 @@ export async function getRecording(sentenceId: string) {
 
     const fileId = progress[0].recording_file_id;
 
-    // Get file view URL from Appwrite
-    const endpoint = process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT;
-    const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID;
-    
-    // Return the file ID - client will use the API route to stream it
+    const url = getRecordingFileViewUrl(fileId);
+
     return { 
       recording: {
         fileId,
-        url: `/api/recordings/${fileId}`,
+        url,
       }
     };
   } catch (error) {

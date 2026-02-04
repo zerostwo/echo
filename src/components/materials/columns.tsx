@@ -143,7 +143,7 @@ export const columns = (folders: any[], timezone: string): ColumnDef<Material>[]
         const stats = row.original.stats
         if (stats.practicedCount === 0) return <span className="text-muted-foreground">-</span>
         const durationMins = Math.round(stats.duration / 60)
-        return <span>{durationMins}m</span>
+        return <span>{durationMins} m</span>
     }
   },
   {

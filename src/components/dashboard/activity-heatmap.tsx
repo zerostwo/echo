@@ -16,14 +16,14 @@ interface ActivityHeatmapProps {
 }
 
 function formatDuration(seconds: number): string {
-  if (seconds === 0) return '0m';
-  if (seconds < 60) return `${seconds}s`;
+  if (seconds === 0) return '0 m';
+  if (seconds < 60) return `${seconds} s`;
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
   if (hours > 0) {
-    return `${hours}h ${minutes}m`;
+    return `${hours} h ${minutes} m`;
   }
-  return `${minutes}m`;
+  return `${minutes} m`;
 }
 
 // Get intensity level (0-4) based on duration

@@ -27,6 +27,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { getMaterialFileProxyUrl, getMaterialFileViewUrl } from "@/lib/appwrite-urls"
 
 const FormattedText = ({ text }: { text: string }) => {
     if (!text) return null;
@@ -220,12 +221,14 @@ export function WordDetailSheet({ word, open, onOpenChange, dictionaryId, onWord
         }
 
         // Handle both snake_case (Appwrite) and camelCase field names
-        const materialId = sentence.material_id || sentence.materialId;
         const startTime = sentence.start_time ?? sentence.startTime ?? 0;
         const endTime = sentence.end_time ?? sentence.endTime ?? 0;
 
-        const src = `/api/materials/${materialId}/stream`;
-        const fullSrc = window.location.origin + src;
+        const filePath = sentence.material?.filePath || sentence.material?.file_path || (sentence as any).material_file_path;
+        const materialId = sentence.material?.id || sentence.material_id;
+        const src = getMaterialFileProxyUrl(materialId) || getMaterialFileViewUrl(filePath);
+        if (!src) return;
+        const fullSrc = src.startsWith("http") ? src : window.location.origin + src;
         
         const playAudio = () => {
             audio.currentTime = startTime;

@@ -8,6 +8,7 @@ import { Activity, BookOpen, Clock, FileText, GraduationCap, PlayCircle } from "
 import { Button } from "@/components/ui/button";
 import { MaterialHeaderActions } from "./material-header-actions";
 import Link from "next/link";
+import { getMaterialFileProxyUrl, getMaterialFileViewUrl } from "@/lib/appwrite-urls";
 
 interface MaterialStatsCardProps {
     material: {
@@ -18,6 +19,7 @@ interface MaterialStatsCardProps {
         duration: number | null;
         sentences: { id: string }[];
         mimeType: string | null;
+        filePath?: string | null;
         stats?: {
             totalSentences: number;
             vocabCount: number;
@@ -31,6 +33,7 @@ export function MaterialStatsCard({ material, vocabCount, wpm }: MaterialStatsCa
     const router = useRouter();
     const isVideo = material.mimeType?.startsWith('video/');
     const sentenceCount = material.stats?.totalSentences ?? material.sentences.length;
+    const mediaSrc = getMaterialFileProxyUrl(material.id) || getMaterialFileViewUrl(material.filePath) || undefined;
 
     useEffect(() => {
         if (material.isProcessed) return;
@@ -101,15 +104,14 @@ export function MaterialStatsCard({ material, vocabCount, wpm }: MaterialStatsCa
                     {isVideo ? (
                         <video 
                             controls 
-                            className="w-full max-h-[500px] rounded-md" 
-                            src={`/api/materials/${material.id}/stream`} 
-                        />
+                            className="w-full max-h-[500px] rounded-md"
+                        >
+                            <source src={mediaSrc} type={material.mimeType || undefined} />
+                        </video>
                     ) : (
-                        <audio 
-                            controls 
-                            className="w-full" 
-                            src={`/api/materials/${material.id}/stream`} 
-                        />
+                        <audio controls className="w-full">
+                            <source src={mediaSrc} type={material.mimeType || undefined} />
+                        </audio>
                     )}
                 </div>
             </CardContent>

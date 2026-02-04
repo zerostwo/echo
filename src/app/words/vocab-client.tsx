@@ -210,6 +210,19 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []) // Only run once on mount
 
+  // Sync server refreshed data for dictionary pages
+  useEffect(() => {
+    if (!dictionaryId) return
+    if (!initializedRef.current) return
+    setData(initialData.data || [])
+    setTotal(initialData.total)
+    setStats(initialData.stats)
+    setPage(initialData.page)
+    setPageSize(initialData.pageSize)
+    setTotalPages(initialData.totalPages)
+    setRowSelection({})
+  }, [dictionaryId, initialData])
+
   // Reset filters and state only when materialId actually changes
   useEffect(() => {
     // Skip if materialId hasn't actually changed
@@ -289,7 +302,7 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
     } finally {
       setLoading(false)
     }
-  }, [page, pageSize, debouncedSearch, filters, sortBy, sortOrder, settings])
+  }, [debouncedSearch, filters, sortBy, sortOrder, dictionaryId])
 
   // Fetch when filters change (but not on initial mount)
   const filterChangeRef = useRef(false)

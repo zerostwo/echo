@@ -14,6 +14,7 @@ import { UserSettingsProvider } from "@/components/user-settings-provider";
 import { headers } from "next/headers";
 import Script from "next/script";
 import { siteConfig } from "@/config/site";
+import { QueryProvider } from "@/components/query-provider";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -125,44 +126,46 @@ export default async function RootLayout({
             data-website-id={umamiWebsiteId}
           />
         )}
-        <UserSettingsProvider initialSettings={userSettings}>
-          <BreadcrumbProvider>
-          {showSidebar ? (
-              <SidebarProvider>
-                  <AppSidebar 
-                    user={{ 
-                        ...session.user, 
-                        image: userImage || session.user.image,
-                        twoFactorEnabled, 
-                        displayName, 
-                        username, 
-                        quota, 
-                        usedSpace 
-                    } as any} 
-                    settings={userSettings}
-                    folders={folders}
-                    materials={materials}
-                  />
-                  <SidebarInset>
-                      <header className="flex h-16 shrink-0 items-center gap-2 pl-4 pr-12 sticky top-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-                          <SidebarTrigger className="-ml-1" />
-                          <Separator orientation="vertical" className="mr-2 data-[orientation=vertical]:h-4" />
-                          <DynamicBreadcrumb folders={folders} />
-                          <div id="header-actions" className="ml-auto flex items-center gap-2 pointer-events-auto" />
-                      </header>
-                      <div className="flex flex-1 flex-col gap-4 px-12 pt-0 pb-4">
-                          {children}
-                      </div>
-                  </SidebarInset>
-              </SidebarProvider>
-          ) : (
-              <main className="h-full">
-                  {children}
-              </main>
-          )}
-          <Toaster />
-          </BreadcrumbProvider>
-        </UserSettingsProvider>
+        <QueryProvider>
+          <UserSettingsProvider initialSettings={userSettings}>
+            <BreadcrumbProvider>
+            {showSidebar ? (
+                <SidebarProvider>
+                    <AppSidebar 
+                      user={{ 
+                          ...session.user, 
+                          image: userImage || session.user.image,
+                          twoFactorEnabled, 
+                          displayName, 
+                          username, 
+                          quota, 
+                          usedSpace 
+                      } as any} 
+                      settings={userSettings}
+                      folders={folders}
+                      materials={materials}
+                    />
+                    <SidebarInset>
+                        <header className="flex h-16 shrink-0 items-center gap-2 pl-4 pr-12 sticky top-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+                            <SidebarTrigger className="-ml-1" />
+                            <Separator orientation="vertical" className="mr-2 data-[orientation=vertical]:h-4" />
+                            <DynamicBreadcrumb folders={folders} />
+                            <div id="header-actions" className="ml-auto flex items-center gap-2 pointer-events-auto" />
+                        </header>
+                        <div className="flex flex-1 flex-col gap-4 px-12 pt-0 pb-4">
+                            {children}
+                        </div>
+                    </SidebarInset>
+                </SidebarProvider>
+            ) : (
+                <main className="h-full">
+                    {children}
+                </main>
+            )}
+            <Toaster />
+            </BreadcrumbProvider>
+          </UserSettingsProvider>
+        </QueryProvider>
       </body>
     </html>
   );

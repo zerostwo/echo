@@ -147,7 +147,9 @@ export async function getWordContext(wordId: string) {
                 material: {
                     id: material.$id,
                     title: material.title,
-                    user_id: material.user_id
+                    user_id: material.user_id,
+                    file_path: material.file_path,
+                    mime_type: material.mime_type,
                 }
             }
         };
@@ -276,27 +278,35 @@ export async function updateWordsStatus(wordIds: string[], status: string) {
     }
 }
 
-export async function restoreWord(statusId: string) {
+export async function restoreWord(wordId: string) {
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
     const admin = getAdminClient();
 
     try {
-        // statusId is now the user_word_status ID, not the word ID
-        const status = await admin.databases.getDocument(APPWRITE_DATABASE_ID, 'user_word_statuses', statusId);
-        
-        if (!status) return { error: 'Word status not found' };
-        if (status.user_id !== session.user.id) return { error: 'Unauthorized' };
-        if (!status.deleted_at) return { error: 'Word is not in trash' };
-
-        // Restore by clearing deleted_at on user_word_status
-        await admin.databases.updateDocument(
+        // Restore ALL deleted statuses for this word + user
+        const { documents: statuses } = await admin.databases.listDocuments(
             APPWRITE_DATABASE_ID,
             'user_word_statuses',
-            statusId,
-            { deleted_at: null }
+            [
+                Query.equal('user_id', session.user.id),
+                Query.equal('word_id', wordId),
+                Query.isNotNull('deleted_at'),
+                Query.limit(100)
+            ]
         );
+
+        if (statuses.length === 0) return { error: 'Word is not in trash' };
+
+        await Promise.all(statuses.map((s: any) =>
+            admin.databases.updateDocument(
+                APPWRITE_DATABASE_ID,
+                'user_word_statuses',
+                s.$id,
+                { deleted_at: null }
+            )
+        ));
 
         // Invalidate vocab cache
         await invalidateVocabCache(session.user.id);
@@ -310,20 +320,26 @@ export async function restoreWord(statusId: string) {
     }
 }
 
-export async function permanentlyDeleteWord(statusId: string) {
+export async function permanentlyDeleteWord(wordId: string) {
     const session = await auth();
     if (!session?.user?.id) return { error: 'Unauthorized' };
 
     const admin = getAdminClient();
 
     try {
-        // statusId is now the user_word_status ID
-        const status = await admin.databases.getDocument(APPWRITE_DATABASE_ID, 'user_word_statuses', statusId);
-        
-        if (!status) return { error: 'Word status not found' };
-        if (status.user_id !== session.user.id) return { error: 'Unauthorized' };
-        
-        const wordId = status.word_id;
+        // Delete ALL deleted statuses for this word + user
+        const { documents: statuses } = await admin.databases.listDocuments(
+            APPWRITE_DATABASE_ID,
+            'user_word_statuses',
+            [
+                Query.equal('user_id', session.user.id),
+                Query.equal('word_id', wordId),
+                Query.isNotNull('deleted_at'),
+                Query.limit(100)
+            ]
+        );
+
+        if (statuses.length === 0) return { error: 'Word is not in trash' };
 
         // Get user's materials to only delete their word occurrences
         const { documents: materials } = await admin.databases.listDocuments(
@@ -357,8 +373,10 @@ export async function permanentlyDeleteWord(statusId: string) {
             }
         }
 
-        // Delete user's word status (NOT the global word - other users might have it)
-        await admin.databases.deleteDocument(APPWRITE_DATABASE_ID, 'user_word_statuses', statusId);
+        // Delete user's word statuses (NOT the global word - other users might have it)
+        await Promise.all(statuses.map((s: any) =>
+            admin.databases.deleteDocument(APPWRITE_DATABASE_ID, 'user_word_statuses', s.$id)
+        ));
 
         // Invalidate vocab cache
         await invalidateVocabCache(session.user.id);

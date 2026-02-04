@@ -13,6 +13,7 @@ import {
   type RecordLogItem,
   type Grade,
 } from 'ts-fsrs';
+import { getVocabPaginated } from '@/actions/vocab-actions';
 
 const f = fsrs();
 
@@ -160,7 +161,7 @@ export async function getWordsForLearning(limit: number = 20, filters?: Learning
       ]
   );
   
-  const availableDueWords = dueWords || [];
+  let availableDueWords = dueWords || [];
   
   // 2. Get new words (fsrs_due is null)
   const { documents: newWords } = await admin.databases.listDocuments(
@@ -174,37 +175,76 @@ export async function getWordsForLearning(limit: number = 20, filters?: Learning
       ]
   );
   
-  const availableNewWords = newWords || [];
+  let availableNewWords = newWords || [];
+
+  // If no due/new results, fall back to fetching all statuses and filtering in-memory.
+  // This handles legacy/mixed-case status values or missing fsrs_due data.
+  if (availableDueWords.length === 0 && availableNewWords.length === 0) {
+    const allStatuses: any[] = [];
+    let cursor = null;
+    while (true) {
+      const queries = [Query.equal('user_id', session.user.id), Query.limit(200)];
+      if (cursor) queries.push(Query.cursorAfter(cursor));
+      const { documents: statuses } = await admin.databases.listDocuments(
+        APPWRITE_DATABASE_ID,
+        'user_word_statuses',
+        queries
+      );
+      if (statuses.length === 0) break;
+      allStatuses.push(...statuses);
+      cursor = statuses[statuses.length - 1].$id;
+      if (allStatuses.length >= 5000) break;
+    }
+
+    const normalized = allStatuses.map((s: any) => ({
+      ...s,
+      _status: String(s.status || 'NEW').toUpperCase(),
+    }));
+
+    const newLearning = normalized.filter((s: any) => s._status === 'NEW' || s._status === 'LEARNING');
+    availableNewWords = newLearning.filter((s: any) => !s.fsrs_due);
+    availableDueWords = newLearning.filter((s: any) => s.fsrs_due && s.fsrs_due <= now);
+  }
 
   // 3. Combine them with the mix strategy
   let allStatuses: any[] = [];
   
-  // If we have enough due words to fill (limit - minNewWords)
-  // and we have enough new words to fill minNewWords
-  const targetDueCount = Math.max(0, limit - minNewWords);
-  
-  // Take due words
-  const dueToTake = availableDueWords.slice(0, targetDueCount);
-  allStatuses = [...dueToTake];
-  
-  // Take new words
-  const newToTake = availableNewWords.slice(0, minNewWords);
-  allStatuses = [...allStatuses, ...newToTake];
-  
-  // Fill remaining space
-  const remainingSpace = limit - allStatuses.length;
-  if (remainingSpace > 0) {
-    // Try to fill with more due words first (if we skipped some)
-    const remainingDue = availableDueWords.slice(targetDueCount);
-    const moreDue = remainingDue.slice(0, remainingSpace);
-    allStatuses = [...allStatuses, ...moreDue];
+  if (allStatuses.length === 0) {
+    // If we have enough due words to fill (limit - minNewWords)
+    // and we have enough new words to fill minNewWords
+    const targetDueCount = Math.max(0, limit - minNewWords);
     
-    // If still space, try to fill with more new words
-    const stillRemaining = limit - allStatuses.length;
-    if (stillRemaining > 0) {
-      const remainingNew = availableNewWords.slice(minNewWords);
-      const moreNew = remainingNew.slice(0, stillRemaining);
-      allStatuses = [...allStatuses, ...moreNew];
+    // Take due words
+    const dueToTake = availableDueWords.slice(0, targetDueCount);
+    allStatuses = [...dueToTake];
+    
+    // Take new words
+    const newToTake = availableNewWords.slice(0, minNewWords);
+    allStatuses = [...allStatuses, ...newToTake];
+    
+    // Fill remaining space
+    const remainingSpace = limit - allStatuses.length;
+    if (remainingSpace > 0) {
+      // Try to fill with more due words first (if we skipped some)
+      const remainingDue = availableDueWords.slice(targetDueCount);
+      const moreDue = remainingDue.slice(0, remainingSpace);
+      allStatuses = [...allStatuses, ...moreDue];
+      
+      // If still space, try to fill with more new words
+      const stillRemaining = limit - allStatuses.length;
+      if (stillRemaining > 0) {
+        const remainingNew = availableNewWords.slice(minNewWords);
+        const moreNew = remainingNew.slice(0, stillRemaining);
+        allStatuses = [...allStatuses, ...moreNew];
+      }
+    }
+  }
+
+  // If still empty, fall back to building from user's materials (create statuses as needed)
+  if (allStatuses.length === 0) {
+    const fallback = await getWordsFromAllMaterials(admin, session.user.id, limit, filters);
+    if (fallback.words.length > 0) {
+      return { words: fallback.words };
     }
   }
 
@@ -275,7 +315,142 @@ export async function getWordsForLearning(limit: number = 20, filters?: Learning
     };
   });
 
+  if (words.length < limit) {
+    // Try to fill from materials first
+    const fallback = await getWordsFromAllMaterials(admin, session.user.id, limit - words.length, filters);
+    const seenWordIds = new Set(words.map(w => w.wordId));
+    const merged: LearningWord[] = [...words];
+    for (const w of fallback.words) {
+      if (seenWordIds.has(w.wordId)) continue;
+      seenWordIds.add(w.wordId);
+      merged.push(w);
+      if (merged.length >= limit) break;
+    }
+    if (merged.length >= limit) {
+      return { words: merged };
+    }
+
+    // Final fallback: use vocab list and ensure statuses exist
+    const vocabResult = await getVocabPaginated(1, Math.max(50, limit * 3), {}, 'updated_at', 'desc');
+    if (!('error' in vocabResult)) {
+      const candidates = (vocabResult.data || []).filter((w: any) => w.status !== 'MASTERED');
+      const candidateIds = candidates.map((w: any) => w.id).filter(Boolean);
+      if (candidateIds.length > 0) {
+        const statusMap = await ensureStatusesForWords(admin, session.user.id, candidateIds);
+        for (const w of candidates) {
+          if (merged.length >= limit) break;
+          if (seenWordIds.has(w.id)) continue;
+          const status = statusMap.get(w.id);
+          if (!status || status.status === 'MASTERED') continue;
+          merged.push({
+            id: status?.$id || '',
+            wordId: w.id,
+            text: w.text,
+            phonetic: w.phonetic ?? null,
+            translation: w.translation ?? null,
+            definition: w.definition ?? null,
+            pos: w.pos ?? null,
+            exchange: w.exchange ?? null,
+            status: status?.status || 'NEW',
+            exampleSentence: null,
+            fsrsState: status?.fsrs_state || 0,
+            fsrsDue: status?.fsrs_due || null,
+            fsrsStability: status?.fsrs_stability ?? null,
+            fsrsDifficulty: status?.fsrs_difficulty ?? null,
+            fsrsReps: status?.fsrs_reps || 0,
+            fsrsLapses: status?.fsrs_lapses || 0,
+            errorCount: status?.error_count || 0,
+          });
+          seenWordIds.add(w.id);
+        }
+      }
+    }
+
+    return { words: merged };
+  }
+
   return { words };
+}
+
+async function getWordsFromAllMaterials(
+  admin: any,
+  userId: string,
+  limit: number,
+  filters?: LearningFilters
+): Promise<{ words: LearningWord[] }> {
+  const { documents: materials } = await admin.databases.listDocuments(
+    APPWRITE_DATABASE_ID,
+    'materials',
+    [Query.equal('user_id', userId), Query.isNull('deleted_at'), Query.orderDesc('$createdAt'), Query.limit(200)]
+  );
+
+  if (!materials || materials.length === 0) {
+    return { words: [] };
+  }
+
+  const seen = new Set<string>();
+  const result: LearningWord[] = [];
+
+  for (const material of materials) {
+    const remaining = limit - result.length;
+    if (remaining <= 0) break;
+    const { words } = await getWordsFromMaterial(admin, userId, material.$id, remaining, filters);
+    for (const w of words) {
+      if (seen.has(w.wordId)) continue;
+      seen.add(w.wordId);
+      result.push(w);
+      if (result.length >= limit) break;
+    }
+    if (result.length >= limit) break;
+  }
+
+  return { words: result };
+}
+
+async function ensureStatusesForWords(
+  admin: any,
+  userId: string,
+  wordIds: string[]
+): Promise<Map<string, any>> {
+  const statusMap = new Map<string, any>();
+  const BATCH_SIZE = 50;
+
+  for (let i = 0; i < wordIds.length; i += BATCH_SIZE) {
+    const batch = wordIds.slice(i, i + BATCH_SIZE);
+    const { documents: statuses } = await admin.databases.listDocuments(
+      APPWRITE_DATABASE_ID,
+      'user_word_statuses',
+      [Query.equal('user_id', userId), Query.equal('word_id', batch)]
+    );
+    for (const s of statuses) statusMap.set(s.word_id, s);
+  }
+
+  const missing = wordIds.filter(id => !statusMap.has(id));
+  for (const wordId of missing) {
+    try {
+      const newStatus = await admin.databases.createDocument(
+        APPWRITE_DATABASE_ID,
+        'user_word_statuses',
+        ID.unique(),
+        {
+          user_id: userId,
+          word_id: wordId,
+          status: 'NEW',
+          fsrs_state: 0,
+          fsrs_reps: 0,
+          fsrs_lapses: 0,
+          fsrs_elapsed_days: 0,
+          fsrs_scheduled_days: 0,
+          error_count: 0,
+        }
+      );
+      statusMap.set(wordId, newStatus);
+    } catch (e) {
+      // Ignore create errors (duplicate, etc.)
+    }
+  }
+
+  return statusMap;
 }
 
 async function getWordsFromDictionary(

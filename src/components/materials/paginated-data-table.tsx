@@ -501,11 +501,11 @@ export function PaginatedDataTable({
             
             const durationSeconds = stats.duration || 0
             if (durationSeconds > 0 && durationSeconds < 60) {
-                return <span className="pl-4 text-muted-foreground text-xs">&lt; 1m</span>
+                return <span className="pl-4 text-muted-foreground text-xs">&lt; 1 m</span>
             }
             
             const durationMins = Math.round(durationSeconds / 60)
-            return <span className="pl-4">{durationMins}m</span>
+            return <span className="pl-4">{durationMins} m</span>
         }
       },
       {
