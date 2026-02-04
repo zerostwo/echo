@@ -45,6 +45,7 @@ type UserSettingsContextType = {
 };
 
 const UserSettingsContext = createContext<UserSettingsContextType | undefined>(undefined);
+let warnedMissingProvider = false;
 
 export function UserSettingsProvider({ initialSettings, children }: { initialSettings?: Settings; children: React.ReactNode }) {
   const [settings, setSettings] = useState<Settings>(initialSettings || {});
@@ -83,7 +84,19 @@ export function UserSettingsProvider({ initialSettings, children }: { initialSet
 export function useUserSettings() {
   const ctx = useContext(UserSettingsContext);
   if (!ctx) {
-    throw new Error('useUserSettings must be used within a UserSettingsProvider');
+    if (!warnedMissingProvider) {
+      console.warn('useUserSettings used without UserSettingsProvider. Falling back to defaults.');
+      warnedMissingProvider = true;
+    }
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    const pronunciationAccent: PronunciationAccent = 'us';
+    return {
+      settings: {},
+      setSettings: () => {},
+      updateSettings: async () => {},
+      timezone,
+      pronunciationAccent,
+    };
   }
   return ctx;
 }

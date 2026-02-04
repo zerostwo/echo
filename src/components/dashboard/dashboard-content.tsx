@@ -20,7 +20,7 @@ import { getUnreadCount } from '@/actions/notification-actions';
 interface DashboardStats {
   heatmapData: Array<{ date: string; duration: number }>;
   wordsDueToday: number;
-  wordsReviewedTodayCount: number;
+  wordsMasteredTodayCount: number;
   sentencesPracticedTodayCount: number;
   dailyGoals: {
     words: number;
@@ -168,7 +168,7 @@ export function DashboardContent() {
         {/* Row 2: Today's Tasks (Col 1) + Heatmap (Col 2-3) */}
         <div className="col-span-1">
             <TodayTasksCard
-            wordsReviewed={stats.wordsReviewedTodayCount}
+            wordsReviewed={stats.wordsMasteredTodayCount}
             sentencesPracticed={stats.sentencesPracticedTodayCount}
             dailyGoals={stats.dailyGoals}
             />

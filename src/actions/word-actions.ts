@@ -215,7 +215,7 @@ export async function updateWordsStatus(wordIds: string[], status: string) {
     try {
         // Get existing statuses for these words
         // Batch fetch
-        const existingMap = new Map();
+        const existingMap = new Map<string, string[]>();
         
         for (let i = 0; i < wordIds.length; i += 50) {
             const batch = wordIds.slice(i, i + 50);
@@ -224,10 +224,14 @@ export async function updateWordsStatus(wordIds: string[], status: string) {
                 'user_word_statuses',
                 [
                     Query.equal('user_id', session.user.id),
-                    Query.equal('word_id', batch)
+                    Query.equal('word_id', batch),
+                    Query.isNull('deleted_at')
                 ]
             );
-            for (const s of existingStatuses) existingMap.set(s.word_id, s.$id);
+            for (const s of existingStatuses) {
+                if (!existingMap.has(s.word_id)) existingMap.set(s.word_id, []);
+                existingMap.get(s.word_id)!.push(s.$id);
+            }
         }
 
         // Separate into updates and inserts
@@ -236,7 +240,7 @@ export async function updateWordsStatus(wordIds: string[], status: string) {
 
         for (const wordId of wordIds) {
             if (existingMap.has(wordId)) {
-                toUpdate.push(existingMap.get(wordId)!);
+                toUpdate.push(...existingMap.get(wordId)!);
             } else {
                 toInsert.push(wordId);
             }

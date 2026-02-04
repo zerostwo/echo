@@ -188,14 +188,25 @@ export async function extractVocabulary(materialId: string) {
         return { error: 'Material not found' };
     }
 
-    const { documents: sentences } = await admin.databases.listDocuments(
-        APPWRITE_DATABASE_ID,
-        'sentences',
-        [
+    const sentences: any[] = [];
+    let sentenceCursor: string | null = null;
+    while (true) {
+        const queries = [
             Query.equal('material_id', materialId),
-            Query.isNull('deleted_at')
-        ]
-    );
+            Query.isNull('deleted_at'),
+            Query.limit(1000)
+        ];
+        if (sentenceCursor) queries.push(Query.cursorAfter(sentenceCursor));
+        const { documents: batch } = await admin.databases.listDocuments(
+            APPWRITE_DATABASE_ID,
+            'sentences',
+            queries
+        );
+        if (!batch || batch.length === 0) break;
+        sentences.push(...batch);
+        sentenceCursor = batch[batch.length - 1].$id;
+        if (batch.length < 1000) break;
+    }
     
     console.log(`[extractVocabulary] Found ${sentences.length} active sentences for material ${materialId}`);
 
@@ -218,8 +229,8 @@ export async function extractVocabulary(materialId: string) {
             const expandedWords = expandContraction(originalToken);
             
             for (const word of expandedWords) {
-                // Skip if too short, only digits, or only apostrophes
-                if (word.length > 1 && !/^\d+$/.test(word)) {
+                // Skip if only digits
+                if (word.length >= 1 && !/^\d+$/.test(word)) {
                     rawWords.add(word);
                     sentenceWords.push({ 
                         sentenceId: sentence.$id, 
@@ -689,6 +700,19 @@ export interface PaginatedVocabResult {
     };
 }
 
+function pickLatestStatus(map: Map<string, any>, status: any) {
+    const existing = map.get(status.word_id);
+    if (!existing) {
+        map.set(status.word_id, status);
+        return;
+    }
+    const existingTime = new Date(existing.$updatedAt || existing.$createdAt || 0).getTime();
+    const nextTime = new Date(status.$updatedAt || status.$createdAt || 0).getTime();
+    if (nextTime >= existingTime) {
+        map.set(status.word_id, status);
+    }
+}
+
 
 export async function getVocabPaginated(
     page: number = 1,
@@ -900,7 +924,7 @@ export async function getVocabPaginated(
         }
 
         const statusMap = new Map<string, any>();
-        allStatuses.forEach((s: any) => statusMap.set(s.word_id, s));
+        allStatuses.forEach((s: any) => pickLatestStatus(statusMap, s));
 
         // Merge data
         let mergedWords: any[] = [];

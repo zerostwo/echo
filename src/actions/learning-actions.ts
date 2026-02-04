@@ -68,6 +68,192 @@ export interface LearningFilters {
   hardest?: boolean;
 }
 
+function pickLatestStatus(map: Map<string, any>, status: any) {
+  const existing = map.get(status.word_id);
+  if (!existing) {
+    map.set(status.word_id, status);
+    return;
+  }
+  const existingTime = new Date(existing.$updatedAt || existing.$createdAt || 0).getTime();
+  const nextTime = new Date(status.$updatedAt || status.$createdAt || 0).getTime();
+  if (nextTime >= existingTime) {
+    map.set(status.word_id, status);
+  }
+}
+
+async function updateStatusesForWord(
+  admin: any,
+  userId: string,
+  wordId: string,
+  payload: Record<string, any>
+): Promise<number> {
+  const { documents: statuses } = await admin.databases.listDocuments(
+    APPWRITE_DATABASE_ID,
+    'user_word_statuses',
+    [
+      Query.equal('user_id', userId),
+      Query.equal('word_id', wordId),
+      Query.isNull('deleted_at'),
+      Query.limit(100)
+    ]
+  );
+
+  if (!statuses || statuses.length === 0) return 0;
+
+  let updated = 0;
+  for (const s of statuses) {
+    try {
+      await admin.databases.updateDocument(
+        APPWRITE_DATABASE_ID,
+        'user_word_statuses',
+        s.$id,
+        payload
+      );
+      updated += 1;
+    } catch (e) {
+      // Fallback: try a minimal update if the full payload fails
+      try {
+        await admin.databases.updateDocument(
+          APPWRITE_DATABASE_ID,
+          'user_word_statuses',
+          s.$id,
+          {
+            status: payload.status,
+            fsrs_state: payload.fsrs_state,
+            fsrs_last_review: payload.fsrs_last_review,
+          }
+        );
+        updated += 1;
+      } catch (err) {
+        console.error('[updateStatusesForWord] Failed to update status', s.$id, err);
+      }
+    }
+  }
+
+  return updated;
+}
+
+async function getWordIdsFromMaterial(admin: any, materialId: string): Promise<Set<string>> {
+  const wordIds = new Set<string>();
+  const sentences: any[] = [];
+  let cursor: string | null = null;
+
+  while (true) {
+    const queries = [
+      Query.equal('material_id', materialId),
+      Query.isNull('deleted_at'),
+      Query.limit(1000)
+    ];
+    if (cursor) queries.push(Query.cursorAfter(cursor));
+    const { documents: batch } = await admin.databases.listDocuments(
+      APPWRITE_DATABASE_ID,
+      'sentences',
+      queries
+    );
+    if (!batch || batch.length === 0) break;
+    sentences.push(...batch);
+    cursor = batch[batch.length - 1].$id;
+    if (batch.length < 1000) break;
+  }
+
+  if (sentences.length === 0) return wordIds;
+
+  const sentenceIds = sentences.map((s: any) => s.$id);
+  for (let i = 0; i < sentenceIds.length; i += 50) {
+    const batch = sentenceIds.slice(i, i + 50);
+    const { documents: occurrences } = await admin.databases.listDocuments(
+      APPWRITE_DATABASE_ID,
+      'word_occurrences',
+      [
+        Query.equal('sentence_id', batch),
+        Query.limit(5000)
+      ]
+    );
+    for (const occ of occurrences) wordIds.add(occ.word_id);
+  }
+
+  return wordIds;
+}
+
+async function getWordIdsFromDictionary(admin: any, dictionaryId: string): Promise<Set<string>> {
+  const wordIds = new Set<string>();
+  let cursor: string | null = null;
+  while (true) {
+    const queries = [Query.equal('dictionary_id', dictionaryId), Query.limit(200)];
+    if (cursor) queries.push(Query.cursorAfter(cursor));
+    const { documents: dictWords } = await admin.databases.listDocuments(
+      APPWRITE_DATABASE_ID,
+      'dictionary_words',
+      queries
+    );
+    if (!dictWords || dictWords.length === 0) break;
+    for (const dw of dictWords) wordIds.add(dw.word_id);
+    cursor = dictWords[dictWords.length - 1].$id;
+    if (dictWords.length < 200) break;
+  }
+  return wordIds;
+}
+
+async function getWordIdsInScope(
+  admin: any,
+  userId: string,
+  materialId?: string,
+  dictionaryId?: string
+): Promise<Set<string>> {
+  if (materialId) return getWordIdsFromMaterial(admin, materialId);
+  if (dictionaryId) return getWordIdsFromDictionary(admin, dictionaryId);
+
+  // Global scope: all active materials + all user dictionaries
+  const wordIds = new Set<string>();
+
+  // Materials
+  const materialIds: string[] = [];
+  let materialCursor: string | null = null;
+  while (true) {
+    const queries = [
+      Query.equal('user_id', userId),
+      Query.isNull('deleted_at'),
+      Query.limit(200)
+    ];
+    if (materialCursor) queries.push(Query.cursorAfter(materialCursor));
+    const { documents: batch } = await admin.databases.listDocuments(
+      APPWRITE_DATABASE_ID,
+      'materials',
+      queries
+    );
+    if (!batch || batch.length === 0) break;
+    materialIds.push(...batch.map((m: any) => m.$id));
+    materialCursor = batch[batch.length - 1].$id;
+    if (batch.length < 200) break;
+  }
+
+  for (const mid of materialIds) {
+    const ids = await getWordIdsFromMaterial(admin, mid);
+    for (const id of ids) wordIds.add(id);
+  }
+
+  // Dictionaries
+  let dictCursor: string | null = null;
+  while (true) {
+    const queries = [Query.equal('user_id', userId), Query.limit(200)];
+    if (dictCursor) queries.push(Query.cursorAfter(dictCursor));
+    const { documents: dicts } = await admin.databases.listDocuments(
+      APPWRITE_DATABASE_ID,
+      'dictionaries',
+      queries
+    );
+    if (!dicts || dicts.length === 0) break;
+    for (const d of dicts) {
+      const ids = await getWordIdsFromDictionary(admin, d.$id);
+      for (const id of ids) wordIds.add(id);
+    }
+    dictCursor = dicts[dicts.length - 1].$id;
+    if (dicts.length < 200) break;
+  }
+
+  return wordIds;
+}
+
 /**
  * Get words that are due for learning (status = NEW or LEARNING, not MASTERED)
  * Priority: 1. Due for review (fsrs_due <= now), 2. New words (fsrs_due is null)
@@ -148,63 +334,44 @@ export async function getWordsForLearning(limit: number = 20, filters?: Learning
   // Strategy: Try to get at least 20% new words if available.
   const minNewWords = Math.ceil(limit * 0.2);
   
-  // 1. Get words that are due for review (fsrs_due <= now)
-  const { documents: dueWords } = await admin.databases.listDocuments(
-      APPWRITE_DATABASE_ID,
-      'user_word_statuses',
-      [
-          Query.equal('user_id', session.user.id),
-          Query.equal('status', ['NEW', 'LEARNING']),
-          Query.lessThanEqual('fsrs_due', now),
-          Query.orderAsc('fsrs_due'),
-          Query.limit(limit)
-      ]
-  );
-  
-  let availableDueWords = dueWords || [];
-  
-  // 2. Get new words (fsrs_due is null)
-  const { documents: newWords } = await admin.databases.listDocuments(
-      APPWRITE_DATABASE_ID,
-      'user_word_statuses',
-      [
-          Query.equal('user_id', session.user.id),
-          Query.equal('status', ['NEW', 'LEARNING']),
-          Query.isNull('fsrs_due'),
-          Query.limit(limit)
-      ]
-  );
-  
-  let availableNewWords = newWords || [];
-
-  // If no due/new results, fall back to fetching all statuses and filtering in-memory.
-  // This handles legacy/mixed-case status values or missing fsrs_due data.
-  if (availableDueWords.length === 0 && availableNewWords.length === 0) {
-    const allStatuses: any[] = [];
-    let cursor = null;
-    while (true) {
-      const queries = [Query.equal('user_id', session.user.id), Query.limit(200)];
-      if (cursor) queries.push(Query.cursorAfter(cursor));
-      const { documents: statuses } = await admin.databases.listDocuments(
-        APPWRITE_DATABASE_ID,
-        'user_word_statuses',
-        queries
-      );
-      if (statuses.length === 0) break;
-      allStatuses.push(...statuses);
-      cursor = statuses[statuses.length - 1].$id;
-      if (allStatuses.length >= 5000) break;
-    }
-
-    const normalized = allStatuses.map((s: any) => ({
-      ...s,
-      _status: String(s.status || 'NEW').toUpperCase(),
-    }));
-
-    const newLearning = normalized.filter((s: any) => s._status === 'NEW' || s._status === 'LEARNING');
-    availableNewWords = newLearning.filter((s: any) => !s.fsrs_due);
-    availableDueWords = newLearning.filter((s: any) => s.fsrs_due && s.fsrs_due <= now);
+  // Scope to active materials + dictionaries to avoid stale statuses
+  const wordIdsInScope = await getWordIdsInScope(admin, session.user.id);
+  if (wordIdsInScope.size === 0) {
+    return { words: [] };
   }
+
+  // Fetch all statuses, filter in-memory by scope/status
+  const statusMap = new Map<string, any>();
+  let cursor = null;
+  while (true) {
+    const queries = [
+      Query.equal('user_id', session.user.id),
+      Query.isNull('deleted_at'),
+      Query.limit(200)
+    ];
+    if (cursor) queries.push(Query.cursorAfter(cursor));
+    const { documents: statuses } = await admin.databases.listDocuments(
+      APPWRITE_DATABASE_ID,
+      'user_word_statuses',
+      queries
+    );
+    if (!statuses || statuses.length === 0) break;
+    for (const s of statuses) {
+      if (!wordIdsInScope.has(s.word_id)) continue;
+      pickLatestStatus(statusMap, s);
+    }
+    cursor = statuses[statuses.length - 1].$id;
+    if (statusMap.size >= 10000) break; // safety
+  }
+
+  const normalized = Array.from(statusMap.values()).map((s: any) => ({
+    ...s,
+    _status: String(s.status || 'NEW').toUpperCase(),
+  }));
+
+  const newLearning = normalized.filter((s: any) => s._status === 'NEW' || s._status === 'LEARNING');
+  let availableNewWords = newLearning.filter((s: any) => !s.fsrs_due);
+  let availableDueWords = newLearning.filter((s: any) => s.fsrs_due && s.fsrs_due <= now);
 
   // 3. Combine them with the mix strategy
   let allStatuses: any[] = [];
@@ -520,13 +687,14 @@ async function getWordsFromDictionary(
         'user_word_statuses',
         [
             Query.equal('user_id', userId),
-            Query.equal('word_id', batchWordIds)
+            Query.equal('word_id', batchWordIds),
+            Query.isNull('deleted_at')
         ]
     );
     
     // Update status map
     for (const status of batchStatuses) {
-        statusMap.set(status.word_id, status);
+        pickLatestStatus(statusMap, status);
     }
 
     // 3. Filter this batch
@@ -1002,26 +1170,25 @@ export async function recordReview(params: {
     newStatus = 'LEARNING';
   }
 
-  // Update word status with new FSRS state
-  await admin.databases.updateDocument(
-      APPWRITE_DATABASE_ID,
-      'user_word_statuses',
-      userWordStatusId,
-      {
-          status: newStatus,
-          fsrs_due: newCard.due.toISOString(),
-          fsrs_stability: newCard.stability,
-          fsrs_difficulty: newCard.difficulty,
-          fsrs_elapsed_days: newCard.elapsed_days,
-          fsrs_scheduled_days: newCard.scheduled_days,
-          fsrs_reps: newCard.reps,
-          fsrs_lapses: newCard.lapses,
-          fsrs_state: newCard.state,
-          fsrs_last_review: now.toISOString(),
-          error_count: isCorrect ? wordStatus.error_count : (wordStatus.error_count || 0) + 1,
-          last_error_at: isCorrect ? wordStatus.last_error_at : now.toISOString()
-      }
-  );
+  // Update word status with new FSRS state (sync all statuses for this word)
+  const updatedCount = await updateStatusesForWord(admin, session.user.id, wordStatus.word_id, {
+      status: newStatus,
+      fsrs_due: newCard.due.toISOString(),
+      fsrs_stability: newCard.stability,
+      fsrs_difficulty: newCard.difficulty,
+      fsrs_elapsed_days: newCard.elapsed_days,
+      fsrs_scheduled_days: newCard.scheduled_days,
+      fsrs_reps: newCard.reps,
+      fsrs_lapses: newCard.lapses,
+      fsrs_state: newCard.state,
+      fsrs_last_review: now.toISOString(),
+      error_count: isCorrect ? wordStatus.error_count : (wordStatus.error_count || 0) + 1,
+      last_error_at: isCorrect ? wordStatus.last_error_at : now.toISOString()
+  });
+
+  if (updatedCount === 0) {
+      return { success: false, error: 'Word status not found' };
+  }
 
   // Record review history
   try {
@@ -1058,42 +1225,27 @@ export async function recordReview(params: {
 /**
  * Mark a word as mastered - it will no longer appear in learning sessions
  */
-export async function markAsMastered(userWordStatusId: string): Promise<ReviewResult> {
+export async function markAsMastered(wordId: string): Promise<ReviewResult> {
   const session = await auth();
   if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
 
   const admin = getAdminClient();
 
-  // Verify the word status belongs to the user
-  let wordStatus;
-  try {
-      wordStatus = await admin.databases.getDocument(
-          APPWRITE_DATABASE_ID,
-          'user_word_statuses',
-          userWordStatusId
-      );
-  } catch (e) {
+  const now = new Date();
+  const farFuture = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000);
+
+  // Update word status to MASTERED with high stability (sync all statuses for this word)
+  const updatedCount = await updateStatusesForWord(admin, session.user.id, wordId, {
+      status: 'MASTERED',
+      fsrs_stability: 365, // Very high stability - won't be scheduled for a long time
+      fsrs_state: State.Review,
+      fsrs_last_review: now.toISOString(),
+      fsrs_due: farFuture.toISOString(),
+  });
+
+  if (updatedCount === 0) {
       return { success: false, error: 'Word status not found' };
   }
-
-  if (wordStatus.user_id !== session.user.id) {
-      return { success: false, error: 'Unauthorized' };
-  }
-
-  const now = new Date();
-
-  // Update word status to MASTERED with high stability
-  await admin.databases.updateDocument(
-      APPWRITE_DATABASE_ID,
-      'user_word_statuses',
-      userWordStatusId,
-      {
-          status: 'MASTERED',
-          fsrs_stability: 365, // Very high stability - won't be scheduled for a long time
-          fsrs_state: State.Review,
-          fsrs_last_review: now.toISOString()
-      }
-  );
 
   revalidatePath('/words');
   revalidatePath('/study/words');
@@ -1121,71 +1273,22 @@ export async function getLearningStats(materialId?: string, dictionaryId?: strin
 
   const admin = getAdminClient();
 
-  // If materialId or dictionaryId is provided, get stats only for words from that scope
-  let wordIdsInScope: Set<string> | null = null;
-  
-  if (materialId) {
-    // Get sentences from material
-    const { documents: sentences } = await admin.databases.listDocuments(
-        APPWRITE_DATABASE_ID,
-        'sentences',
-        [Query.equal('material_id', materialId), Query.isNull('deleted_at')]
-    );
-    
-    if (sentences.length > 0) {
-      const sentenceIds = sentences.map((s: any) => s.$id);
-      
-      // Get word occurrences in batches
-      wordIdsInScope = new Set<string>();
-      
-      for (let i = 0; i < sentenceIds.length; i += 50) {
-        const batch = sentenceIds.slice(i, i + 50);
-        const { documents: occurrences } = await admin.databases.listDocuments(
-            APPWRITE_DATABASE_ID,
-            'word_occurrences',
-            [
-                Query.equal('sentence_id', batch),
-                Query.limit(5000)
-            ]
-        );
-        for (const occ of occurrences) wordIdsInScope.add(occ.word_id);
-      }
-    }
-    
-    if (!wordIdsInScope || wordIdsInScope.size === 0) {
-      return { totalNew: 0, totalLearning: 0, totalMastered: 0, dueToday: 0 };
-    }
-  } else if (dictionaryId) {
-    // Get words from dictionary
-    const wordIds = [];
-    let cursor = null;
-    while (true) {
-        const queries = [Query.equal('dictionary_id', dictionaryId), Query.limit(100)];
-        if (cursor) queries.push(Query.cursorAfter(cursor));
-        const { documents: dictWords } = await admin.databases.listDocuments(
-            APPWRITE_DATABASE_ID,
-            'dictionary_words',
-            queries
-        );
-        if (dictWords.length === 0) break;
-        wordIds.push(...dictWords.map((dw: any) => dw.word_id));
-        cursor = dictWords[dictWords.length - 1].$id;
-        if (wordIds.length > 1000) break;
-    }
-    
-    if (wordIds.length > 0) {
-      wordIdsInScope = new Set(wordIds);
-    } else {
-      return { totalNew: 0, totalLearning: 0, totalMastered: 0, dueToday: 0 };
-    }
+  // Build scope (material, dictionary, or global)
+  const wordIdsInScope = await getWordIdsInScope(admin, session.user.id, materialId, dictionaryId);
+  if (wordIdsInScope.size === 0) {
+    return { totalNew: 0, totalLearning: 0, totalMastered: 0, dueToday: 0 };
   }
 
   // Get all statuses for user
   // We might need to paginate if user has many words
-  const allStatuses: any[] = [];
+  const statusMap = new Map<string, any>();
   let cursor = null;
   while (true) {
-      const queries = [Query.equal('user_id', session.user.id), Query.limit(100)];
+      const queries = [
+        Query.equal('user_id', session.user.id),
+        Query.isNull('deleted_at'),
+        Query.limit(200)
+      ];
       if (cursor) queries.push(Query.cursorAfter(cursor));
       const { documents: statuses } = await admin.databases.listDocuments(
           APPWRITE_DATABASE_ID,
@@ -1193,21 +1296,23 @@ export async function getLearningStats(materialId?: string, dictionaryId?: strin
           queries
       );
       if (statuses.length === 0) break;
-      allStatuses.push(...statuses);
+      for (const s of statuses) {
+        if (!wordIdsInScope.has(s.word_id)) continue;
+        pickLatestStatus(statusMap, s);
+      }
       cursor = statuses[statuses.length - 1].$id;
-      if (allStatuses.length > 5000) break; // Safety
+      if (statusMap.size > 10000) break; // Safety
   }
 
-  // Filter by scope if needed
-  let filteredStatuses = allStatuses;
-  if (wordIdsInScope) {
-    filteredStatuses = filteredStatuses.filter((ws: any) => 
-      wordIdsInScope!.has(ws.word_id)
-    );
-  }
+  const filteredStatuses = Array.from(statusMap.values());
 
-  const counts = filteredStatuses.reduce((acc: Record<string, number>, ws: any) => {
-    acc[ws.status] = (acc[ws.status] || 0) + 1;
+  const normalizedStatuses = filteredStatuses.map((ws: any) => ({
+    ...ws,
+    _status: String(ws.status || 'NEW').toUpperCase(),
+  }));
+
+  const counts = normalizedStatuses.reduce((acc: Record<string, number>, ws: any) => {
+    acc[ws._status] = (acc[ws._status] || 0) + 1;
     return acc;
   }, {} as Record<string, number>);
 
@@ -1219,8 +1324,8 @@ export async function getLearningStats(materialId?: string, dictionaryId?: strin
   let dueCount = 0;
   
   // Count due words from filtered statuses
-  const dueStatuses = filteredStatuses.filter((ws: any) => {
-      if (ws.status !== 'NEW' && ws.status !== 'LEARNING') return false;
+  const dueStatuses = normalizedStatuses.filter((ws: any) => {
+      if (ws._status !== 'NEW' && ws._status !== 'LEARNING') return false;
       if (!ws.fsrs_due) return true; // New words are due
       return ws.fsrs_due <= todayStr;
   });
@@ -1228,13 +1333,11 @@ export async function getLearningStats(materialId?: string, dictionaryId?: strin
   dueCount = dueStatuses.length;
 
   // If scoped, we also need to count words that are in scope but have NO status (truly new)
-  if (wordIdsInScope) {
-      const wordIdsWithStatus = new Set(filteredStatuses.map((ws: any) => ws.word_id));
-      const newWordsWithoutStatus = Array.from(wordIdsInScope).filter(id => !wordIdsWithStatus.has(id)).length;
-      
-      counts['NEW'] = (counts['NEW'] || 0) + newWordsWithoutStatus;
-      dueCount += newWordsWithoutStatus;
-  }
+  const wordIdsWithStatus = new Set(filteredStatuses.map((ws: any) => ws.word_id));
+  const newWordsWithoutStatus = Array.from(wordIdsInScope).filter(id => !wordIdsWithStatus.has(id)).length;
+  
+  counts['NEW'] = (counts['NEW'] || 0) + newWordsWithoutStatus;
+  dueCount += newWordsWithoutStatus;
 
   return {
     totalNew: counts['NEW'] || 0,

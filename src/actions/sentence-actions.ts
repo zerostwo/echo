@@ -30,7 +30,7 @@ function tokenize(content: string) {
         .toLowerCase()
         .replace(/[.,/#!$%^&*;:{}=\-_`~()?"'\\[\]|<>@]/g, ' ')
         .split(/\s+/)
-        .filter((w) => w.length > 1 && !/^\d+$/.test(w));
+        .filter((w) => w.length >= 1 && !/^\d+$/.test(w));
 }
 
 interface TokenWithPosition {
@@ -48,8 +48,8 @@ function tokenizeWithPositions(content: string): TokenWithPosition[] {
     
     while ((match = wordRegex.exec(content)) !== null) {
         const word = match[0].toLowerCase();
-        // Skip if too short or only digits
-        if (word.length > 1 && !/^\d+$/.test(word) && !/^'+$/.test(word)) {
+        // Skip if only digits
+        if (word.length >= 1 && !/^\d+$/.test(word) && !/^'+$/.test(word)) {
             tokens.push({
                 word: word.replace(/'/g, ''),  // Remove apostrophes for lookup
                 startIndex: match.index,

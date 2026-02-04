@@ -193,6 +193,7 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
 
   // Track previous materialId to detect real changes
   const prevMaterialIdRef = useRef<string | undefined>(materialId)
+  const dataRef = useRef<any[]>(data)
   
   // Track if initial data has been loaded to avoid double fetches
   const initializedRef = useRef(false)
@@ -209,6 +210,40 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []) // Only run once on mount
+
+  useEffect(() => {
+    dataRef.current = data
+  }, [data])
+
+  const applyStatusChange = useCallback((ids: string[], status: string) => {
+    if (ids.length === 0) return
+    setData(prev => prev.map(word => ids.includes(word.id) ? { ...word, status } : word))
+    setStats(prev => {
+      if (!prev) return prev
+      const next = { ...prev }
+      for (const id of ids) {
+        const existing = dataRef.current.find((w: any) => w.id === id)
+        if (!existing) continue
+        const oldStatus = existing.status
+        if (oldStatus === status) continue
+
+        if (oldStatus === 'NEW') next.newWords = Math.max(0, next.newWords - 1)
+        if (oldStatus === 'LEARNING') next.learningWords = Math.max(0, next.learningWords - 1)
+        if (oldStatus === 'MASTERED') {
+          next.masteredWords = Math.max(0, next.masteredWords - 1)
+          next.masteredWords24h = Math.max(0, (next.masteredWords24h || 0) - 1)
+        }
+
+        if (status === 'NEW') next.newWords += 1
+        if (status === 'LEARNING') next.learningWords += 1
+        if (status === 'MASTERED') {
+          next.masteredWords += 1
+          next.masteredWords24h = (next.masteredWords24h || 0) + 1
+        }
+      }
+      return next
+    })
+  }, [])
 
   // Sync server refreshed data for dictionary pages
   useEffect(() => {
@@ -357,6 +392,7 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
           toast.error(result.error)
           return
         }
+        applyStatusChange(selectedIds, status)
         toast.success(`${selectedIds.length} word(s) marked as ${status}`)
         setRowSelection({})
         fetchData(page)
@@ -376,10 +412,9 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
           return
         }
         // Update local state immediately for better UX
-        setData(prev => prev.map(word => 
-          word.id === wordId ? { ...word, status } : word
-        ))
+        applyStatusChange([wordId], status)
         toast.success(`Word marked as ${status}`)
+        fetchData(page)
       } catch (error) {
         toast.error('Failed to update word status')
       }
@@ -497,6 +532,7 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
           toast.error(result.error)
           return
         }
+        applyStatusChange([wordId], 'MASTERED')
         toast.success('Word marked as mastered')
         fetchData(page)
       } catch (error) {

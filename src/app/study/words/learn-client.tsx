@@ -166,7 +166,9 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
   const [savedSession, setSavedSession] = useState<SessionState | null>(null);
   
   // Dictation mode (hide Chinese in typing mode)
-  const [isDictationMode, setIsDictationMode] = useState(false);
+  const [isDictationMode, setIsDictationMode] = useState<boolean>(
+    (settings?.typingHideTranslation as boolean) ?? false
+  );
   
   // Shortcuts help dialog
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
@@ -203,6 +205,12 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
   useEffect(() => {
     elapsedTimeRef.current = elapsedTime;
   }, [elapsedTime]);
+
+  useEffect(() => {
+    if (typeof settings?.typingHideTranslation === 'boolean') {
+      setIsDictationMode(settings.typingHideTranslation);
+    }
+  }, [settings?.typingHideTranslation]);
 
   // Audio refs
   const youdaoAudioRef = useRef<HTMLAudioElement>(null);
@@ -959,18 +967,20 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
     }
     const responseTime = Date.now() - startTime - timerPausedTime - currentPause;
     
-    // Record the review
-    const result = await recordReview({
+    // Record the review (non-blocking to avoid UI lag)
+    void recordReview({
       userWordStatusId: currentWord.id,
       isCorrect: correct,
       responseTimeMs: responseTime,
       errorCount: correct ? 0 : errorCount + 1,
       mode: mode === 'context_listening' ? 'context_listening' : 'typing',
-    });
-
-    if (!result.success) {
+    }).then((result) => {
+      if (!result.success) {
+        toast.error('Failed to record review');
+      }
+    }).catch(() => {
       toast.error('Failed to record review');
-    }
+    });
 
     // Update session stats
     setSessionStats(prev => ({
@@ -986,7 +996,7 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
     if (correct) {
       setTimeout(() => {
         nextWord();
-      }, 300); // Quick advance for correct answers
+      }, 80); // Quick advance for correct answers
     } else if (mode !== 'context_listening') {
       // Load word context for learning (only for non-context-listening modes)
       loadWordContext(currentWord.wordId);
@@ -1031,18 +1041,20 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
     }
     const responseTime = Date.now() - startTime - timerPausedTime - currentPause;
 
-    // Record the review
-    const result = await recordReview({
+    // Record the review (non-blocking)
+    void recordReview({
       userWordStatusId: currentWord.id,
       isCorrect: correct,
       responseTimeMs: responseTime,
       errorCount: correct ? 0 : 1,
       mode: 'multiple_choice',
-    });
-
-    if (!result.success) {
+    }).then((result) => {
+      if (!result.success) {
+        toast.error('Failed to record review');
+      }
+    }).catch(() => {
       toast.error('Failed to record review');
-    }
+    });
 
     // Update session stats
     setSessionStats(prev => ({
@@ -1058,7 +1070,7 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
     if (correct) {
       setTimeout(() => {
         nextWord();
-      }, 300);
+      }, 80);
     } else {
       loadWordContext(currentWord.wordId);
     }
@@ -1095,18 +1107,20 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
       }
       const responseTime = Date.now() - startTime - timerPausedTime - currentPause;
 
-      // Record review
-      const result = await recordReview({
+      // Record review (non-blocking)
+      void recordReview({
         userWordStatusId: currentWord.id,
         isCorrect: correct,
         responseTimeMs: responseTime,
         errorCount: correct ? 0 : 1,
         mode: 'multiple_choice',
-      });
-
-      if (!result.success) {
+      }).then((result) => {
+        if (!result.success) {
+          toast.error('Failed to record review');
+        }
+      }).catch(() => {
         toast.error('Failed to record review');
-      }
+      });
 
       setSessionStats(prev => ({
         ...prev,
@@ -1142,18 +1156,20 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
     }
     const responseTime = Date.now() - startTime - timerPausedTime - currentPause;
 
-    // Record as incorrect with Again rating
-    const result = await recordReview({
+    // Record as incorrect with Again rating (non-blocking)
+    void recordReview({
       userWordStatusId: currentWord.id,
       isCorrect: false,
       responseTimeMs: responseTime,
       errorCount: 1,
       mode: mode === 'context_listening' ? 'context_listening' : mode,
-    });
-
-    if (!result.success) {
+    }).then((result) => {
+      if (!result.success) {
+        toast.error('Failed to record review');
+      }
+    }).catch(() => {
       toast.error('Failed to record review');
-    }
+    });
 
     setSessionStats(prev => ({
       ...prev,
@@ -1175,7 +1191,7 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
   const handleMarkMastered = useCallback(async () => {
     if (!currentWord) return;
 
-    const result = await markAsMastered(currentWord.id);
+    const result = await markAsMastered(currentWord.wordId);
 
     if (result.success) {
       toast.success('Word marked as mastered');
@@ -1234,8 +1250,10 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
     // Ctrl+D for dictation mode toggle (typing mode only)
     if (e.ctrlKey && (e.key === 'd' || e.key === 'D') && mode === 'typing' && !showResult) {
       e.preventDefault();
-      setIsDictationMode(prev => !prev);
-      if (!isDictationMode && currentWord) {
+      const next = !isDictationMode;
+      setIsDictationMode(next);
+      updateSettings({ typingHideTranslation: next });
+      if (next && currentWord) {
         // If entering dictation mode, play pronunciation
         setTimeout(() => playPronunciation(currentWord.text), 100);
       }
@@ -1309,18 +1327,20 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
           }
           const responseTime = Date.now() - startTime - timerPausedTime - currentPause;
           
-          // Record the review
-          const result = await recordReview({
+          // Record the review (non-blocking)
+          void recordReview({
             userWordStatusId: currentWord.id,
             isCorrect: correct,
             responseTimeMs: responseTime,
             errorCount: correct ? 0 : errorCount + 1,
             mode: mode === 'context_listening' ? 'context_listening' : 'typing',
-          });
-
-          if (!result.success) {
+          }).then((result) => {
+            if (!result.success) {
+              toast.error('Failed to record review');
+            }
+          }).catch(() => {
             toast.error('Failed to record review');
-          }
+          });
 
           // Update session stats
           setSessionStats(prev => ({
@@ -1336,7 +1356,7 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
           if (correct) {
             setTimeout(() => {
               nextWord();
-            }, 300);
+            }, 80);
           } else if (mode !== 'context_listening') {
             // Only load word context for non-context-listening modes
             loadWordContext(currentWord.wordId);
@@ -1421,7 +1441,7 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
                   <div className="text-sm text-muted-foreground">Accuracy</div>
                 </div>
                 <div className="text-center p-4 bg-muted rounded-lg">
-                  <div className="text-2xl font-bold">{Math.round(sessionStats.totalTime / 1000)}s</div>
+                  <div className="text-2xl font-bold">{Math.round(sessionStats.totalTime / 1000)} s</div>
                   <div className="text-sm text-muted-foreground">Total Time</div>
                 </div>
               </div>
@@ -1864,8 +1884,10 @@ export function LearnClient({ initialWords, stats }: LearnClientProps) {
                         size="icon"
                         className={cn("h-6 w-6", isDictationMode && "text-primary bg-primary/10")}
                         onClick={() => {
-                          setIsDictationMode(prev => !prev);
-                          if (!isDictationMode) {
+                          const next = !isDictationMode;
+                          setIsDictationMode(next);
+                          updateSettings({ typingHideTranslation: next });
+                          if (next) {
                             playPronunciation(currentWord.text);
                           }
                         }}

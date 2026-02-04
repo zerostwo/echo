@@ -9,7 +9,7 @@ export interface DashboardStats {
     duration: number;
   }>;
   wordsDueToday: number;
-  wordsReviewedTodayCount: number;
+  wordsMasteredTodayCount: number;
   sentencesPracticedTodayCount: number;
   dailyGoals: {
     words: number;
@@ -140,12 +140,6 @@ export async function GET() {
     // daily_study_stats has words_reviewed count!
     
     // Let's use daily_study_stats for today's counts if available.
-    const wordsReviewedTodayCount = wordStatuses.filter((ws: any) => {
-        if (!ws.fsrs_last_review) return false;
-        const reviewedAt = new Date(ws.fsrs_last_review);
-        return reviewedAt >= todayStart && reviewedAt <= todayEnd;
-    }).length;
-    
     // If we need exact reviews for some reason (e.g. response time), we might need a better way.
     // But for dashboard stats, maybe we can skip detailed review fetching if we just need count.
     // The original code fetched reviews to count them.
@@ -256,9 +250,21 @@ export async function GET() {
     }
 
     // Filter word statuses to only include words in user's materials/dictionaries
-    const relevantWordStatuses = wordStatuses.filter((ws: any) => 
-        wordIdsInMaterials.has(ws.word_id)
-    );
+    const relevantWordStatusMap = new Map<string, any>();
+    for (const ws of wordStatuses) {
+        if (!wordIdsInMaterials.has(ws.word_id)) continue;
+        const existing = relevantWordStatusMap.get(ws.word_id);
+        if (!existing) {
+            relevantWordStatusMap.set(ws.word_id, ws);
+            continue;
+        }
+        const existingTime = new Date(existing.$updatedAt || existing.$createdAt || 0).getTime();
+        const nextTime = new Date(ws.$updatedAt || ws.$createdAt || 0).getTime();
+        if (nextTime >= existingTime) {
+            relevantWordStatusMap.set(ws.word_id, ws);
+        }
+    }
+    const relevantWordStatuses = Array.from(relevantWordStatusMap.values());
 
     // Vocab Snapshot - only count words in user's materials/dictionaries
     const vocabSnapshot = relevantWordStatuses.reduce(
@@ -271,13 +277,23 @@ export async function GET() {
       },
       { new: 0, learning: 0, mastered: 0 }
     );
-    const totalWords = vocabSnapshot.new + vocabSnapshot.learning + vocabSnapshot.mastered;
+    const missingWordCount = Math.max(0, wordIdsInMaterials.size - relevantWordStatusMap.size);
+    vocabSnapshot.new += missingWordCount;
+    const totalWords = wordIdsInMaterials.size;
 
     // Words Due Today - only count words in user's materials/dictionaries
     const wordsDueToday = relevantWordStatuses.filter((ws: any) => {
         if (ws.status !== 'NEW' && ws.status !== 'LEARNING') return false;
         if (!ws.fsrs_due) return true;
         return new Date(ws.fsrs_due) <= todayEnd;
+    }).length + missingWordCount;
+
+    // Words Mastered Today (unique words, not review count)
+    const wordsMasteredTodayCount = relevantWordStatuses.filter((ws: any) => {
+        if (ws.status !== 'MASTERED') return false;
+        if (!ws.fsrs_last_review) return false;
+        const reviewedAt = new Date(ws.fsrs_last_review);
+        return reviewedAt >= todayStart && reviewedAt <= todayEnd;
     }).length;
 
     // Hardest Words - filter to only include words in user's materials/dictionaries
@@ -375,7 +391,7 @@ export async function GET() {
       const resultStats: DashboardStats = {
         heatmapData,
         wordsDueToday,
-        wordsReviewedTodayCount,
+        wordsMasteredTodayCount,
         sentencesPracticedTodayCount: sentencesPracticedToday.length,
         dailyGoals,
         vocabSnapshot,

@@ -91,7 +91,7 @@ export function VocabSnapshotCard({ newCount, learningCount, masteredCount }: Vo
           </svg>
           {/* Center Text */}
           <div className="absolute inset-0 flex items-center justify-center flex-col">
-            <span className="text-xl font-bold">{Math.round(newPercent)}%</span>
+            <span className="text-xl font-bold">{Math.round(masteredPercent)}%</span>
           </div>
         </div>
 
