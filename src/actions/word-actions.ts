@@ -142,8 +142,10 @@ export async function getWordContext(wordId: string) {
         
         return {
             ...occ,
+            id: occ.$id ?? occ.id,
             sentence: {
                 ...sentence,
+                id: sentence.$id ?? sentence.id,
                 material: {
                     id: material.$id,
                     title: material.title,

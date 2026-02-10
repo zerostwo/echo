@@ -125,6 +125,10 @@ function SortableColumnHeader({
   )
 }
 
+const getRowWordId = (word: any): string | null => {
+  return word?.id ?? word?.word_id ?? word?.wordId ?? null
+}
+
 export function VocabClient({ initialData, materialId, dictionaryId, settings, materials = [] }: VocabClientProps) {
   const { updateSettings } = useUserSettings()
   
@@ -843,7 +847,12 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
                       <ContextMenuItem
                         onClick={(e) => {
                           e.stopPropagation()
-                          handleContextEdit({ id: row.original.id, text: row.original.text })
+                          const wordId = getRowWordId(row.original)
+                          if (!wordId) {
+                            toast.error('Missing word id')
+                            return
+                          }
+                          handleContextEdit({ id: wordId, text: row.original.text })
                         }}
                         disabled={isPending}
                       >
@@ -853,7 +862,12 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
                       <ContextMenuItem
                         onClick={(e) => {
                           e.stopPropagation()
-                          handleContextAddSynonym({ id: row.original.id, text: row.original.text })
+                          const wordId = getRowWordId(row.original)
+                          if (!wordId) {
+                            toast.error('Missing word id')
+                            return
+                          }
+                          handleContextAddSynonym({ id: wordId, text: row.original.text })
                         }}
                         disabled={isPending}
                       >
@@ -864,7 +878,12 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
                         <ContextMenuItem
                           onClick={(e) => {
                             e.stopPropagation()
-                            handleContextRemoveFromDictionary(row.original.id)
+                            const wordId = getRowWordId(row.original)
+                            if (!wordId) {
+                              toast.error('Missing word id')
+                              return
+                            }
+                            handleContextRemoveFromDictionary(wordId)
                           }}
                           disabled={isPending}
                           className="text-destructive focus:text-destructive"
@@ -876,7 +895,12 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
                       <ContextMenuItem
                         onClick={(e) => {
                           e.stopPropagation()
-                          handleContextAddToDictionary({ id: row.original.id, text: row.original.text })
+                          const wordId = getRowWordId(row.original)
+                          if (!wordId) {
+                            toast.error('Missing word id')
+                            return
+                          }
+                          handleContextAddToDictionary({ id: wordId, text: row.original.text })
                         }}
                         disabled={isPending}
                       >
@@ -886,7 +910,12 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
                       <ContextMenuItem
                         onClick={(e) => {
                           e.stopPropagation()
-                          handleContextMaster(row.original.id)
+                          const wordId = getRowWordId(row.original)
+                          if (!wordId) {
+                            toast.error('Missing word id')
+                            return
+                          }
+                          handleContextMaster(wordId)
                         }}
                         disabled={isPending || row.original.status === 'MASTERED'}
                       >
@@ -897,7 +926,12 @@ export function VocabClient({ initialData, materialId, dictionaryId, settings, m
                       <ContextMenuItem
                         onClick={(e) => {
                           e.stopPropagation()
-                          handleContextDelete(row.original.id)
+                          const wordId = getRowWordId(row.original)
+                          if (!wordId) {
+                            toast.error('Missing word id')
+                            return
+                          }
+                          handleContextDelete(wordId)
                         }}
                         disabled={isPending}
                         className="text-destructive focus:text-destructive"
@@ -1262,7 +1296,8 @@ export const getVocabColumns = (
     ),
     cell: ({ row }) => {
         const status = row.getValue("status") as string;
-        const wordId = row.original.id;
+        const wordId = getRowWordId(row.original);
+        const canUpdateStatus = Boolean(wordId);
         
         const statusConfig = {
           NEW: {
@@ -1287,7 +1322,7 @@ export const getVocabColumns = (
               <button 
                 className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors cursor-pointer ${currentConfig.className}`}
                 onClick={(e) => e.stopPropagation()}
-                disabled={isPending}
+                disabled={isPending || !canUpdateStatus}
               >
                 {currentConfig.label}
                 <ChevronDown className="h-3 w-3 opacity-50" />
@@ -1295,22 +1330,40 @@ export const getVocabColumns = (
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" onClick={(e) => e.stopPropagation()}>
               <DropdownMenuItem 
-                onClick={() => onStatusChange(wordId, 'NEW')}
-                disabled={isPending || status === 'NEW'}
+                onClick={() => {
+                  if (!wordId) {
+                    toast.error('Missing word id')
+                    return
+                  }
+                  onStatusChange(wordId, 'NEW')
+                }}
+                disabled={isPending || status === 'NEW' || !canUpdateStatus}
               >
                 <span className={`inline-block w-2 h-2 rounded-full mr-2 bg-gray-400`} />
                 New
               </DropdownMenuItem>
               <DropdownMenuItem 
-                onClick={() => onStatusChange(wordId, 'LEARNING')}
-                disabled={isPending || status === 'LEARNING'}
+                onClick={() => {
+                  if (!wordId) {
+                    toast.error('Missing word id')
+                    return
+                  }
+                  onStatusChange(wordId, 'LEARNING')
+                }}
+                disabled={isPending || status === 'LEARNING' || !canUpdateStatus}
               >
                 <span className={`inline-block w-2 h-2 rounded-full mr-2 bg-blue-500`} />
                 Learning
               </DropdownMenuItem>
               <DropdownMenuItem 
-                onClick={() => onStatusChange(wordId, 'MASTERED')}
-                disabled={isPending || status === 'MASTERED'}
+                onClick={() => {
+                  if (!wordId) {
+                    toast.error('Missing word id')
+                    return
+                  }
+                  onStatusChange(wordId, 'MASTERED')
+                }}
+                disabled={isPending || status === 'MASTERED' || !canUpdateStatus}
               >
                 <span className={`inline-block w-2 h-2 rounded-full mr-2 bg-amber-500`} />
                 Mastered

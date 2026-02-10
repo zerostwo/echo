@@ -211,6 +211,7 @@ export function WordDetailSheet({ word, open, onOpenChange, dictionaryId, onWord
         if (!sentenceAudioRef.current) return;
 
         const audio = sentenceAudioRef.current;
+        const sentenceId = sentence?.id ?? sentence?.$id ?? sentence?.sentence_id;
         
         // Stop any current playback
         audio.pause();
@@ -233,7 +234,7 @@ export function WordDetailSheet({ word, open, onOpenChange, dictionaryId, onWord
         const playAudio = () => {
             audio.currentTime = startTime;
             audio.play().catch(console.error);
-            setPlayingSentenceId(sentence.id);
+            if (sentenceId) setPlayingSentenceId(sentenceId);
         };
 
         if (audio.src !== fullSrc) {
@@ -622,10 +623,11 @@ export function WordDetailSheet({ word, open, onOpenChange, dictionaryId, onWord
                                          </div>
                                      ) : occurrences.length > 0 ? (
                                          <div className="space-y-6">
-                                             {occurrences.map((occ, index) => {
-                                                 // Helper function to highlight the word in sentence
-                                                 const highlightSentence = () => {
-                                                     const content = occ.sentence.content;
+                    {occurrences.map((occ, index) => {
+                        const sentenceId = occ?.sentence?.id ?? occ?.sentence?.$id ?? occ?.sentence_id;
+                         // Helper function to highlight the word in sentence
+                         const highlightSentence = () => {
+                             const content = occ.sentence.content;
                                                      
                                                      // First, try to use start_index/end_index if available
                                                      if (occ.start_index !== undefined && occ.end_index !== undefined &&
@@ -657,22 +659,22 @@ export function WordDetailSheet({ word, open, onOpenChange, dictionaryId, onWord
                                                      );
                                                  };
                                                  
-                                                 return (
-                                                 <div key={occ.id} className="flex gap-3 group border-b border-border/40 pb-4 last:border-0 last:pb-0">
+                        return (
+                        <div key={occ.id ?? occ.$id ?? sentenceId ?? index} className="flex gap-3 group border-b border-border/40 pb-4 last:border-0 last:pb-0">
                                                      <div className="text-muted-foreground font-mono text-lg font-medium pt-0.5 w-6 text-right shrink-0 select-none opacity-50">{index + 1}.</div>
                                                      <div className="flex-1 space-y-2">
                                                          <div className="flex items-start justify-between gap-3">
                                                              <div className="text-base leading-relaxed text-gray-800 dark:text-gray-200">
                                                                  {highlightSentence()}
                                                              </div>
-                                                             <Button 
-                                                                 variant="ghost" 
-                                                                 size="icon" 
-                                                                 className={`h-6 w-6 shrink-0 mt-1 transition-colors ${playingSentenceId === occ.sentence.id ? 'text-primary' : 'text-muted-foreground hover:text-primary'}`}
-                                                                 onClick={() => handlePlaySentence(occ.sentence)}
-                                                             >
-                                                                 {playingSentenceId === occ.sentence.id ? <Pause className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
-                                                             </Button>
+                                    <Button 
+                                        variant="ghost" 
+                                        size="icon" 
+                                        className={`h-6 w-6 shrink-0 mt-1 transition-colors ${playingSentenceId === sentenceId ? 'text-primary' : 'text-muted-foreground hover:text-primary'}`}
+                                        onClick={() => handlePlaySentence(occ.sentence)}
+                                    >
+                                        {playingSentenceId === sentenceId ? <Pause className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+                                    </Button>
                                                          </div>
                                                          <div className="flex justify-end">
                                                              <Link 
