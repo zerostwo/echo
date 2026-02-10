@@ -1,22 +1,26 @@
 import { withAuth } from "next-auth/middleware"
-import { NextRequest, NextResponse } from "next/server"
+import { NextFetchEvent, NextRequest, NextResponse } from "next/server"
 
 const authMiddleware = withAuth({
   pages: {
     signIn: '/login',
   },
 })
+const runAuthMiddleware = authMiddleware as (
+  req: NextRequest,
+  ev: NextFetchEvent
+) => NextResponse
 
 const protectedPrefixes = ["/dashboard", "/materials", "/study", "/words", "/admin", "/trash"]
 
-export default function middleware(req: NextRequest) {
+export default function middleware(req: NextRequest, ev: NextFetchEvent) {
   const start = Date.now()
   const url = new URL(req.url)
   const pathname = url.pathname
 
   let response: NextResponse
   if (protectedPrefixes.some((prefix) => pathname.startsWith(prefix))) {
-    response = authMiddleware(req) as NextResponse
+    response = runAuthMiddleware(req, ev)
   } else {
     response = NextResponse.next()
   }

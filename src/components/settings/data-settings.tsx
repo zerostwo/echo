@@ -171,6 +171,10 @@ export function DataSettings() {
     deleteMutation.mutate(jobId)
   }
 
+  const fetchHistory = () => {
+    queryClient.invalidateQueries({ queryKey: ["export", "history"] })
+  }
+
   const handleFileDrop = (e: React.DragEvent) => {
     e.preventDefault()
     const file = e.dataTransfer.files[0]

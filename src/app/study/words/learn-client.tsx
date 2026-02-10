@@ -92,6 +92,10 @@ interface WordOccurrence {
     material: {
       id: string;
       title: string;
+      filePath?: string;
+      file_path?: string;
+      mimeType?: string;
+      mime_type?: string;
     };
   };
 }

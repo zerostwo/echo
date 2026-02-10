@@ -8,8 +8,8 @@ interface CacheEntry<T> {
   staleUntil: number;
 }
 
-class LRUCache<T = unknown> {
-  private cache: Map<string, CacheEntry<T>> = new Map();
+class LRUCache<T extends { staleUntil: number }> {
+  private cache: Map<string, T> = new Map();
   private maxSize: number;
   private defaultTTL: number;
 
@@ -18,7 +18,7 @@ class LRUCache<T = unknown> {
     this.defaultTTL = defaultTTLMs;
   }
 
-  get(key: string): CacheEntry<T> | null {
+  get(key: string): T | null {
     const entry = this.cache.get(key);
     if (!entry) return null;
     if (Date.now() > entry.staleUntil) {
@@ -27,10 +27,10 @@ class LRUCache<T = unknown> {
     }
     this.cache.delete(key);
     this.cache.set(key, entry);
-    return entry.value;
+    return entry;
   }
 
-  set(key: string, value: CacheEntry<T>, ttlMs?: number): void {
+  set(key: string, value: T, ttlMs?: number): void {
     const ttl = ttlMs ?? this.defaultTTL;
 
     if (this.cache.has(key)) {
